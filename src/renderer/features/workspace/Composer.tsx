@@ -141,11 +141,11 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
             )}
           </div>
 
-          <div className="flex items-center gap-2 border-t border-line/60 pt-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-line/60 pt-1.5">
             <ComposerModeSwitch mode={mode} onChange={setMode} disabled={disabled || !installed} />
-            <span className="h-3.5 w-px bg-line" />
+            <span className="hidden h-3.5 w-px shrink-0 bg-line sm:block" />
             <ComposerControls disabled={disabled || !installed} />
-            <span className="ml-auto flex items-center gap-2 text-[11px] text-faint">
+            <span className="ml-auto flex min-w-0 items-center gap-2 text-[11px] text-faint">
               <StatusHint
                 installed={installed}
                 installError={installError}
@@ -201,9 +201,9 @@ function StatusHint({
   }
   if (busy) {
     return (
-      <span className="flex items-center gap-1.5 text-muted">
+      <span className="flex min-w-0 items-center gap-1.5 text-muted">
         <Spinner size={11} />
-        {phaseLabel(phase, toolName)}
+        <span className="truncate">{phaseLabel(phase, toolName)}</span>
       </span>
     );
   }

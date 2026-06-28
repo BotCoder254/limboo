@@ -23,6 +23,9 @@ import { relativeTime } from '@/renderer/lib/format';
 import { runCommand } from '@/renderer/lib/commands';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
+import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
+import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
+import { FileTree } from './FileTree';
 
 export { PlanPanel as TasksPanel } from './PlanPanel';
 
@@ -32,24 +35,59 @@ function useSnapshot() {
 }
 
 export function FilesPanel() {
-  const sessionId = useSessionStore((s) => s.selectedId);
+  const activeId = useWorkspaceStore((s) => s.activeId);
+  const tree = useFileSystemStore((s) => (activeId ? s.treeByWs[activeId] : undefined));
+  const progress = useFileSystemStore((s) => (activeId ? s.progressByWs[activeId] : undefined));
+  const indexing = !!progress && progress.phase !== 'done';
+
+  if (!activeId) {
+    return (
+      <EmptyState
+        compact
+        icon={FolderOpen}
+        title="No workspace open"
+        description="Open or create a workspace to browse and track its files here."
+      />
+    );
+  }
+
+  const children = tree?.root.children ?? [];
+
+  if (children.length === 0) {
+    return (
+      <EmptyState
+        compact
+        icon={FolderOpen}
+        title={indexing ? 'Indexing workspace…' : 'No files indexed'}
+        description={
+          indexing
+            ? 'Building the directory tree — this populates automatically.'
+            : 'Reindex the workspace to browse and track its files here.'
+        }
+        action={
+          indexing ? undefined : (
+            <button
+              type="button"
+              onClick={() => runCommand('workspace.reindex')}
+              className="flex items-center gap-1.5 rounded-md border border-line bg-surface-2 px-2.5 py-1 text-[12px] text-muted transition-colors hover:bg-elevated hover:text-fg"
+            >
+              <RefreshCw size={12} /> Reindex workspace
+            </button>
+          )
+        }
+      />
+    );
+  }
+
   return (
-    <EmptyState
-      compact
-      icon={FolderOpen}
-      title="No files indexed"
-      description="Reindex the workspace to browse and track its files here."
-      action={
-        <button
-          type="button"
-          disabled={!sessionId}
-          onClick={() => runCommand('workspace.reindex')}
-          className="flex items-center gap-1.5 rounded-md border border-line bg-surface-2 px-2.5 py-1 text-[12px] text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <RefreshCw size={12} /> Reindex workspace
-        </button>
-      }
-    />
+    <div className="flex flex-col">
+      <FileTree nodes={children} />
+      {tree?.truncated && (
+        <p className="px-2 py-2 text-[11px] italic text-faint">
+          Large repository — only the first {tree.nodeCount.toLocaleString()} entries are shown.
+        </p>
+      )}
+    </div>
   );
 }
 

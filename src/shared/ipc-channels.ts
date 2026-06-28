@@ -69,6 +69,12 @@ export const IpcChannels = {
   agentApprovePlan: 'agent:approvePlan',
   agentRejectPlan: 'agent:rejectPlan',
   agentRegeneratePlan: 'agent:regeneratePlan',
+
+  // File System Layer (Phase 4) — read + watch + index foundation.
+  fsIndex: 'fs:index',
+  fsGetTree: 'fs:getTree',
+  fsReadFile: 'fs:readFile',
+  fsGetHistory: 'fs:getHistory',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
@@ -96,6 +102,10 @@ export const IpcEvents = {
   agentEvent: 'agent:event',
   /** The agent needs the user to approve or deny a tool call. */
   agentPermissionRequest: 'agent:permission-request',
+  /** Progress of an in-flight workspace index pass. */
+  fsIndexProgress: 'fs:index-progress',
+  /** The active workspace's directory tree changed (watcher or reindex). */
+  fsTreeChanged: 'fs:tree-changed',
 } as const;
 
 export type IpcEvent = (typeof IpcEvents)[keyof typeof IpcEvents];

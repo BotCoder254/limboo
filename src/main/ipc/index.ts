@@ -6,12 +6,14 @@ import type { NotificationManager } from '../managers/NotificationManager';
 import type { WorkspaceManager } from '../managers/WorkspaceManager';
 import type { SessionManager } from '../managers/SessionManager';
 import type { AgentManager } from '../managers/AgentManager';
+import type { FileSystemManager } from '../managers/FileSystemManager';
 import { registerWindowHandlers } from './windowHandlers';
 import { registerSettingsHandlers } from './settingsHandlers';
 import { registerSystemHandlers } from './systemHandlers';
 import { registerWorkspaceHandlers } from './workspaceHandlers';
 import { registerSessionHandlers } from './sessionHandlers';
 import { registerAgentHandlers } from './agentHandlers';
+import { registerFsHandlers } from './fsHandlers';
 
 export interface IpcDeps {
   settings: SettingsManager;
@@ -19,6 +21,7 @@ export interface IpcDeps {
   workspace: WorkspaceManager;
   session: SessionManager;
   agent: AgentManager;
+  fs: FileSystemManager;
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -28,4 +31,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerWorkspaceHandlers(deps.workspace);
   registerSessionHandlers(deps.session);
   registerAgentHandlers(deps.agent);
+  registerFsHandlers(deps.fs);
 }

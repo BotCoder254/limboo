@@ -15,6 +15,7 @@ import { usePreventFileDrop } from '@/renderer/hooks/usePreventFileDrop';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
+import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -30,6 +31,9 @@ export function App() {
       .hydrate()
       .then(() => useSessionStore.getState().hydrate());
     void useAgentStore.getState().hydrate();
+    // Subscribe to live index progress + directory-tree pushes from the File
+    // System Layer (main auto-indexes the active workspace on open/switch).
+    useFileSystemStore.getState().hydrate();
   }, []);
 
   return (

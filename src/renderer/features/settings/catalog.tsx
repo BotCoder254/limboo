@@ -69,7 +69,7 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
       { id: 'approveTerminal', label: 'Approve terminal commands', keywords: ['shell', 'safety'] },
       { id: 'preferredShell', label: 'Preferred shell', keywords: ['bash', 'zsh', 'terminal'] },
       { id: 'ignoredDirs', label: 'Ignored directories', keywords: ['exclude', 'node_modules', 'index'] },
-      { id: 'rescan', label: 'Refresh detected metadata', keywords: ['rescan', 'reindex', 'detect'] },
+      { id: 'rescan', label: 'Refresh & reindex', keywords: ['rescan', 'reindex', 'detect', 'index', 'files'] },
     ],
     Panel: WorkspacePanel,
   },

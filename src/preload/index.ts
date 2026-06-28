@@ -21,6 +21,10 @@ import type {
   AppSettings,
   CommandId,
   DeepPartial,
+  FileHistoryEntry,
+  FileReadResult,
+  FileTree,
+  IndexProgress,
   PermissionDecision,
   PermissionRequest,
   Session,
@@ -159,6 +163,25 @@ const agentApi = {
     subscribe<PermissionRequest>(IpcEvents.agentPermissionRequest, cb),
 };
 
+const fsApi = {
+  /** (Re)build the workspace directory tree; progress streams via onIndexProgress. */
+  index: (workspaceId: string): Promise<FileTree> =>
+    ipcRenderer.invoke(IpcChannels.fsIndex, workspaceId),
+  /** Last-built tree for a workspace (no disk access), or null. */
+  getTree: (workspaceId: string): Promise<FileTree | null> =>
+    ipcRenderer.invoke(IpcChannels.fsGetTree, workspaceId),
+  /** Read a workspace-relative file through the centralized, guarded reader. */
+  readFile: (workspaceId: string, relPath: string): Promise<FileReadResult> =>
+    ipcRenderer.invoke(IpcChannels.fsReadFile, workspaceId, relPath),
+  /** Most-recent-first File History for a workspace. */
+  getHistory: (workspaceId: string): Promise<FileHistoryEntry[]> =>
+    ipcRenderer.invoke(IpcChannels.fsGetHistory, workspaceId),
+  onIndexProgress: (cb: (progress: IndexProgress) => void): (() => void) =>
+    subscribe<IndexProgress>(IpcEvents.fsIndexProgress, cb),
+  onTreeChanged: (cb: (tree: FileTree) => void): (() => void) =>
+    subscribe<FileTree>(IpcEvents.fsTreeChanged, cb),
+};
+
 const limbooApi = {
   window: windowApi,
   settings: settingsApi,
@@ -168,6 +191,7 @@ const limbooApi = {
   workspace: workspaceApi,
   session: sessionApi,
   agent: agentApi,
+  fs: fsApi,
 };
 
 contextBridge.exposeInMainWorld('limboo', limbooApi);
