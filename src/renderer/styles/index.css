@@ -1,0 +1,139 @@
+@import "tailwindcss";
+
+/*
+ * Limboo theme: pure-black, dark-mode ONLY.
+ * There is no light mode and no theme toggle. Every token below is tuned for
+ * maximum legibility on a true #000000 background.
+ *
+ * Tailwind v4 is CSS-first: these custom properties are exposed as utilities,
+ * e.g. `bg-base`, `bg-surface`, `text-fg`, `text-muted`, `border-line`,
+ * `text-accent`, etc.
+ */
+@theme {
+  /* Backgrounds: from pure black up to subtly raised surfaces */
+  --color-base: #000000;        /* app background */
+  --color-surface: #0a0a0a;     /* panels / sidebars */
+  --color-surface-2: #111111;   /* cards, inputs, hover wells */
+  --color-elevated: #161616;    /* popovers / active rows */
+
+  /* Borders / hairlines (kept visible against black) */
+  --color-line: #1c1c1c;
+  --color-line-strong: #2a2a2a;
+
+  /* Foreground text */
+  --color-fg: #ededed;          /* primary text */
+  --color-muted: #9a9a9a;       /* secondary text */
+  --color-faint: #6b6b6b;       /* tertiary / disabled */
+
+  /* Accent + status colors (high contrast on black) */
+  --color-accent: #6e9bff;
+  --color-accent-fg: #b9ccff;
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+  --color-danger: #f85149;
+
+  /* Typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo,
+    Consolas, monospace;
+}
+
+/* Force a dark color-scheme so native controls (scrollbars, inputs, the window
+   chrome behind the React tree) render dark and never flash white. */
+:root {
+  color-scheme: dark;
+  /* Driven by the settings store (appearance.fontScale). 16px * scale. */
+  font-size: calc(16px * var(--limboo-font-scale, 1));
+}
+
+* {
+  border-color: var(--color-line);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--color-base);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden; /* the app manages its own internal scroll regions */
+}
+
+/* Respect the user's reduced-motion preference (appearance.reducedMotion sets
+   data-reduced-motion on <html>). */
+html[data-reduced-motion="true"] *,
+html[data-reduced-motion="true"] *::before,
+html[data-reduced-motion="true"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+/* Dark, minimal scrollbars so they remain visible but never break the theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-line-strong);
+  border-radius: 9999px;
+  border: 2px solid var(--color-base);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #3a3a3a;
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  color: #ffffff;
+}
+
+/* Frameless-window helpers: mark a region draggable (acts as the title bar) and
+   opt interactive children back out so clicks/inputs still work. */
+@utility drag-region {
+  -webkit-app-region: drag;
+}
+
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Lightweight fade/scale used by overlays (command palette, modals). */
+@keyframes limboo-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes limboo-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Indeterminate progress bar used by the startup LoadingScreen. */
+@keyframes limboo-loading {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+
+@utility animate-fade-in {
+  animation: limboo-fade-in 120ms ease-out;
+}
+
+@utility animate-pop-in {
+  animation: limboo-pop-in 140ms ease-out;
+}
