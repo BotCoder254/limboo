@@ -2,20 +2,28 @@
  * Agent store — the renderer-side mirror of the main-process AgentManager.
  *
  * `hydrate()` loads the install/runtime state and subscribes to the structured
- * event stream through the preload bridge. Every `AgentEvent` is applied to a
- * per-session snapshot (messages / tool calls / changes / tasks / activity) so
- * the UI never scrapes raw output — it renders typed state. All mutations go
- * through `window.limboo.agent.*`.
+ * event stream through the preload bridge. The store keeps TWO orthogonal state
+ * models in sync with main: the agent *lifecycle* (capability health) and the
+ * *request* state (the active/last run). A failed request never collapses the
+ * lifecycle — that distinction is what makes transient failures feel non-fatal.
+ *
+ * Every `AgentEvent` is applied to a per-session snapshot (messages / tool calls
+ * / changes / tasks / activity) plus a global diagnostics ring buffer, so the UI
+ * renders typed state and never scrapes raw output. All mutations go through
+ * `window.limboo.agent.*`.
  */
 import { create } from 'zustand';
 import type {
+  AgentDiagnostic,
   AgentEvent,
   AgentInstall,
-  AgentRuntimeStatus,
+  AgentLifecycleStatus,
   AgentSessionSnapshot,
   ChatMessage,
   FileChange,
   PermissionRequest,
+  RateLimitInfo,
+  RequestState,
 } from '@shared/types';
 import { useUIStore } from './useUIStore';
 
@@ -23,25 +31,55 @@ function emptySnapshot(): AgentSessionSnapshot {
   return { messages: [], activity: [], changes: [], tasks: [], toolCalls: [] };
 }
 
+const IDLE_REQUEST: RequestState = {
+  sessionId: null,
+  phase: 'idle',
+  outcome: null,
+  attempt: 0,
+  maxAttempts: 0,
+};
+
+/** Cap on the in-memory diagnostics ring buffer. */
+const MAX_DIAGNOSTICS = 500;
+
 interface AgentStoreState {
   install: AgentInstall;
-  status: AgentRuntimeStatus;
+  lifecycle: AgentLifecycleStatus;
+  request: RequestState;
+  rateLimit?: RateLimitInfo;
+  heartbeat: { lastOkAt: number | null; consecutiveFailures: number };
   activeSessionId: string | null;
   bySession: Record<string, AgentSessionSnapshot>;
+  diagnostics: AgentDiagnostic[];
   pending: PermissionRequest | null;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
+  loadDiagnostics: (sessionId?: string | null) => Promise<void>;
   send: (sessionId: string, prompt: string) => Promise<void>;
   stop: (sessionId: string) => void;
   clear: (sessionId: string) => void;
+  clearRateLimit: () => void;
+  retryAuth: () => void;
   respond: (behavior: 'allow' | 'deny', remember?: boolean) => void;
 }
 
 export const useAgentStore = create<AgentStoreState>((set, get) => {
-  /** Apply a structured event to its session's snapshot. */
+  /** Apply a structured event to its session's snapshot / global state. */
   function apply(event: AgentEvent): void {
+    // Global (session-less) events first.
+    if (event.kind === 'request-state') {
+      set({ request: event.request });
+      return;
+    }
+    if (event.kind === 'diagnostic') {
+      set((state) => ({
+        diagnostics: [...state.diagnostics, event.diagnostic].slice(-MAX_DIAGNOSTICS),
+      }));
+      return;
+    }
+
     set((state) => {
       const prev = state.bySession[event.sessionId] ?? emptySnapshot();
       const next: AgentSessionSnapshot = {
@@ -89,16 +127,23 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       return { bySession: { ...state.bySession, [event.sessionId]: next } };
     });
 
-    if (event.kind === 'error') {
+    // Only a genuine hard failure raises a danger toast; rate-limit / auth /
+    // context-overflow surface as quieter Composer banners (driven by lifecycle
+    // + request.outcome), not alarming toasts.
+    if (event.kind === 'error' && event.outcome === 'failed') {
       useUIStore.getState().addToast({ title: 'Agent error', description: event.message, tone: 'danger' });
     }
   }
 
   return {
     install: { installed: false },
-    status: 'unknown',
+    lifecycle: 'starting',
+    request: IDLE_REQUEST,
+    rateLimit: undefined,
+    heartbeat: { lastOkAt: null, consecutiveFailures: 0 },
     activeSessionId: null,
     bySession: {},
+    diagnostics: [],
     pending: null,
     hydrated: false,
 
@@ -112,13 +157,30 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       set({ hydrated: true });
 
       const [install, agentState] = await Promise.all([api.getInstall(), api.getState()]);
-      set({ install, status: agentState.status, activeSessionId: agentState.activeSessionId });
+      set({
+        install,
+        lifecycle: agentState.lifecycle,
+        request: agentState.request,
+        rateLimit: agentState.rateLimit,
+        heartbeat: agentState.heartbeat,
+        activeSessionId: agentState.activeSessionId,
+      });
 
       api.onStateChanged((s) =>
-        set({ install: s.install, status: s.status, activeSessionId: s.activeSessionId }),
+        set({
+          install: s.install,
+          lifecycle: s.lifecycle,
+          request: s.request,
+          rateLimit: s.rateLimit,
+          heartbeat: s.heartbeat,
+          activeSessionId: s.activeSessionId,
+        }),
       );
       api.onEvent((event) => apply(event));
       api.onPermissionRequest((request) => set({ pending: request }));
+
+      // Seed the diagnostics console with recent history.
+      void get().loadDiagnostics();
     },
 
     loadSession: async (sessionId) => {
@@ -126,6 +188,13 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       if (!api) return;
       const snapshot = await api.getSnapshot(sessionId);
       set((state) => ({ bySession: { ...state.bySession, [sessionId]: snapshot } }));
+    },
+
+    loadDiagnostics: async (sessionId) => {
+      const api = window.limboo?.agent;
+      if (!api?.getDiagnostics) return;
+      const diagnostics = await api.getDiagnostics(sessionId ?? null);
+      set({ diagnostics: diagnostics.slice(-MAX_DIAGNOSTICS) });
     },
 
     send: async (sessionId, prompt) => {
@@ -149,6 +218,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     clear: (sessionId) => {
       void window.limboo?.agent?.clearSession(sessionId);
       set((state) => ({ bySession: { ...state.bySession, [sessionId]: emptySnapshot() } }));
+    },
+
+    clearRateLimit: () => {
+      void window.limboo?.agent?.clearRateLimit?.();
+    },
+
+    retryAuth: () => {
+      void window.limboo?.agent?.retryAuth?.();
     },
 
     respond: (behavior, remember) => {

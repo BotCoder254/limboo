@@ -92,6 +92,10 @@ function deepMergeLocal(base: AppSettings, patch: DeepPartial<AppSettings>): App
     appearance: { ...base.appearance, ...patch.appearance },
     layout: { ...base.layout, ...patch.layout },
     behavior: { ...base.behavior, ...patch.behavior },
-    agent: { ...base.agent, ...patch.agent },
+    agent: {
+      ...base.agent,
+      ...patch.agent,
+      connection: { ...base.agent.connection, ...patch.agent?.connection },
+    },
   } as AppSettings;
 }

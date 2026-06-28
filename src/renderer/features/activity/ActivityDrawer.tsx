@@ -6,6 +6,7 @@
 import type { ActivityTab } from '@shared/types';
 import { ACTIVITY_TABS } from './tabs';
 import { ActivityFeedPanel, ChangesPanel, FilesPanel, TasksPanel } from './panels';
+import { AgentConsolePanel } from './AgentConsolePanel';
 
 export function ActivityDrawer({ tab }: { tab: ActivityTab }) {
   const meta = ACTIVITY_TABS.find((t) => t.id === tab) ?? ACTIVITY_TABS[0];
@@ -21,6 +22,7 @@ export function ActivityDrawer({ tab }: { tab: ActivityTab }) {
         {tab === 'changes' && <ChangesPanel />}
         {tab === 'tasks' && <TasksPanel />}
         {tab === 'activity' && <ActivityFeedPanel />}
+        {tab === 'console' && <AgentConsolePanel />}
       </div>
     </section>
   );

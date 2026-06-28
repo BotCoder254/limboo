@@ -11,6 +11,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IpcChannels, IpcEvents } from '@shared/ipc-channels';
 import type {
+  AgentDiagnostic,
   AgentEvent,
   AgentInstall,
   AgentSessionSnapshot,
@@ -112,6 +113,10 @@ const agentApi = {
   stop: (sessionId: string): Promise<void> => ipcRenderer.invoke(IpcChannels.agentStop, sessionId),
   clearSession: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentClearSession, sessionId),
+  getDiagnostics: (sessionId?: string | null): Promise<AgentDiagnostic[]> =>
+    ipcRenderer.invoke(IpcChannels.agentGetDiagnostics, sessionId ?? null),
+  clearRateLimit: (): Promise<void> => ipcRenderer.invoke(IpcChannels.agentClearRateLimit),
+  retryAuth: (): Promise<AgentInstall> => ipcRenderer.invoke(IpcChannels.agentRetryAuth),
   respondPermission: (decision: PermissionDecision): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentPermissionRespond, decision),
   onStateChanged: (cb: (state: AgentState) => void): (() => void) =>

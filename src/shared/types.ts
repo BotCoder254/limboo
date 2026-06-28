@@ -33,7 +33,7 @@ export type UiDensity = 'comfortable' | 'compact';
 /**
  * The right activity drawer tabs. Mirrors the rail in the UI.
  */
-export type ActivityTab = 'files' | 'changes' | 'tasks' | 'activity';
+export type ActivityTab = 'files' | 'changes' | 'tasks' | 'activity' | 'console';
 
 /**
  * Persistent, user-facing preferences. NOTE: there is intentionally NO light
@@ -87,6 +87,31 @@ export interface AppSettings {
     autoApproveReads: boolean;
     /** Maximum internal agent turns before the run yields. */
     maxTurns: number;
+    /** How chatty the agent diagnostics console + main log are. */
+    logVerbosity: 'quiet' | 'normal' | 'verbose';
+    /**
+     * Connection-monitoring / reliability knobs. These shape how the manager
+     * supervises the Claude Code capability — heartbeat cadence, automatic
+     * recovery, and connectivity notifications. None of them touch credentials.
+     */
+    connection: {
+      /** Heartbeat re-verification interval (ms). 0 disables the heartbeat. */
+      heartbeatInterval: number;
+      /** Base delay before a recovery retry (ms); grows with exponential backoff. */
+      reconnectDelay: number;
+      /** Max transparent recovery attempts before surfacing a `failed` state. */
+      maxRecoveryAttempts: number;
+      /** Consecutive heartbeat failures before entering `reconnecting`. */
+      heartbeatFailureThreshold: number;
+      /** Idle window (ms) after which an idle run baseline is refreshed. 0 disables. */
+      idleTimeout: number;
+      /** Re-probe + reset to ready automatically after a recoverable capability error. */
+      autoRestart: boolean;
+      /** Persist sdk session ids + diagnostics across app restarts. */
+      sessionPersistence: boolean;
+      /** Desktop notifications for connectivity transitions (reconnect / rate-limit). */
+      connectivityNotifications: boolean;
+    };
   };
 }
 
@@ -273,15 +298,75 @@ export interface WorkspaceValidationResult {
 /* Coding agent (Claude Code orchestration)                            */
 /* ------------------------------------------------------------------ */
 
-/** Lifecycle of the local Claude Code runtime as surfaced to the UI. */
-export type AgentRuntimeStatus =
-  | 'unknown'
-  | 'not-installed'
-  | 'idle'
-  | 'connecting'
-  | 'streaming'
+/**
+ * Axis A — the lifecycle of the local Claude Code *capability* (process-
+ * spawnable, auth valid, SDK loadable, reachable). This is independent of any
+ * single request's outcome: a failed prompt must NOT push this to a fatal state
+ * while the capability is still healthy.
+ */
+export type AgentLifecycleStatus =
+  | 'starting' // first install/auth/SDK probe in flight
+  | 'initializing' // probe passed, wiring heartbeat
+  | 'ready' // healthy & idle — the steady state
+  | 'busy' // a run is mid-flight (pre-stream: connecting/handshake)
+  | 'streaming' // a run is actively emitting tokens / tool calls
+  | 'awaiting-permission' // a run is blocked on a renderer approval
+  | 'reconnecting' // transient failure(s); recovery loop retrying
+  | 'rate-limited' // provider rate/session limit hit; capability intact
+  | 'auth-required' // auth invalid/expired; needs the user to sign in again
+  | 'offline' // host network unreachable (heartbeat connectivity probe)
+  | 'not-installed' // Claude Code is not authenticated / available
+  | 'failed'; // recovery exhausted / unrecoverable capability error
+
+/**
+ * @deprecated Transitional alias kept so existing imports compile during the
+ * dual-state migration. New code should use {@link AgentLifecycleStatus}.
+ */
+export type AgentRuntimeStatus = AgentLifecycleStatus;
+
+/** Axis B — terminal classification of the most recent (or active) run. */
+export type RequestOutcome =
+  | 'success'
+  | 'failed' // generic transport/process error after recovery
+  | 'cancelled' // user stopped the run
+  | 'rate-limited' // hit a provider session/rate limit
+  | 'tool-rejected' // a gated tool was denied and the run could not continue
+  | 'auth-required' // auth failure surfaced mid-run
+  | 'context-overflow'; // context window exceeded
+
+/** Phase of the active run (drives progress UI, distinct from outcome). */
+export type RequestPhase =
+  | 'idle' // no active run
+  | 'submitting' // user turn recorded, query() not yet streaming
+  | 'connecting' // query() spawned, awaiting first SDK message
+  | 'streaming' // tokens / tool calls flowing
   | 'awaiting-permission'
-  | 'error';
+  | 'recovering' // recovery loop re-attempting this run
+  | 'done'; // completed (see outcome)
+
+/** Live state of the active run, mirrored to the renderer. */
+export interface RequestState {
+  /** Session whose run this describes, or null when idle. */
+  sessionId: string | null;
+  phase: RequestPhase;
+  /** Terminal outcome once `phase === 'done'`; null while in flight. */
+  outcome: RequestOutcome | null;
+  /** Current recovery attempt (0 when not recovering). */
+  attempt: number;
+  maxAttempts: number;
+  /** Short human reason for failed / rate-limited / auth-required outcomes. */
+  detail?: string;
+}
+
+/** Parsed provider rate-limit, surfaced while lifecycle === 'rate-limited'. */
+export interface RateLimitInfo {
+  /** Raw message as detected from the SDK (already redacted). */
+  message: string;
+  /** Epoch ms when the limit is expected to reset, if parseable. */
+  resetsAt?: number;
+  /** IANA tz string if the provider message named one (e.g. Africa/Nairobi). */
+  timezone?: string;
+}
 
 /** Result of detecting the locally-installed Claude Code CLI. */
 export interface AgentInstall {
@@ -293,11 +378,55 @@ export interface AgentInstall {
 
 /** The agent's global state, broadcast to every window on change. */
 export interface AgentState {
-  status: AgentRuntimeStatus;
+  /** Axis A — capability health. */
+  lifecycle: AgentLifecycleStatus;
   install: AgentInstall;
+  /** Axis B — the active / last run. */
+  request: RequestState;
   /** Session id whose run is currently active, if any. */
   activeSessionId: string | null;
+  /** Present while lifecycle === 'rate-limited'. */
+  rateLimit?: RateLimitInfo;
+  /** Last capability-level error (NOT a request-level failure). */
   error?: string;
+  /** Heartbeat bookkeeping for the UI ("last checked 3s ago"). */
+  heartbeat: {
+    lastOkAt: number | null;
+    consecutiveFailures: number;
+  };
+}
+
+/** Severity for a diagnostics console line. */
+export type DiagnosticSeverity = 'debug' | 'info' | 'warning' | 'error';
+
+/** Category groups diagnostics in the Agent Console rail / filter. */
+export type DiagnosticCategory =
+  | 'lifecycle' // init, handshake, attach, termination
+  | 'request' // prompt submit, completion, cancel
+  | 'tool' // tool exec / approval
+  | 'stream' // streaming start/stop
+  | 'recovery' // reconnect attempt / outcome
+  | 'auth' // auth change
+  | 'rate-limit' // limit hit / cleared
+  | 'heartbeat'; // periodic health probe
+
+/**
+ * One structured line in the Agent Console. Append-only, optionally persisted.
+ * `detail` is the expandable technical payload (already redacted) shown when the
+ * user opens the row — never raw secrets.
+ */
+export interface AgentDiagnostic {
+  id: string;
+  /** Session scope, or null for capability-global events (heartbeat, auth). */
+  sessionId: string | null;
+  severity: DiagnosticSeverity;
+  category: DiagnosticCategory;
+  /** Short one-line label. */
+  label: string;
+  /** Expandable, multi-line technical detail (redacted). */
+  detail?: string;
+  /** Epoch ms; formatted relatively in the UI. */
+  at: number;
 }
 
 export type ChatRole = 'user' | 'assistant';
@@ -326,6 +455,13 @@ export interface AgentToolCall {
   risk: ToolRisk;
   /** One-line human summary (e.g. `Edit src/app.ts`). */
   summary: string;
+  /**
+   * Optional expandable detail surfaced in the conversation tool card — e.g. the
+   * web-search query, the fetched URL, the command text, or a short diff.
+   */
+  detail?: string;
+  /** For web tools: the target URL or search query, shown inline in chat. */
+  target?: string;
   status: ToolCallStatus;
   startedAt: number;
   endedAt?: number;
@@ -398,7 +534,9 @@ export type AgentEvent =
   | { kind: 'activity'; sessionId: string; item: AgentActivityItem }
   | { kind: 'tasks'; sessionId: string; tasks: TaskItem[] }
   | { kind: 'result'; sessionId: string; ok: boolean; text: string }
-  | { kind: 'error'; sessionId: string; message: string };
+  | { kind: 'error'; sessionId: string; message: string; outcome: RequestOutcome }
+  | { kind: 'request-state'; sessionId: string; request: RequestState }
+  | { kind: 'diagnostic'; diagnostic: AgentDiagnostic };
 
 /* ------------------------------------------------------------------ */
 /* Commands (palette + shortcuts + native menu)                        */

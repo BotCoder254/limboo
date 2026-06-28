@@ -1,20 +1,37 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
-/** Selectable Claude models for the agent (id + short label for the picker). */
+/** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
+export type AgentProvider = 'anthropic';
+
+/** Selectable Claude models for the agent (id + short label + provider). */
 export const AGENT_MODELS = [
-  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { value: 'claude-opus-4-8', label: 'Opus 4.8' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+  { value: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic' },
+  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', provider: 'anthropic' },
 ] as const;
+
+/** Resolve the provider that serves a given model id. */
+export function providerForModel(model: string): AgentProvider {
+  return AGENT_MODELS.find((m) => m.value === model)?.provider ?? 'anthropic';
+}
 
 /** Bounds the main process clamps agent settings against. */
 export const AGENT_LIMITS = {
   maxTurns: { min: 1, max: 100, default: 24 },
   /** Cap on a single prompt the renderer may submit. */
   promptMax: 100_000,
+} as const;
+
+/** Bounds the main process clamps agent connection-monitoring settings against. */
+export const AGENT_CONNECTION_LIMITS = {
+  heartbeatInterval: { min: 0, max: 600_000, default: 30_000 },
+  reconnectDelay: { min: 250, max: 60_000, default: 1_000 },
+  maxRecoveryAttempts: { min: 0, max: 10, default: 3 },
+  heartbeatFailureThreshold: { min: 1, max: 10, default: 2 },
+  idleTimeout: { min: 0, max: 1_800_000, default: 300_000 },
 } as const;
 
 /** Hard limits the renderer and main process both clamp against. */
@@ -55,6 +72,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
     webSearch: true,
     autoApproveReads: true,
     maxTurns: AGENT_LIMITS.maxTurns.default,
+    logVerbosity: 'normal',
+    connection: {
+      heartbeatInterval: AGENT_CONNECTION_LIMITS.heartbeatInterval.default,
+      reconnectDelay: AGENT_CONNECTION_LIMITS.reconnectDelay.default,
+      maxRecoveryAttempts: AGENT_CONNECTION_LIMITS.maxRecoveryAttempts.default,
+      heartbeatFailureThreshold: AGENT_CONNECTION_LIMITS.heartbeatFailureThreshold.default,
+      idleTimeout: AGENT_CONNECTION_LIMITS.idleTimeout.default,
+      autoRestart: true,
+      sessionPersistence: true,
+      connectivityNotifications: true,
+    },
   },
 };
 
@@ -67,7 +95,7 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 2;
+export const WORKSPACE_SCHEMA_VERSION = 3;
 
 /** Input caps the main process enforces on renderer-supplied workspace values. */
 export const WORKSPACE_LIMITS = {

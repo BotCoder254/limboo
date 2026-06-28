@@ -8,6 +8,7 @@
 import { IpcChannels } from '@shared/ipc-channels';
 import { AGENT_LIMITS } from '@shared/constants';
 import type {
+  AgentDiagnostic,
   AgentInstall,
   AgentSessionSnapshot,
   AgentState,
@@ -58,6 +59,20 @@ export function registerAgentHandlers(agent: AgentManager): void {
   handle<[string], void>(IpcChannels.agentClearSession, (_event, sessionId) => {
     agent.clearSession(assertSessionId(sessionId));
   });
+
+  handle<[string | null | undefined], AgentDiagnostic[]>(
+    IpcChannels.agentGetDiagnostics,
+    (_event, sessionId) => {
+      const id = sessionId == null ? null : assertSessionId(sessionId);
+      return agent.getDiagnostics(id);
+    },
+  );
+
+  handle<[], void>(IpcChannels.agentClearRateLimit, () => {
+    agent.clearRateLimitManual();
+  });
+
+  handle<[], AgentInstall>(IpcChannels.agentRetryAuth, () => agent.retryAuth());
 
   handle<[PermissionDecision], void>(IpcChannels.agentPermissionRespond, (_event, decision) => {
     if (!decision || typeof decision !== 'object') {

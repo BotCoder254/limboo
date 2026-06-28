@@ -54,45 +54,52 @@ export function CenterWorkspace() {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto flex h-full max-w-3xl flex-col">
-          {session ? (
-            messageCount > 0 ? (
-              <ConversationView sessionId={session.id} />
+      {/* The scroll region fills the column; the Composer floats over its bottom
+          edge (no separator line, no full-width bar) with the conversation
+          scrolling cleanly behind it. */}
+      <div className="relative min-h-0 flex-1">
+        <div className="h-full overflow-y-auto px-4 pb-32 pt-6">
+          <div className="mx-auto flex h-full max-w-3xl flex-col">
+            {session ? (
+              messageCount > 0 ? (
+                <ConversationView sessionId={session.id} />
+              ) : (
+                <EmptyState
+                  className="m-auto"
+                  icon={Sparkles}
+                  title="Start the conversation"
+                  description="Describe what you want to build. Limboo coordinates the repository, files, terminal, and tasks while Claude Code does the work."
+                />
+              )
             ) : (
-              <EmptyState
-                className="m-auto"
-                icon={Sparkles}
-                title="Start the conversation"
-                description="Describe what you want to build. Limboo coordinates the repository, files, terminal, and tasks while Claude Code does the work."
-              />
-            )
-          ) : (
-            <div className="m-auto flex flex-col items-center gap-4 text-center">
-              <Logo size={40} />
-              <div className="flex flex-col gap-1">
-                <span className="text-[15px] font-semibold tracking-tight text-fg">
-                  Welcome to Limboo
-                </span>
-                <span className="max-w-md text-[13px] leading-relaxed text-muted">
-                  The local-first workspace for orchestrating coding agents. Create
-                  a session to begin — every task lives inside one.
-                </span>
+              <div className="m-auto flex flex-col items-center gap-4 text-center">
+                <Logo size={40} />
+                <div className="flex flex-col gap-1">
+                  <span className="text-[15px] font-semibold tracking-tight text-fg">
+                    Welcome to Limboo
+                  </span>
+                  <span className="max-w-md text-[13px] leading-relaxed text-muted">
+                    The local-first workspace for orchestrating coding agents. Create
+                    a session to begin — every task lives inside one.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => createSession()}
+                  className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90"
+                >
+                  <Plus size={13} />
+                  New session
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => createSession()}
-                className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90"
-              >
-                <Plus size={13} />
-                New session
-              </button>
-            </div>
-          )}
+            )}
+          </div>
+        </div>
+
+        <div className="absolute inset-x-0 bottom-0">
+          <Composer disabled={!session} />
         </div>
       </div>
-
-      <Composer disabled={!session} />
     </main>
   );
 }

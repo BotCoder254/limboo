@@ -1,11 +1,16 @@
 /**
- * The conversation timeline for a session. Renders the chat turns and the
- * agent's tool calls interleaved in chronological order, streaming assistant
- * tokens in as they arrive. Pure presentation — all data comes from the agent
- * store, which applies the structured event stream from the main process.
+ * The conversation timeline for a session. Renders chat turns and the agent's
+ * tool calls interleaved chronologically, streaming assistant tokens in as they
+ * arrive. Pure presentation — all data comes from the agent store, which applies
+ * the structured event stream from the main process.
+ *
+ * Assistant turns render as full-width Markdown (with highlighted code blocks);
+ * user turns render as a compact right-aligned bubble. Tool calls render as
+ * expandable cards that surface intent + target (e.g. a web search query/URL).
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ChevronRight,
   Eye,
   FilePen,
   FilePlus,
@@ -20,6 +25,7 @@ import { Logo } from '@/renderer/components/brand/Logo';
 import { Spinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
+import { Markdown } from './Markdown';
 
 type TimelineItem =
   | { kind: 'message'; at: number; message: ChatMessage }
@@ -49,6 +55,8 @@ function toolIcon(call: AgentToolCall): LucideIcon {
 
 export function ConversationView({ sessionId }: { sessionId: string }) {
   const snapshot = useAgentStore((s) => s.bySession[sessionId]) ?? EMPTY_SNAPSHOT;
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
@@ -58,67 +66,145 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
     return items.sort((a, b) => a.at - b.at);
   }, [snapshot.messages, snapshot.toolCalls]);
 
+  // Auto-stick to the bottom while streaming, but only if the user hasn't
+  // scrolled up — preserving their scroll position is the whole point.
+  useEffect(() => {
+    const el = findScrollParent(bottomRef.current);
+    if (!el) return;
+    const onScroll = () => {
+      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (stick.current) bottomRef.current?.scrollIntoView({ block: 'end' });
+  }, [timeline]);
+
   return (
-    <div className="flex flex-col gap-5 pb-4">
+    <div className="flex flex-col gap-6 pb-4">
       {timeline.map((item) =>
         item.kind === 'message' ? (
           <MessageRow key={item.message.id} message={item.message} />
         ) : (
-          <ToolChip key={item.call.id} call={item.call} />
+          <ToolCard key={item.call.id} call={item.call} />
         ),
       )}
+      <div ref={bottomRef} />
     </div>
   );
+}
+
+/** Walk up to the nearest vertically-scrollable ancestor. */
+function findScrollParent(node: HTMLElement | null): HTMLElement | null {
+  let el = node?.parentElement ?? null;
+  while (el) {
+    const style = getComputedStyle(el);
+    if (/(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight) return el;
+    el = el.parentElement;
+  }
+  return null;
 }
 
 function MessageRow({ message }: { message: ChatMessage }) {
-  const isUser = message.role === 'user';
-  return (
-    <div className="flex gap-3">
-      <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center">
-        {isUser ? (
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface-2 text-[10px] font-semibold text-muted">
-            You
-          </span>
-        ) : (
-          <Logo size={18} tone={message.streaming ? 'accent' : 'fg'} />
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div
-          className={cn(
-            'whitespace-pre-wrap break-words text-[13px] leading-relaxed',
-            isUser ? 'text-fg' : 'text-fg',
-          )}
-        >
+  if (message.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
           {message.text}
-          {message.streaming && (
-            <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-accent align-middle" />
-          )}
         </div>
+      </div>
+    );
+  }
+
+  const empty = message.text.trim().length === 0;
+  return (
+    <div className="flex gap-3 animate-fade-in">
+      <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2">
+        <Logo size={16} tone={message.streaming ? 'accent' : 'fg'} />
+      </div>
+      <div className="min-w-0 flex-1 pt-0.5">
+        {empty && message.streaming ? (
+          <ThinkingDots />
+        ) : (
+          <>
+            <Markdown text={message.text} streaming={message.streaming} />
+            {message.streaming && (
+              <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-accent align-middle" />
+            )}
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-function ToolChip({ call }: { call: AgentToolCall }) {
-  const Icon = toolIcon(call);
+function ThinkingDots() {
   return (
-    <div className="ml-9 flex items-center gap-2 self-start rounded-md border border-line bg-surface-2 px-2.5 py-1.5">
-      <Icon size={13} className={cn(call.risk === 'command' ? 'text-warning' : 'text-muted')} />
-      <span className="text-[12px] text-muted">{call.summary}</span>
-      {call.status === 'running' ? (
-        <Spinner size={12} className="ml-1" />
-      ) : (
-        <span
-          className={cn(
-            'ml-1 h-1.5 w-1.5 rounded-full',
-            call.status === 'done' && 'bg-success',
-            call.status === 'error' && 'bg-danger',
-            call.status === 'denied' && 'bg-faint',
+    <span className="flex items-center gap-1 py-1 text-muted" aria-label="Thinking">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:0ms]" />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:150ms]" />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
+    </span>
+  );
+}
+
+function ToolCard({ call }: { call: AgentToolCall }) {
+  const Icon = toolIcon(call);
+  const isWeb = call.name === 'WebSearch' || call.name === 'WebFetch';
+  const [open, setOpen] = useState(false);
+  const expandable = !!call.detail && call.detail !== call.target;
+
+  return (
+    <div className="ml-10 max-w-[85%] self-start overflow-hidden rounded-xl border border-line bg-surface-2/60">
+      <button
+        type="button"
+        onClick={() => expandable && setOpen((v) => !v)}
+        className={cn(
+          'flex w-full items-center gap-2 px-3 py-2 text-left',
+          expandable && 'transition-colors hover:bg-elevated',
+        )}
+      >
+        <Icon size={14} className={cn('shrink-0', call.risk === 'command' ? 'text-warning' : 'text-muted')} />
+        <span className="shrink-0 text-[12px] font-medium text-fg">{call.summary}</span>
+        {call.target && (
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate text-[11.5px]',
+              isWeb ? 'font-mono text-accent-fg' : 'text-faint',
+            )}
+            title={call.target}
+          >
+            {call.target}
+          </span>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <ToolStatus status={call.status} />
+          {expandable && (
+            <ChevronRight size={13} className={cn('text-faint transition-transform', open && 'rotate-90')} />
           )}
-        />
+        </span>
+      </button>
+      {open && expandable && (
+        <pre className="max-h-48 overflow-auto border-t border-line bg-[#0a0a0a] px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
+          {call.detail}
+        </pre>
       )}
     </div>
+  );
+}
+
+function ToolStatus({ status }: { status: AgentToolCall['status'] }) {
+  if (status === 'running') return <Spinner size={12} />;
+  return (
+    <span
+      className={cn(
+        'h-1.5 w-1.5 rounded-full',
+        status === 'done' && 'bg-success',
+        status === 'error' && 'bg-danger',
+        status === 'denied' && 'bg-faint',
+      )}
+    />
   );
 }

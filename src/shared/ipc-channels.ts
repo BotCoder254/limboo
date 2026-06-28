@@ -49,6 +49,9 @@ export const IpcChannels = {
   agentGetSnapshot: 'agent:getSnapshot',
   agentPermissionRespond: 'agent:permissionRespond',
   agentClearSession: 'agent:clearSession',
+  agentGetDiagnostics: 'agent:getDiagnostics',
+  agentClearRateLimit: 'agent:clearRateLimit',
+  agentRetryAuth: 'agent:retryAuth',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];

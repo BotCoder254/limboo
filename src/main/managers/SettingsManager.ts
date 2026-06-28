@@ -8,6 +8,7 @@
 import { BrowserWindow } from 'electron';
 import type { AppSettings, DeepPartial } from '@shared/types';
 import {
+  AGENT_CONNECTION_LIMITS,
   AGENT_LIMITS,
   DEFAULT_SETTINGS,
   FONT_SCALE_LIMITS,
@@ -23,6 +24,8 @@ const FILE = 'settings.json';
 
 export class SettingsManager {
   private settings: AppSettings;
+  /** In-process listeners (e.g. the AgentManager re-tuning its heartbeat). */
+  private readonly listeners = new Set<(settings: AppSettings) => void>();
 
   constructor() {
     const stored = readJson<Partial<AppSettings>>(FILE, {});
@@ -33,6 +36,12 @@ export class SettingsManager {
 
   getAll(): AppSettings {
     return this.settings;
+  }
+
+  /** Subscribe to in-process settings changes. Returns an unsubscribe fn. */
+  onChange(listener: (settings: AppSettings) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   /**
@@ -57,6 +66,13 @@ export class SettingsManager {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send(IpcEvents.settingsChanged, this.settings);
+      }
+    }
+    for (const listener of this.listeners) {
+      try {
+        listener(this.settings);
+      } catch {
+        /* a listener failure must never break settings propagation */
       }
     }
   }
@@ -88,6 +104,18 @@ export class SettingsManager {
     merged.agent.maxTurns = Math.round(
       clamp(merged.agent.maxTurns, AGENT_LIMITS.maxTurns.min, AGENT_LIMITS.maxTurns.max),
     );
+
+    const c = merged.agent.connection;
+    const L = AGENT_CONNECTION_LIMITS;
+    c.heartbeatInterval = clamp(c.heartbeatInterval, L.heartbeatInterval.min, L.heartbeatInterval.max);
+    c.reconnectDelay = clamp(c.reconnectDelay, L.reconnectDelay.min, L.reconnectDelay.max);
+    c.maxRecoveryAttempts = Math.round(
+      clamp(c.maxRecoveryAttempts, L.maxRecoveryAttempts.min, L.maxRecoveryAttempts.max),
+    );
+    c.heartbeatFailureThreshold = Math.round(
+      clamp(c.heartbeatFailureThreshold, L.heartbeatFailureThreshold.min, L.heartbeatFailureThreshold.max),
+    );
+    c.idleTimeout = clamp(c.idleTimeout, L.idleTimeout.min, L.idleTimeout.max);
 
     return merged;
   }

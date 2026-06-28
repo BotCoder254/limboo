@@ -83,6 +83,8 @@ function bootstrap(): void {
 
     hardenSession();
     registerAllIpc({ settings, notifications, workspace, agent });
+    // Begin capability supervision (probe + heartbeat) once IPC is wired.
+    agent.start();
 
     appMenu.install();
     const win = createMainWindow(windowState);

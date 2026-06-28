@@ -177,6 +177,35 @@ export function SegmentedControl<T extends string>({
   );
 }
 
+/** Compact native select styled on the dark palette — for numeric presets. */
+export function Select<T extends string | number>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <select
+      value={String(value)}
+      onChange={(e) => {
+        const raw = e.target.value;
+        const match = options.find((o) => String(o.value) === raw);
+        if (match) onChange(match.value);
+      }}
+      className="w-44 rounded-md border border-line bg-surface-2 px-2 py-1 text-[12px] text-fg focus:border-line-strong focus:outline-none"
+    >
+      {options.map((option) => (
+        <option key={String(option.value)} value={String(option.value)}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function TextInput({
   value,
   placeholder,

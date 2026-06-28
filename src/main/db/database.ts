@@ -94,6 +94,22 @@ function migrate(database: Database.Database): void {
       sdk_session_id TEXT,
       updated_at     INTEGER NOT NULL
     );
+
+    -- Structured diagnostics console — the lifecycle / request / recovery /
+    -- heartbeat timeline. session_id is nullable for capability-global events.
+    CREATE TABLE IF NOT EXISTS agent_diagnostics (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT,
+      severity    TEXT NOT NULL,
+      category    TEXT NOT NULL,
+      label       TEXT NOT NULL,
+      detail      TEXT,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_diagnostics_session
+      ON agent_diagnostics (session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_diagnostics_created
+      ON agent_diagnostics (created_at);
   `);
 
   const current = database

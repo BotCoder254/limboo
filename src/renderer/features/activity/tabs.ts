@@ -1,4 +1,4 @@
-import { Activity, FileDiff, Folder, ListTodo } from 'lucide-react';
+import { Activity, FileDiff, Folder, ListTodo, TerminalSquare } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { ActivityTab } from '@shared/types';
 
@@ -14,4 +14,5 @@ export const ACTIVITY_TABS: TabMeta[] = [
   { id: 'changes', label: 'Changes', icon: FileDiff },
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
   { id: 'activity', label: 'Activity', icon: Activity },
+  { id: 'console', label: 'Console', icon: TerminalSquare },
 ];

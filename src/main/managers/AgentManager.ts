@@ -27,15 +27,22 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   AgentActivityItem,
+  AgentDiagnostic,
   AgentEvent,
   AgentInstall,
+  AgentLifecycleStatus,
   AgentSessionSnapshot,
   AgentState,
   AgentToolCall,
   ChatMessage,
+  DiagnosticCategory,
+  DiagnosticSeverity,
   FileChange,
   PermissionDecision,
   PermissionRequest,
+  RateLimitInfo,
+  RequestOutcome,
+  RequestState,
   TaskItem,
   ToolRisk,
 } from '@shared/types';
@@ -84,7 +91,113 @@ function filePathOf(input: Record<string, unknown>): string | undefined {
 function redact(text: string): string {
   return text
     .replace(/sk-[A-Za-z0-9_-]{10,}/g, 'sk-***')
-    .replace(/(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)=\S+/gi, '$1=***');
+    .replace(/(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)=\S+/gi, '$1=***')
+    .replace(/(authorization|bearer)\s*[:=]?\s*[A-Za-z0-9._-]{10,}/gi, '$1 ***');
+}
+
+/* ------------------------------------------------------------------ */
+/* Error classification — the heart of "process health vs request"    */
+/* outcome". Maps a thrown error / SDK message to a request outcome    */
+/* and (only when capability-level) a lifecycle transition.            */
+/* ------------------------------------------------------------------ */
+interface Classification {
+  outcome: RequestOutcome;
+  /** If set, escalate lifecycle; otherwise lifecycle stays ready/current. */
+  lifecycle?: AgentLifecycleStatus;
+  rateLimit?: RateLimitInfo;
+  /** True when a transparent recovery retry is warranted. */
+  recoverable: boolean;
+}
+
+function classifyAgentError(raw: string): Classification {
+  const t = raw.toLowerCase();
+
+  // Rate / session / usage limit — NOT an error. The process is healthy and
+  // auth is valid; the service has only temporarily refused more model calls.
+  if (/session limit|rate.?limit|usage limit|too many requests|hit your .*limit|quota|resets?\s+(at\s+)?\d/.test(t)) {
+    return { outcome: 'rate-limited', lifecycle: 'rate-limited', rateLimit: parseRateLimit(raw), recoverable: false };
+  }
+  // Auth — needs the user to sign in to Claude Code again.
+  if (/\b401\b|unauthorized|authentication|invalid api key|oauth|credentials? (expired|invalid|not found)|please run .?claude.? .*(sign|log) ?in|not authenticated/.test(t)) {
+    return { outcome: 'auth-required', lifecycle: 'auth-required', recoverable: false };
+  }
+  // Context window — request-local; the capability stays ready.
+  if (/context (window|length|limit) exceeded|prompt is too long|maximum context|too many tokens|context_length|model_context_window/.test(t)) {
+    return { outcome: 'context-overflow', recoverable: false };
+  }
+  // Transient transport / process death / provider overload — retry.
+  if (/econnreset|etimedout|epipe|enotfound|eai_again|socket hang up|stream (closed|ended|error)|process (exited|terminated|killed)|spawn|disconnect|network|fetch failed|\b50[023]\b|\b529\b|overloaded|temporarily unavailable/.test(t)) {
+    return { outcome: 'failed', lifecycle: 'reconnecting', recoverable: true };
+  }
+  // Default: request-local failure; capability stays healthy.
+  return { outcome: 'failed', recoverable: false };
+}
+
+/** Parse a provider rate-limit message into structured info (best-effort). */
+function parseRateLimit(raw: string): RateLimitInfo {
+  const message = redact(raw).slice(0, 240);
+  const tzMatch = raw.match(/\(([A-Za-z]+\/[A-Za-z_]+)\)/);
+  const timeMatch = raw.match(/resets?(?:\s+at)?\s+(\d{1,2}):(\d{2})\s*([ap]m)?/i);
+  let resetsAt: number | undefined;
+  if (timeMatch) resetsAt = computeNextReset(timeMatch, tzMatch?.[1]);
+  return { message, resetsAt, timezone: tzMatch?.[1] };
+}
+
+/**
+ * Given a parsed "HH:MM[am/pm]" match and an optional IANA timezone, return the
+ * epoch ms of the next wall-clock occurrence of that time. Uses Intl to read the
+ * timezone's current UTC offset; falls back to local time on any error.
+ */
+function computeNextReset(m: RegExpMatchArray, timeZone?: string): number | undefined {
+  try {
+    let hour = Number(m[1]);
+    const minute = Number(m[2]);
+    const ampm = m[3]?.toLowerCase();
+    if (ampm === 'pm' && hour < 12) hour += 12;
+    if (ampm === 'am' && hour === 12) hour = 0;
+    if (Number.isNaN(hour) || Number.isNaN(minute)) return undefined;
+
+    const now = new Date();
+    // Offset (minutes) of the target tz relative to UTC, computed from a probe.
+    const tzOffsetMin = timeZone ? tzOffsetMinutes(now, timeZone) : -now.getTimezoneOffset();
+    // Build the target instant for "today" at HH:MM in that tz, then roll forward.
+    const utcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    let target = utcMidnight + (hour * 60 + minute - tzOffsetMin) * 60_000;
+    if (target <= now.getTime()) target += 24 * 60 * 60_000;
+    return target;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The UTC offset (in minutes, east-positive) of `tz` at instant `at`. */
+function tzOffsetMinutes(at: Date, tz: string): number {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const parts = dtf.formatToParts(at);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const asUTC = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour'),
+    get('minute'),
+    get('second'),
+  );
+  return Math.round((asUTC - at.getTime()) / 60_000);
+}
+
+/** Exponential backoff with a hard cap. */
+function backoff(base: number, attempt: number): number {
+  return Math.min(base * 2 ** Math.max(0, attempt - 1), 30_000);
 }
 
 function newId(): string {
@@ -105,16 +218,23 @@ interface SessionRuntime {
 interface ActiveRun {
   abort: AbortController;
   query: { close?: () => void } | null;
+  /** Terminal SDK result for the active attempt (drives outcome classification). */
+  result?: { ok: boolean; text: string };
 }
 
 export class AgentManager {
   private state: AgentState = {
-    status: 'unknown',
+    lifecycle: 'starting',
     install: { installed: false },
+    request: { sessionId: null, phase: 'idle', outcome: null, attempt: 0, maxAttempts: 0 },
     activeSessionId: null,
+    heartbeat: { lastOkAt: null, consecutiveFailures: 0 },
   };
 
   private installChecked = false;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private rateLimitTimer: NodeJS.Timeout | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
   private readonly runtimes = new Map<string, SessionRuntime>();
   private readonly runs = new Map<string, ActiveRun>();
   /** Pending permission prompts awaiting a renderer decision. */
@@ -140,12 +260,37 @@ export class AgentManager {
   }
 
   /**
+   * Boot the manager: probe the capability once, then begin heartbeat
+   * supervision. Called from the main-process wiring after construction.
+   */
+  start(): void {
+    this.setLifecycle('initializing');
+    this.diag('lifecycle', 'info', 'Agent manager starting');
+    this.probeHealth(true);
+    this.startHeartbeat();
+    this.sweepDiagnostics();
+    // Re-tune the heartbeat whenever connection settings change.
+    this.settings.onChange(() => this.reconfigure());
+  }
+
+  /**
    * Detect whether Claude Code is usable. The SDK bundles the runtime, so this
    * really checks for available authentication — Claude Code owns auth and we
-   * never read the secret itself, only whether one is configured.
+   * never read the secret itself, only whether one is configured. Cached for the
+   * IPC accessor; {@link probeHealth} forces a fresh read.
    */
   getInstall(): AgentInstall {
     if (this.installChecked) return this.state.install;
+    return this.probeHealth(true);
+  }
+
+  /**
+   * Re-read install/auth presence and reconcile the lifecycle. `force` bypasses
+   * the cache (used by the heartbeat). Only checks for the *presence* of creds —
+   * never reads the secret.
+   */
+  private probeHealth(force = false): AgentInstall {
+    if (this.installChecked && !force) return this.state.install;
     this.installChecked = true;
 
     const hasEnvToken =
@@ -174,11 +319,27 @@ export class AgentManager {
             'Claude Code is not authenticated. Open a terminal, run `claude`, and sign in — Limboo reuses that login.',
         };
 
-    this.setState({
-      install,
-      status: install.installed ? (this.state.status === 'unknown' ? 'idle' : this.state.status) : 'not-installed',
-    });
+    // Reconcile lifecycle without clobbering an in-flight run's state.
+    const busy = this.runs.size > 0;
+    let lifecycle = this.state.lifecycle;
+    if (!install.installed) {
+      lifecycle = 'not-installed';
+    } else if (!busy && (this.state.lifecycle === 'starting' || this.state.lifecycle === 'initializing' || this.state.lifecycle === 'not-installed' || this.state.lifecycle === 'auth-required')) {
+      lifecycle = 'ready';
+    }
+    this.setState({ install, lifecycle, error: install.installed ? undefined : this.state.error });
     return install;
+  }
+
+  /** Force a fresh auth probe — invoked after the user signs in again. */
+  retryAuth(): AgentInstall {
+    this.diag('auth', 'info', 'Re-checking Claude Code authentication');
+    return this.probeHealth(true);
+  }
+
+  /** Re-read connection settings and restart the heartbeat with new cadence. */
+  reconfigure(): void {
+    this.startHeartbeat();
   }
 
   /** Restore a session's transcript + activity (from SQLite) plus live state. */
@@ -193,6 +354,43 @@ export class AgentManager {
     };
   }
 
+  /** Load the persisted diagnostics console history (global or per-session). */
+  getDiagnostics(sessionId?: string | null): AgentDiagnostic[] {
+    const db = getDb();
+    const rows = (
+      sessionId
+        ? db
+            .prepare(
+              'SELECT id, session_id, severity, category, label, detail, created_at FROM agent_diagnostics WHERE session_id = ? ORDER BY created_at DESC LIMIT 500',
+            )
+            .all(sessionId)
+        : db
+            .prepare(
+              'SELECT id, session_id, severity, category, label, detail, created_at FROM agent_diagnostics ORDER BY created_at DESC LIMIT 500',
+            )
+            .all()
+    ) as Array<{
+      id: string;
+      session_id: string | null;
+      severity: string;
+      category: string;
+      label: string;
+      detail: string | null;
+      created_at: number;
+    }>;
+    return rows
+      .map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        severity: r.severity as DiagnosticSeverity,
+        category: r.category as DiagnosticCategory,
+        label: r.label,
+        detail: r.detail ?? undefined,
+        at: r.created_at,
+      }))
+      .reverse();
+  }
+
   /** Resolve a pending permission prompt from the renderer. */
   respondPermission(decision: PermissionDecision): void {
     const entry = this.pending.get(decision.id);
@@ -201,8 +399,10 @@ export class AgentManager {
 
     if (decision.behavior === 'allow') {
       if (decision.remember) this.remembered.add(`${entry.sessionId}:remember`);
+      this.diag('tool', 'info', 'Tool approved', undefined, entry.sessionId);
       entry.resolve({ behavior: 'allow' });
     } else {
+      this.diag('tool', 'warning', 'Tool rejected', decision.message, entry.sessionId);
       entry.resolve({
         behavior: 'deny',
         message: decision.message || 'Denied by the user.',
@@ -211,7 +411,8 @@ export class AgentManager {
 
     // Drop back to streaming if there are no other prompts outstanding.
     if (this.pending.size === 0 && this.runs.has(entry.sessionId)) {
-      this.setState({ status: 'streaming' });
+      this.setLifecycle('streaming');
+      this.setRequest({ phase: 'streaming' });
     }
   }
 
@@ -233,7 +434,9 @@ export class AgentManager {
       }
     }
     this.runs.delete(sessionId);
-    this.setState({ status: 'idle', activeSessionId: null });
+    this.completeRequest(sessionId, 'cancelled');
+    if (!this.isCapabilityDegraded()) this.setLifecycle('ready', { activeSessionId: null });
+    this.diag('request', 'warning', 'Run cancelled', undefined, sessionId);
     this.pushEvent({ kind: 'activity', sessionId, item: this.activity(sessionId, 'status', 'Run stopped', undefined, 'warning') });
   }
 
@@ -245,15 +448,21 @@ export class AgentManager {
     db.prepare('DELETE FROM agent_messages WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_activity WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_session_meta WHERE session_id = ?').run(sessionId);
+    db.prepare('DELETE FROM agent_diagnostics WHERE session_id = ?').run(sessionId);
   }
 
-  /** Abort every active run. Called on quit. */
+  /** Abort every active run + stop all supervision timers. Called on quit. */
   cleanup(): void {
     for (const sessionId of [...this.runs.keys()]) this.stop(sessionId);
+    this.stopHeartbeat();
+    this.clearRateLimitTimer();
+    this.clearIdleTimer();
   }
 
   /**
-   * Run a prompt for a session. Streams the agent's work as structured events.
+   * Run a prompt for a session. Streams the agent's work as structured events,
+   * with transparent recovery on transient failures. A failed *request* never
+   * marks the whole agent dead — only a genuinely degraded *capability* does.
    */
   async send(sessionId: string, prompt: string): Promise<void> {
     if (this.runs.has(sessionId)) {
@@ -261,7 +470,11 @@ export class AgentManager {
     }
     const install = this.getInstall();
     if (!install.installed) {
+      this.setLifecycle('auth-required');
       throw new Error(install.error ?? 'Claude Code is not available.');
+    }
+    if (this.state.lifecycle === 'rate-limited') {
+      throw new Error(this.state.rateLimit?.message ?? 'The agent is rate limited right now.');
     }
     const ws = this.workspace.getActive();
     if (!ws) {
@@ -281,11 +494,117 @@ export class AgentManager {
     this.pushEvent({ kind: 'message-done', sessionId, message: userMsg });
     this.pushActivity(sessionId, 'prompt', 'You', prompt.slice(0, 120), 'info');
 
-    const cwd = ws.path;
-    const agent = this.settings.getAll().agent;
+    const cfg = this.settings.getAll().agent.connection;
     const abort = new AbortController();
     this.runs.set(sessionId, { abort, query: null });
-    this.setState({ status: 'connecting', activeSessionId: sessionId, error: undefined });
+    this.clearIdleTimer();
+    this.setRequest({
+      sessionId,
+      phase: 'submitting',
+      outcome: null,
+      attempt: 0,
+      maxAttempts: cfg.maxRecoveryAttempts,
+      detail: undefined,
+    });
+    this.setLifecycle('busy', { activeSessionId: sessionId, error: undefined });
+    this.diag('request', 'info', 'Prompt submitted', prompt.slice(0, 160), sessionId);
+
+    try {
+      await this.runWithRecovery(sessionId, prompt, abort, cfg);
+    } finally {
+      this.runs.delete(sessionId);
+      if (!this.isCapabilityDegraded()) this.setLifecycle('ready', { activeSessionId: null });
+      this.armIdleTimer(cfg);
+    }
+  }
+
+  /** Retry wrapper around {@link runOnce}: classify, recover, or surface. */
+  private async runWithRecovery(
+    sessionId: string,
+    prompt: string,
+    abort: AbortController,
+    cfg: ReturnType<SettingsManager['getAll']>['agent']['connection'],
+  ): Promise<void> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        await this.runOnce(sessionId, prompt, abort);
+        if (abort.signal.aborted) {
+          // The user stopped mid-stream; stop() already recorded 'cancelled'.
+          return;
+        }
+        this.completeRequest(sessionId, 'success');
+        this.markHeartbeatOk();
+        if (this.state.lifecycle === 'reconnecting') {
+          this.setLifecycle('ready');
+          this.diag('recovery', 'info', 'Recovered', undefined, sessionId);
+        }
+        if (this.state.lifecycle === 'rate-limited') this.clearRateLimit('request succeeded');
+        return;
+      } catch (err) {
+        if (abort.signal.aborted) {
+          this.completeRequest(sessionId, 'cancelled');
+          return;
+        }
+        const raw = err instanceof Error ? err.message : String(err);
+        const cls = classifyAgentError(redact(raw));
+        this.diag('recovery', cls.recoverable ? 'warning' : 'error', `Run error (${cls.outcome})`, redact(raw), sessionId);
+
+        if (cls.outcome === 'rate-limited' && cls.rateLimit) {
+          this.enterRateLimited(cls.rateLimit, sessionId);
+          this.completeRequest(sessionId, 'rate-limited', cls.rateLimit.message);
+          return;
+        }
+        if (cls.outcome === 'auth-required') {
+          this.setLifecycle('auth-required', { error: redact(raw) });
+          this.completeRequest(sessionId, 'auth-required', 'Sign in to Claude Code again.');
+          this.pushEvent({ kind: 'error', sessionId, message: redact(raw), outcome: 'auth-required' });
+          this.pushActivity(sessionId, 'error', 'Authentication required', undefined, 'warning');
+          this.diag('auth', 'warning', 'Authentication required', redact(raw));
+          return;
+        }
+        if (cls.outcome === 'context-overflow') {
+          this.completeRequest(sessionId, 'context-overflow', 'Context window exceeded.');
+          this.pushEvent({ kind: 'error', sessionId, message: redact(raw), outcome: 'context-overflow' });
+          this.pushActivity(sessionId, 'error', 'Context window exceeded', undefined, 'warning');
+          return; // capability stays ready — this is request-local
+        }
+
+        if (cls.recoverable && cfg.maxRecoveryAttempts > 0 && attempt < cfg.maxRecoveryAttempts) {
+          attempt += 1;
+          this.setLifecycle('reconnecting');
+          this.setRequest({ phase: 'recovering', attempt });
+          this.diag('recovery', 'info', `Reconnect attempt ${attempt}/${cfg.maxRecoveryAttempts}`, undefined, sessionId);
+          const ok = await this.abortableDelay(backoff(cfg.reconnectDelay, attempt), abort);
+          if (!ok) {
+            this.completeRequest(sessionId, 'cancelled');
+            return;
+          }
+          continue; // retry — runOnce reuses buildOptions → options.resume
+        }
+
+        // Exhausted or non-recoverable.
+        logger.error('Agent run failed', redact(raw));
+        this.completeRequest(sessionId, cls.outcome, redact(raw));
+        this.pushEvent({ kind: 'error', sessionId, message: redact(raw), outcome: cls.outcome });
+        this.pushActivity(sessionId, 'error', 'Agent error', redact(raw).slice(0, 160), 'danger');
+        if (cls.recoverable) {
+          // A transport error whose recovery budget is spent — capability degraded.
+          this.setLifecycle('failed', { error: redact(raw) });
+        }
+        // Otherwise a request-local failure: the agent itself stays ready (the
+        // outer send() finally restores 'ready' since the capability is healthy).
+        return;
+      }
+    }
+  }
+
+  /** A single SDK run attempt. Streams events; re-throws on any failure. */
+  private async runOnce(sessionId: string, prompt: string, abort: AbortController): Promise<void> {
+    const ws = this.workspace.getActive();
+    if (!ws) throw new Error('Open a workspace before talking to the agent.');
+    const cwd = ws.path;
+    const agent = this.settings.getAll().agent;
 
     let streaming: ChatMessage | null = null;
     const ensureStreaming = (): ChatMessage => {
@@ -311,32 +630,35 @@ export class AgentManager {
       streaming = null;
     };
 
+    const run = this.runs.get(sessionId);
+    if (run) run.result = undefined;
+    this.setRequest({ phase: 'connecting' });
+
     try {
       const { query } = await loadSdk();
       const options = this.buildOptions(sessionId, cwd, abort, agent);
+      this.diag('lifecycle', 'debug', 'Handshake — query opened', undefined, sessionId);
       const q = query({ prompt, options }) as unknown as AsyncIterable<SDKMessage> & {
         close?: () => void;
       };
-      const run = this.runs.get(sessionId);
       if (run) run.query = q;
-      this.setState({ status: 'streaming' });
+      this.setLifecycle('streaming');
+      this.setRequest({ phase: 'streaming' });
+      this.diag('stream', 'debug', 'Streaming response', undefined, sessionId);
 
       for await (const msg of q) {
         if (abort.signal.aborted) break;
         this.handleMessage(sessionId, msg, ensureStreaming, finishStreaming);
       }
-    } catch (err) {
-      if (!abort.signal.aborted) {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error('Agent run failed', redact(message));
-        this.pushEvent({ kind: 'error', sessionId, message });
-        this.pushActivity(sessionId, 'error', 'Agent error', message.slice(0, 160), 'danger');
-        this.setState({ status: 'error', error: message });
-      }
     } finally {
       finishStreaming();
-      this.runs.delete(sessionId);
-      if (this.state.status !== 'error') this.setState({ status: 'idle', activeSessionId: null });
+    }
+
+    // A non-success terminal result is surfaced as a throw so the recovery loop
+    // can classify it (rate-limit / auth / context / transient / hard failure).
+    const result = this.runs.get(sessionId)?.result;
+    if (result && !result.ok && !abort.signal.aborted) {
+      throw new Error(result.text || 'The run ended with errors.');
     }
   }
 
@@ -370,10 +692,8 @@ export class AgentManager {
 
       case 'assistant': {
         if (msg.error) {
-          const message = `Agent error: ${msg.error}`;
-          this.pushEvent({ kind: 'error', sessionId, message });
-          this.pushActivity(sessionId, 'error', 'Agent error', String(msg.error), 'danger');
-          break;
+          // Surface as a throw so the recovery loop classifies it consistently.
+          throw new Error(String(msg.error));
         }
         const content = (msg.message?.content ?? []) as unknown as Array<Record<string, unknown>>;
         const text = content
@@ -416,19 +736,19 @@ export class AgentManager {
         finishStreaming();
         const ok = msg.subtype === 'success';
         const resultText = 'result' in msg && typeof msg.result === 'string' ? msg.result : '';
+        const run = this.runs.get(sessionId);
+        if (run) run.result = { ok, text: resultText || String(msg.subtype ?? '') };
         this.pushEvent({ kind: 'result', sessionId, ok, text: resultText });
-        this.pushActivity(
-          sessionId,
-          'result',
-          ok ? 'Completed' : 'Ended with errors',
-          ok ? undefined : resultText.slice(0, 160),
-          ok ? 'success' : 'danger',
-        );
-        if (this.settings.getAll().behavior.notifications) {
-          this.notifications.notify({
-            title: ok ? 'Agent finished' : 'Agent stopped',
-            body: ok ? 'Claude Code completed the task.' : 'The run ended with errors.',
-          });
+        if (ok) {
+          // Failure paths are owned by runWithRecovery (classified + surfaced).
+          this.pushActivity(sessionId, 'result', 'Completed', undefined, 'success');
+          this.diag('request', 'info', 'Run completed', undefined, sessionId);
+          if (this.settings.getAll().behavior.notifications) {
+            this.notifications.notify({
+              title: 'Agent finished',
+              body: 'Claude Code completed the task.',
+            });
+          }
         }
         break;
       }
@@ -452,13 +772,16 @@ export class AgentManager {
       name,
       risk,
       summary: summarizeTool(name, input, risk),
+      detail: permissionDetail(name, input),
+      target: toolTarget(name, input),
       status: 'running',
       startedAt: Date.now(),
     };
     const rt = this.runtime(sessionId);
     rt.toolCalls = [...rt.toolCalls, call];
     this.pushEvent({ kind: 'tool-start', sessionId, call });
-    this.pushActivity(sessionId, 'tool', call.summary, undefined, 'info');
+    this.pushActivity(sessionId, 'tool', call.summary, call.target, 'info');
+    this.diag('tool', 'info', call.summary, call.target ?? call.detail, sessionId);
 
     if (risk === 'write') {
       const change = changeFromInput(name, input);
@@ -559,7 +882,9 @@ export class AgentManager {
         createdAt: Date.now(),
       };
       this.pushActivity(sessionId, 'permission', `Asked to ${request.summary}`, undefined, 'warning');
-      this.setState({ status: 'awaiting-permission' });
+      this.diag('tool', 'warning', `Approval requested: ${request.summary}`, request.detail, sessionId);
+      this.setLifecycle('awaiting-permission');
+      this.setRequest({ phase: 'awaiting-permission' });
       this.broadcastChannel(IpcEvents.agentPermissionRequest, request);
 
       return new Promise<PermissionResult>((resolve) => {
@@ -677,6 +1002,212 @@ export class AgentManager {
     this.broadcastChannel(IpcEvents.agentStateChanged, this.state);
   }
 
+  private setLifecycle(lifecycle: AgentLifecycleStatus, patch: Partial<AgentState> = {}): void {
+    this.setState({ lifecycle, ...patch });
+  }
+
+  private setRequest(patch: Partial<RequestState>): void {
+    const request = { ...this.state.request, ...patch };
+    this.setState({ request });
+    this.pushEvent({ kind: 'request-state', sessionId: request.sessionId ?? '', request });
+  }
+
+  private completeRequest(sessionId: string, outcome: RequestOutcome, detail?: string): void {
+    this.setRequest({ sessionId, phase: 'done', outcome, detail, attempt: 0 });
+  }
+
+  /** True when the capability itself is degraded (not just the last request). */
+  private isCapabilityDegraded(): boolean {
+    return (
+      this.state.lifecycle === 'reconnecting' ||
+      this.state.lifecycle === 'rate-limited' ||
+      this.state.lifecycle === 'auth-required' ||
+      this.state.lifecycle === 'offline' ||
+      this.state.lifecycle === 'failed' ||
+      this.state.lifecycle === 'not-installed'
+    );
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Diagnostics console                                              */
+  /* ---------------------------------------------------------------- */
+
+  private diag(
+    category: DiagnosticCategory,
+    severity: DiagnosticSeverity,
+    label: string,
+    detail?: string,
+    sessionId: string | null = null,
+  ): void {
+    // Honor the verbosity preference: drop debug lines unless verbose.
+    const verbosity = this.settings.getAll().agent.logVerbosity;
+    if (severity === 'debug' && verbosity !== 'verbose') return;
+    const d: AgentDiagnostic = {
+      id: newId(),
+      sessionId: sessionId || null,
+      severity,
+      category,
+      label,
+      detail: detail ? redact(detail).slice(0, 2_000) : undefined,
+      at: Date.now(),
+    };
+    if (this.settings.getAll().agent.connection.sessionPersistence) this.persistDiagnostic(d);
+    this.pushEvent({ kind: 'diagnostic', diagnostic: d });
+  }
+
+  private persistDiagnostic(d: AgentDiagnostic): void {
+    try {
+      getDb()
+        .prepare(
+          'INSERT INTO agent_diagnostics (id, session_id, severity, category, label, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(d.id, d.sessionId, d.severity, d.category, d.label, d.detail ?? null, d.at);
+    } catch {
+      /* diagnostics are best-effort — never block a run on a write failure */
+    }
+  }
+
+  /** Bound the diagnostics table: keep ~14 days of history. */
+  private sweepDiagnostics(): void {
+    try {
+      const cutoff = Date.now() - 14 * 24 * 60 * 60_000;
+      getDb().prepare('DELETE FROM agent_diagnostics WHERE created_at < ?').run(cutoff);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Heartbeat supervision                                            */
+  /* ---------------------------------------------------------------- */
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    const interval = this.settings.getAll().agent.connection.heartbeatInterval;
+    if (interval <= 0) return;
+    this.heartbeatTimer = setInterval(() => void this.heartbeat(), interval);
+    if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private markHeartbeatOk(): void {
+    this.setState({ heartbeat: { lastOkAt: Date.now(), consecutiveFailures: 0 } });
+  }
+
+  /**
+   * Lightweight liveness re-verification. There is no persistent child process
+   * between prompts, so this re-probes install/auth presence and confirms the
+   * SDK is loadable — never an expensive model call.
+   */
+  private async heartbeat(): Promise<void> {
+    // An active run is itself the liveness signal; rate-limit/auth states clear
+    // on their own paths, so don't fight them.
+    if (this.runs.size > 0) return;
+    if (this.state.lifecycle === 'rate-limited' || this.state.lifecycle === 'auth-required') return;
+
+    const cfg = this.settings.getAll().agent.connection;
+    try {
+      const install = this.probeHealth(true);
+      if (!install.installed) throw new Error('Claude Code authentication is no longer available.');
+      await loadSdk();
+      this.markHeartbeatOk();
+      if (this.state.lifecycle === 'reconnecting' || this.state.lifecycle === 'offline') {
+        this.setLifecycle('ready', { error: undefined });
+        this.diag('heartbeat', 'info', 'Capability recovered');
+      }
+    } catch (err) {
+      const failures = this.state.heartbeat.consecutiveFailures + 1;
+      this.setState({ heartbeat: { lastOkAt: this.state.heartbeat.lastOkAt, consecutiveFailures: failures } });
+      this.diag('heartbeat', 'warning', `Heartbeat failed (${failures})`, redact(String(err)));
+      if (failures >= cfg.heartbeatFailureThreshold && this.state.lifecycle === 'ready') {
+        this.setLifecycle('reconnecting');
+      }
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Rate-limit handling                                              */
+  /* ---------------------------------------------------------------- */
+
+  private enterRateLimited(info: RateLimitInfo, sessionId: string): void {
+    this.setLifecycle('rate-limited', { rateLimit: info, activeSessionId: null });
+    this.diag('rate-limit', 'warning', 'Rate / session limit hit', info.message);
+    this.pushActivity(sessionId, 'status', 'Rate limited', info.message.slice(0, 160), 'warning');
+    this.clearRateLimitTimer();
+    if (info.resetsAt) {
+      const ms = Math.max(0, info.resetsAt - Date.now());
+      this.rateLimitTimer = setTimeout(() => this.clearRateLimit('reset time elapsed'), ms + 1_000);
+      if (this.rateLimitTimer.unref) this.rateLimitTimer.unref();
+    }
+    if (this.settings.getAll().agent.connection.connectivityNotifications) {
+      this.notifications.notify({ title: 'Agent rate limited', body: info.message });
+    }
+  }
+
+  /** Clear the rate-limit state (timer elapsed, or a later request succeeded). */
+  private clearRateLimit(reason: string): void {
+    if (this.state.lifecycle !== 'rate-limited') return;
+    this.clearRateLimitTimer();
+    this.setLifecycle('ready', { rateLimit: undefined });
+    this.diag('rate-limit', 'info', 'Rate limit cleared', reason);
+  }
+
+  /** Renderer-triggered manual clear ("try again now"). */
+  clearRateLimitManual(): void {
+    this.clearRateLimit('cleared by the user');
+  }
+
+  private clearRateLimitTimer(): void {
+    if (this.rateLimitTimer) {
+      clearTimeout(this.rateLimitTimer);
+      this.rateLimitTimer = null;
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Idle + recovery utilities                                        */
+  /* ---------------------------------------------------------------- */
+
+  private armIdleTimer(cfg: ReturnType<SettingsManager['getAll']>['agent']['connection']): void {
+    this.clearIdleTimer();
+    if (cfg.idleTimeout <= 0) return;
+    this.idleTimer = setTimeout(() => {
+      if (this.runs.size > 0) return;
+      this.diag('lifecycle', 'debug', 'Idle');
+      if (cfg.autoRestart && this.state.lifecycle === 'ready') this.probeHealth(true);
+    }, cfg.idleTimeout);
+    if (this.idleTimer.unref) this.idleTimer.unref();
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  /** Resolve true after `ms`, or false if aborted first. */
+  private abortableDelay(ms: number, abort: AbortController): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        abort.signal.removeEventListener('abort', onAbort);
+        resolve(true);
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+      if (abort.signal.aborted) return onAbort();
+      abort.signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
   private pushEvent(event: AgentEvent): void {
     this.broadcastChannel(IpcEvents.agentEvent, event);
   }
@@ -745,6 +1276,16 @@ function summarizeTool(name: string, input: Record<string, unknown>, risk: ToolR
     default:
       return risk === 'command' ? `Run ${name}` : name;
   }
+}
+
+/** The inline "target" shown in chat for a tool — a URL, query, or path. */
+function toolTarget(name: string, input: Record<string, unknown>): string | undefined {
+  if (name === 'WebSearch') return truncate(String(input.query ?? ''), 120) || undefined;
+  if (name === 'WebFetch') return truncate(String(input.url ?? ''), 160) || undefined;
+  if (name === 'Bash') return truncate(String(input.command ?? ''), 120) || undefined;
+  if (name === 'Grep') return truncate(String(input.pattern ?? ''), 80) || undefined;
+  const file = filePathOf(input);
+  return file ? shortPath(file) : undefined;
 }
 
 function permissionDetail(name: string, input: Record<string, unknown>): string | undefined {
