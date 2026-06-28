@@ -13,6 +13,7 @@ import { useKeyboardShortcuts } from '@/renderer/hooks/useKeyboardShortcuts';
 import { useCommandBridge } from '@/renderer/hooks/useCommandBridge';
 import { usePreventFileDrop } from '@/renderer/hooks/usePreventFileDrop';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
+import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 
 export function App() {
@@ -20,9 +21,14 @@ export function App() {
   useCommandBridge();
   usePreventFileDrop();
 
-  // Load registered workspaces + connect to the coding agent once the shell is up.
+  // Load registered workspaces + sessions + connect to the coding agent once the
+  // shell is up. Workspaces hydrate first so the session list can scope to the
+  // active workspace; the session store also follows later workspace switches.
   useEffect(() => {
-    void useWorkspaceStore.getState().hydrate();
+    void useWorkspaceStore
+      .getState()
+      .hydrate()
+      .then(() => useSessionStore.getState().hydrate());
     void useAgentStore.getState().hydrate();
   }, []);
 

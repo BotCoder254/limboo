@@ -5,12 +5,18 @@
  * Commands operate on Zustand stores via `getState()` so they can run from
  * anywhere (inside or outside React) without prop drilling.
  */
-import type { CommandId } from '@shared/types';
+import type { AgentMode, CommandId } from '@shared/types';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
+import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
+
+/** Set the composer's default execution mode (Plan-first vs direct Implement). */
+function setDefaultMode(defaultMode: AgentMode): void {
+  void useSettingsStore.getState().update({ agent: { plan: { defaultMode } } });
+}
 
 /** Reindex the active workspace, surfacing the outcome as a toast. */
 async function reindexActiveWorkspace(): Promise<void> {
@@ -84,7 +90,17 @@ export const COMMANDS: Command[] = [
     keys: ['Mod', 'N'],
     inPalette: true,
     run: () => {
-      useSessionStore.getState().createSession();
+      void useSessionStore.getState().createSession();
+    },
+  },
+  {
+    id: 'session.duplicate',
+    title: 'Duplicate session',
+    section: 'Sessions',
+    inPalette: true,
+    run: () => {
+      const id = useSessionStore.getState().selectedId;
+      if (id) void useSessionStore.getState().duplicate(id);
     },
   },
   {
@@ -93,7 +109,7 @@ export const COMMANDS: Command[] = [
     section: 'Agent',
     inPalette: true,
     run: () => {
-      useSessionStore.getState().createSession();
+      void useSessionStore.getState().createSession();
     },
   },
   {
@@ -104,6 +120,32 @@ export const COMMANDS: Command[] = [
     run: () => {
       const id = useAgentStore.getState().activeSessionId ?? useSessionStore.getState().selectedId;
       if (id) useAgentStore.getState().stop(id);
+    },
+  },
+  {
+    id: 'agent.planMode',
+    title: 'Switch to Plan mode',
+    section: 'Agent',
+    inPalette: true,
+    run: () => setDefaultMode('plan'),
+  },
+  {
+    id: 'agent.implementMode',
+    title: 'Switch to Implement mode',
+    section: 'Agent',
+    inPalette: true,
+    run: () => setDefaultMode('implement'),
+  },
+  {
+    id: 'plan.approve',
+    title: 'Approve plan & execute',
+    section: 'Agent',
+    inPalette: true,
+    run: () => {
+      const id = useSessionStore.getState().selectedId;
+      if (!id) return;
+      const plan = useAgentStore.getState().bySession[id]?.plan;
+      if (plan?.status === 'ready') useAgentStore.getState().approvePlan(id);
     },
   },
   {

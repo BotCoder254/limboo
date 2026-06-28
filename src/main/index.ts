@@ -17,6 +17,7 @@ import { NotificationManager } from './managers/NotificationManager';
 import { AppMenuManager } from './managers/AppMenuManager';
 import { TrayManager } from './managers/TrayManager';
 import { WorkspaceManager } from './managers/WorkspaceManager';
+import { SessionManager } from './managers/SessionManager';
 import { AgentManager } from './managers/AgentManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
@@ -59,6 +60,7 @@ function bootstrap(): void {
   let settings: SettingsManager;
   let notifications: NotificationManager;
   let workspace: WorkspaceManager;
+  let sessions: SessionManager;
   let agent: AgentManager;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
@@ -79,10 +81,11 @@ function bootstrap(): void {
     // Open the local database before any manager that reads from it.
     getDb();
     workspace = new WorkspaceManager();
+    sessions = new SessionManager();
     agent = new AgentManager(workspace, settings, notifications);
 
     hardenSession();
-    registerAllIpc({ settings, notifications, workspace, agent });
+    registerAllIpc({ settings, notifications, workspace, session: sessions, agent });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();
 

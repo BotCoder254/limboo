@@ -18,6 +18,7 @@ import type {
   AgentEvent,
   AgentInstall,
   AgentLifecycleStatus,
+  AgentMode,
   AgentSessionSnapshot,
   ChatMessage,
   FileChange,
@@ -28,7 +29,7 @@ import type {
 import { useUIStore } from './useUIStore';
 
 function emptySnapshot(): AgentSessionSnapshot {
-  return { messages: [], activity: [], changes: [], tasks: [], toolCalls: [] };
+  return { messages: [], activity: [], changes: [], tasks: [], toolCalls: [], plan: null };
 }
 
 const IDLE_REQUEST: RequestState = {
@@ -57,12 +58,15 @@ interface AgentStoreState {
   hydrate: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
   loadDiagnostics: (sessionId?: string | null) => Promise<void>;
-  send: (sessionId: string, prompt: string) => Promise<void>;
+  send: (sessionId: string, prompt: string, mode?: AgentMode) => Promise<void>;
   stop: (sessionId: string) => void;
   clear: (sessionId: string) => void;
   clearRateLimit: () => void;
   retryAuth: () => void;
   respond: (behavior: 'allow' | 'deny', remember?: boolean) => void;
+  approvePlan: (sessionId: string) => void;
+  rejectPlan: (sessionId: string) => void;
+  regeneratePlan: (sessionId: string, extra?: string) => void;
 }
 
 export const useAgentStore = create<AgentStoreState>((set, get) => {
@@ -88,6 +92,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         changes: prev.changes,
         tasks: prev.tasks,
         toolCalls: prev.toolCalls,
+        plan: prev.plan,
       };
 
       switch (event.kind) {
@@ -118,6 +123,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
           break;
         case 'tasks':
           next.tasks = event.tasks;
+          break;
+        case 'plan':
+          next.plan = event.plan;
           break;
         case 'result':
         case 'error':
@@ -197,11 +205,11 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       set({ diagnostics: diagnostics.slice(-MAX_DIAGNOSTICS) });
     },
 
-    send: async (sessionId, prompt) => {
+    send: async (sessionId, prompt, mode) => {
       const api = window.limboo?.agent;
       if (!api) return;
       try {
-        await api.send(sessionId, prompt);
+        await api.send(sessionId, prompt, mode);
       } catch (err) {
         useUIStore.getState().addToast({
           title: 'Could not reach the agent',
@@ -233,6 +241,26 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       if (!pending) return;
       void window.limboo?.agent?.respondPermission({ id: pending.id, behavior, remember });
       set({ pending: null });
+    },
+
+    approvePlan: (sessionId) => {
+      const api = window.limboo?.agent;
+      if (!api?.approvePlan) return;
+      api.approvePlan(sessionId).catch((err: unknown) => {
+        useUIStore.getState().addToast({
+          title: 'Could not start implementation',
+          description: err instanceof Error ? err.message : String(err),
+          tone: 'danger',
+        });
+      });
+    },
+
+    rejectPlan: (sessionId) => {
+      void window.limboo?.agent?.rejectPlan?.(sessionId);
+    },
+
+    regeneratePlan: (sessionId, extra) => {
+      void window.limboo?.agent?.regeneratePlan?.(sessionId, extra);
     },
   };
 });

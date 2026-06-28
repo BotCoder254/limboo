@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   FileDiff,
   FolderOpen,
-  ListTodo,
   MessageSquare,
   RefreshCw,
   ShieldCheck,
@@ -24,6 +23,8 @@ import { relativeTime } from '@/renderer/lib/format';
 import { runCommand } from '@/renderer/lib/commands';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
+
+export { PlanPanel as TasksPanel } from './PlanPanel';
 
 function useSnapshot() {
   const sessionId = useSessionStore((s) => s.selectedId);
@@ -93,39 +94,6 @@ function ChangeRow({ change }: { change: FileChange }) {
       </span>
       <DiffStat adds={change.adds} dels={change.dels} />
     </li>
-  );
-}
-
-export function TasksPanel() {
-  const snapshot = useSnapshot();
-  if (snapshot.tasks.length === 0) {
-    return (
-      <EmptyState
-        compact
-        icon={ListTodo}
-        title="No tasks"
-        description="The agent's plan and task checklist for the active session shows up here."
-      />
-    );
-  }
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {snapshot.tasks.map((task) => (
-        <li key={task.id} className="flex items-center gap-2 rounded-md px-2 py-1.5">
-          <span
-            className={cn(
-              'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border',
-              task.done ? 'border-success bg-success/20 text-success' : 'border-line-strong text-transparent',
-            )}
-          >
-            <CheckCircle2 size={10} />
-          </span>
-          <span className={cn('text-[12px]', task.done ? 'text-faint line-through' : 'text-fg')}>
-            {task.label}
-          </span>
-        </li>
-      ))}
-    </ul>
   );
 }
 

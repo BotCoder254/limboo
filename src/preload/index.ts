@@ -14,6 +14,7 @@ import type {
   AgentDiagnostic,
   AgentEvent,
   AgentInstall,
+  AgentMode,
   AgentSessionSnapshot,
   AgentState,
   AppInfo,
@@ -22,6 +23,9 @@ import type {
   DeepPartial,
   PermissionDecision,
   PermissionRequest,
+  Session,
+  SessionPlan,
+  SessionUpdate,
   Workspace,
   WorkspaceConfig,
   WorkspaceStats,
@@ -103,14 +107,42 @@ const workspaceApi = {
     subscribe<Workspace[]>(IpcEvents.workspacesUpdated, cb),
 };
 
+const sessionApi = {
+  list: (workspaceId: string, trash = false): Promise<Session[]> =>
+    ipcRenderer.invoke(IpcChannels.sessionList, workspaceId, trash),
+  getActive: (): Promise<Session | null> => ipcRenderer.invoke(IpcChannels.sessionGetActive),
+  create: (workspaceId: string, title?: string): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.sessionCreate, workspaceId, title),
+  update: (id: string, patch: SessionUpdate): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.sessionUpdate, id, patch),
+  duplicate: (id: string): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.sessionDuplicate, id),
+  delete: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.sessionDelete, id),
+  restore: (id: string): Promise<Session> => ipcRenderer.invoke(IpcChannels.sessionRestore, id),
+  purge: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.sessionPurge, id),
+  setActive: (id: string): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.sessionSetActive, id),
+  onUpdated: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.sessionsUpdated, cb),
+  onActiveChanged: (cb: (session: Session | null) => void): (() => void) =>
+    subscribe<Session | null>(IpcEvents.sessionActiveChanged, cb),
+};
+
 const agentApi = {
   getInstall: (): Promise<AgentInstall> => ipcRenderer.invoke(IpcChannels.agentGetInstall),
   getState: (): Promise<AgentState> => ipcRenderer.invoke(IpcChannels.agentGetState),
   getSnapshot: (sessionId: string): Promise<AgentSessionSnapshot> =>
     ipcRenderer.invoke(IpcChannels.agentGetSnapshot, sessionId),
-  send: (sessionId: string, prompt: string): Promise<void> =>
-    ipcRenderer.invoke(IpcChannels.agentSend, sessionId, prompt),
+  send: (sessionId: string, prompt: string, mode?: AgentMode): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentSend, sessionId, prompt, mode),
   stop: (sessionId: string): Promise<void> => ipcRenderer.invoke(IpcChannels.agentStop, sessionId),
+  getPlan: (sessionId: string): Promise<SessionPlan | null> =>
+    ipcRenderer.invoke(IpcChannels.agentGetPlan, sessionId),
+  approvePlan: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentApprovePlan, sessionId),
+  rejectPlan: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentRejectPlan, sessionId),
+  regeneratePlan: (sessionId: string, extra?: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentRegeneratePlan, sessionId, extra),
   clearSession: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentClearSession, sessionId),
   getDiagnostics: (sessionId?: string | null): Promise<AgentDiagnostic[]> =>
@@ -134,6 +166,7 @@ const limbooApi = {
   app: appApi,
   events: eventsApi,
   workspace: workspaceApi,
+  session: sessionApi,
   agent: agentApi,
 };
 

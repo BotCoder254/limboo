@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -23,6 +23,8 @@ export const AGENT_LIMITS = {
   maxTurns: { min: 1, max: 100, default: 24 },
   /** Cap on a single prompt the renderer may submit. */
   promptMax: 100_000,
+  /** Cap on the plan markdown captured from ExitPlanMode (renderer-displayed). */
+  planMarkdownMax: 262_144,
 } as const;
 
 /** Bounds the main process clamps agent connection-monitoring settings against. */
@@ -60,6 +62,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     leftWidth: LAYOUT_LIMITS.left.default,
     rightWidth: LAYOUT_LIMITS.right.default,
     activeTab: 'files',
+    sessionsCollapsed: false,
   },
   behavior: {
     minimizeToTray: false,
@@ -83,6 +86,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
       sessionPersistence: true,
       connectivityNotifications: true,
     },
+    plan: {
+      defaultMode: 'plan',
+      streamIncrementally: true,
+      autoExpandTasks: true,
+      autoCollapseCompleted: false,
+      requireSecondaryConfirm: false,
+      defaultExportFormat: 'md',
+      showEstimates: true,
+      showReasoning: true,
+      highlightRisk: true,
+      archiveCompleted: false,
+    },
   },
 };
 
@@ -95,7 +110,20 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 3;
+export const WORKSPACE_SCHEMA_VERSION = 5;
+
+/** Input caps the main process enforces on renderer-supplied session values. */
+export const SESSION_LIMITS = {
+  titleMax: 200,
+  idMax: 128,
+} as const;
+
+/** Default values for a freshly created session. */
+export const SESSION_DEFAULTS = {
+  title: 'New session',
+  branch: 'main',
+  status: 'active',
+} as const;
 
 /** Input caps the main process enforces on renderer-supplied workspace values. */
 export const WORKSPACE_LIMITS = {

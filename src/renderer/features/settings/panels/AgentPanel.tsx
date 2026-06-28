@@ -27,6 +27,8 @@ export function AgentPanel() {
     key: K,
     value: (typeof agent.connection)[K],
   ) => void update({ agent: { connection: { [key]: value } } });
+  const setPlan = <K extends keyof typeof agent.plan>(key: K, value: (typeof agent.plan)[K]) =>
+    void update({ agent: { plan: { [key]: value } } });
 
   return (
     <div className="flex flex-col gap-5">
@@ -135,6 +137,72 @@ export function AgentPanel() {
             className="w-full accent-accent"
           />
         </StackedField>
+      </Section>
+
+      <Section
+        title="Plan Mode"
+        hint="The review-first workflow: the agent analyzes the repository read-only and proposes a plan you approve before any files change."
+      >
+        <Field
+          id="planDefaultMode"
+          label="Default composer mode"
+          hint="What new sessions start in. Plan-first (default) is safest — the agent proposes before it changes anything."
+        >
+          <SegmentedControl
+            value={agent.plan.defaultMode}
+            options={[
+              { value: 'plan', label: 'Plan' },
+              { value: 'implement', label: 'Implement' },
+            ]}
+            onChange={(value) => setPlan('defaultMode', value)}
+          />
+        </Field>
+        <Field
+          id="planRequireSecondaryConfirm"
+          label="Confirm before executing"
+          hint="Require a second click on Approve & Execute before implementation begins. Default off."
+        >
+          <Toggle
+            checked={agent.plan.requireSecondaryConfirm}
+            onChange={(v) => setPlan('requireSecondaryConfirm', v)}
+          />
+        </Field>
+        <Field
+          id="planShowReasoning"
+          label="Show plan reasoning"
+          hint="Render the full implementation-plan markdown in the Tasks panel. Default on."
+        >
+          <Toggle checked={agent.plan.showReasoning} onChange={(v) => setPlan('showReasoning', v)} />
+        </Field>
+        <Field
+          id="planShowEstimates"
+          label="Show plan metadata"
+          hint="Show the affected-files / task-count / risk row above the plan. Default on."
+        >
+          <Toggle checked={agent.plan.showEstimates} onChange={(v) => setPlan('showEstimates', v)} />
+        </Field>
+        <Field
+          id="planHighlightRisk"
+          label="Highlight risk"
+          hint="Color the risk estimate (low / medium / high). Default on."
+        >
+          <Toggle checked={agent.plan.highlightRisk} onChange={(v) => setPlan('highlightRisk', v)} />
+        </Field>
+        <Field
+          id="planExportFormat"
+          label="Plan export format"
+          hint="Format used by the plan Download action."
+        >
+          <SegmentedControl
+            value={agent.plan.defaultExportFormat}
+            options={[
+              { value: 'md', label: 'Markdown' },
+              { value: 'txt', label: 'Text' },
+              { value: 'pdf', label: 'PDF' },
+            ]}
+            onChange={(value) => setPlan('defaultExportFormat', value)}
+          />
+        </Field>
       </Section>
 
       <Section

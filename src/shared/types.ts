@@ -57,6 +57,8 @@ export interface AppSettings {
     rightWidth: number;
     /** Currently open drawer tab, or null when the drawer is collapsed. */
     activeTab: ActivityTab | null;
+    /** Whether the left sessions sidebar is collapsed to a thin rail. */
+    sessionsCollapsed: boolean;
   };
   behavior: {
     /** Keep running in the tray when the last window closes. */
@@ -112,6 +114,32 @@ export interface AppSettings {
       /** Desktop notifications for connectivity transitions (reconnect / rate-limit). */
       connectivityNotifications: boolean;
     };
+    /**
+     * Plan Mode preferences — the review-first workflow where the agent proposes
+     * a plan before touching the repository. None of these touch credentials.
+     */
+    plan: {
+      /** Composer default when a session has no remembered mode. */
+      defaultMode: AgentMode;
+      /** Stream the task checklist incrementally as the plan is built. */
+      streamIncrementally: boolean;
+      /** Auto-expand newly generated task rows in the panel. */
+      autoExpandTasks: boolean;
+      /** Collapse completed tasks automatically during implementation. */
+      autoCollapseCompleted: boolean;
+      /** Require a second confirmation click before execution begins. */
+      requireSecondaryConfirm: boolean;
+      /** Default format used by the plan Download action. */
+      defaultExportFormat: 'md' | 'txt' | 'pdf';
+      /** Show the plan metadata row (affected files, task count, risk). */
+      showEstimates: boolean;
+      /** Render architectural reasoning alongside tasks. */
+      showReasoning: boolean;
+      /** Highlight high-risk steps. */
+      highlightRisk: boolean;
+      /** Archive a plan once its implementation completes. */
+      archiveCompleted: boolean;
+    };
   };
 }
 
@@ -138,21 +166,49 @@ export interface AppInfo {
 export type SessionStatus = 'active' | 'idle' | 'done';
 
 /**
- * A development workspace. Phase 1 only tracks identity/metadata; later phases
- * attach repository, branch, agent, terminal, checkpoints, etc.
+ * Composer execution mode. `plan` runs the agent read-only to propose an
+ * implementation strategy for review; `implement` lets it modify the repository.
+ */
+export type AgentMode = 'plan' | 'implement';
+
+/**
+ * A development workspace — the primary unit of software engineering in Limboo.
+ * Owned by the main-process SessionManager and persisted to SQLite. Every
+ * session belongs to exactly one workspace (`workspaceId`) and bundles its
+ * conversation, activity, and metadata so work can be paused and resumed.
  */
 export interface Session {
   id: string;
+  /** The workspace that owns this session. */
+  workspaceId: string;
   title: string;
   branch: string;
   status: SessionStatus;
+  /** Epoch ms the session was created. */
+  createdAt: number;
   /** Epoch ms of last activity; the UI formats this relatively. */
   updatedAt: number;
   adds: number;
   dels: number;
   unread: number;
   pinned: boolean;
+  /** Archived sessions are hidden from the primary list but fully preserved. */
+  archived: boolean;
+  /** Epoch ms when soft-deleted (moved to trash), or null when live. */
+  deletedAt: number | null;
+  /** Last composer mode used for this session (drives the Plan/Implement switch). */
+  mode?: AgentMode;
 }
+
+/** Renderer-supplied patch for a session update (rename / pin / archive). */
+export interface SessionUpdate {
+  title?: string;
+  pinned?: boolean;
+  archived?: boolean;
+}
+
+/** Sort order for the sessions sidebar. */
+export type SessionSort = 'recent' | 'created' | 'title';
 
 export type FileChangeStatus = 'added' | 'modified' | 'deleted';
 
@@ -163,10 +219,15 @@ export interface FileChange {
   dels: number;
 }
 
+/** Execution state of a single plan task (mirrors TodoWrite's status). */
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
 export interface TaskItem {
   id: string;
   label: string;
   done: boolean;
+  /** Richer status from TodoWrite; `done` stays in sync for back-compat. */
+  status?: TaskStatus;
 }
 
 export interface ActivityItem {
@@ -510,6 +571,47 @@ export interface AgentActivityItem {
   at: number;
 }
 
+/**
+ * Lifecycle of a Plan Mode artifact:
+ * - `planning`  — the agent is doing read-only analysis, plan not ready yet.
+ * - `ready`     — plan captured, awaiting the user's explicit approval.
+ * - `implementing` — approved; the agent is executing the plan.
+ * - `completed` — the implementation run finished successfully.
+ * - `rejected`  — the user declined the plan.
+ */
+export type PlanStatus = 'planning' | 'ready' | 'implementing' | 'completed' | 'rejected';
+
+/** Best-effort planning metadata shown in the plan header. */
+export interface PlanMeta {
+  /** Number of files the plan expects to touch (derived from the run). */
+  affectedFiles?: number;
+  /** Number of checklist tasks. */
+  taskCount?: number;
+  /** Coarse risk estimate. */
+  risk?: 'low' | 'medium' | 'high';
+  /** Detected frameworks (from the workspace metadata). */
+  frameworks?: string[];
+}
+
+/**
+ * A Plan Mode artifact: the agent's proposed implementation strategy for a
+ * session. Persisted to SQLite so an unfinished plan survives an app restart.
+ */
+export interface SessionPlan {
+  sessionId: string;
+  status: PlanStatus;
+  /** Short human title for the plan (derived from the first heading / prompt). */
+  title: string;
+  /** The raw plan markdown the agent produced via ExitPlanMode. */
+  markdown: string;
+  meta: PlanMeta;
+  createdAt: number;
+  /** Epoch ms the user approved execution, if approved. */
+  approvedAt?: number;
+  /** Pinned plans are preserved even after a new plan begins. */
+  pinned?: boolean;
+}
+
 /** Everything the renderer needs to render a session when it (re)mounts. */
 export interface AgentSessionSnapshot {
   messages: ChatMessage[];
@@ -517,6 +619,8 @@ export interface AgentSessionSnapshot {
   changes: FileChange[];
   tasks: TaskItem[];
   toolCalls: AgentToolCall[];
+  /** The active Plan Mode artifact for this session, if any. */
+  plan?: SessionPlan | null;
 }
 
 /**
@@ -533,6 +637,7 @@ export type AgentEvent =
   | { kind: 'file-change'; sessionId: string; change: FileChange }
   | { kind: 'activity'; sessionId: string; item: AgentActivityItem }
   | { kind: 'tasks'; sessionId: string; tasks: TaskItem[] }
+  | { kind: 'plan'; sessionId: string; plan: SessionPlan }
   | { kind: 'result'; sessionId: string; ok: boolean; text: string }
   | { kind: 'error'; sessionId: string; message: string; outcome: RequestOutcome }
   | { kind: 'request-state'; sessionId: string; request: RequestState }
@@ -549,6 +654,7 @@ export type AgentEvent =
  */
 export type CommandId =
   | 'session.new'
+  | 'session.duplicate'
   | 'drawer.toggleFiles'
   | 'drawer.toggleChanges'
   | 'drawer.toggleTasks'
@@ -562,4 +668,7 @@ export type CommandId =
   | 'workspace.switch'
   | 'workspace.reindex'
   | 'agent.stop'
-  | 'agent.newSession';
+  | 'agent.newSession'
+  | 'agent.planMode'
+  | 'agent.implementMode'
+  | 'plan.approve';

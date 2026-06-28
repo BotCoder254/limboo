@@ -64,6 +64,27 @@ function migrate(database: Database.Database): void {
       value TEXT
     );
 
+    -- Persisted development sessions (Phase 3). Every session belongs to a
+    -- workspace; deleted_at is NULL for live sessions and set when moved to the
+    -- recoverable trash. The agent_* tables key off session_id for transcript.
+    CREATE TABLE IF NOT EXISTS sessions (
+      id           TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      title        TEXT NOT NULL,
+      branch       TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL,
+      pinned       INTEGER NOT NULL DEFAULT 0,
+      archived     INTEGER NOT NULL DEFAULT 0,
+      deleted_at   INTEGER,
+      adds         INTEGER NOT NULL DEFAULT 0,
+      dels         INTEGER NOT NULL DEFAULT 0,
+      unread       INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_workspace
+      ON sessions (workspace_id, pinned DESC, updated_at DESC);
+
     -- Agent conversation history, persisted per session so a reopened session
     -- restores its transcript. Append-only.
     CREATE TABLE IF NOT EXISTS agent_messages (
@@ -110,6 +131,21 @@ function migrate(database: Database.Database): void {
       ON agent_diagnostics (session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_agent_diagnostics_created
       ON agent_diagnostics (created_at);
+
+    -- Plan Mode artifacts — one proposed implementation strategy per session,
+    -- persisted so an unfinished/awaiting-approval plan survives an app restart.
+    -- meta is JSON-serialized PlanMeta; markdown is the raw plan from ExitPlanMode.
+    CREATE TABLE IF NOT EXISTS agent_plans (
+      session_id  TEXT PRIMARY KEY,
+      status      TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      markdown    TEXT NOT NULL,
+      meta        TEXT NOT NULL,
+      pinned      INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL,
+      approved_at INTEGER,
+      updated_at  INTEGER NOT NULL
+    );
   `);
 
   const current = database

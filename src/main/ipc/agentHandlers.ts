@@ -10,9 +10,11 @@ import { AGENT_LIMITS } from '@shared/constants';
 import type {
   AgentDiagnostic,
   AgentInstall,
+  AgentMode,
   AgentSessionSnapshot,
   AgentState,
   PermissionDecision,
+  SessionPlan,
 } from '@shared/types';
 import type { AgentManager } from '../managers/AgentManager';
 import { handle } from './registry';
@@ -32,6 +34,15 @@ function assertSessionId(value: unknown): string {
   return value;
 }
 
+/** Default to implement when unspecified; reject any value outside the union. */
+function assertMode(value: unknown): AgentMode {
+  if (value === undefined) return 'implement';
+  if (value !== 'plan' && value !== 'implement') {
+    throw new Error('Agent mode must be "plan" or "implement"');
+  }
+  return value;
+}
+
 export function registerAgentHandlers(agent: AgentManager): void {
   handle<[], AgentInstall>(IpcChannels.agentGetInstall, () => agent.getInstall());
 
@@ -41,16 +52,19 @@ export function registerAgentHandlers(agent: AgentManager): void {
     agent.getSnapshot(assertSessionId(sessionId)),
   );
 
-  handle<[string, string], void>(IpcChannels.agentSend, async (_event, sessionId, prompt) => {
-    const id = assertSessionId(sessionId);
-    if (typeof prompt !== 'string' || prompt.trim().length === 0) {
-      throw new Error('Prompt must be a non-empty string');
-    }
-    if (prompt.length > AGENT_LIMITS.promptMax) {
-      throw new Error('Prompt is too long');
-    }
-    await agent.send(id, prompt);
-  });
+  handle<[string, string, AgentMode?], void>(
+    IpcChannels.agentSend,
+    async (_event, sessionId, prompt, mode) => {
+      const id = assertSessionId(sessionId);
+      if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+        throw new Error('Prompt must be a non-empty string');
+      }
+      if (prompt.length > AGENT_LIMITS.promptMax) {
+        throw new Error('Prompt is too long');
+      }
+      await agent.send(id, prompt, assertMode(mode));
+    },
+  );
 
   handle<[string], void>(IpcChannels.agentStop, (_event, sessionId) => {
     agent.stop(assertSessionId(sessionId));
@@ -73,6 +87,34 @@ export function registerAgentHandlers(agent: AgentManager): void {
   });
 
   handle<[], AgentInstall>(IpcChannels.agentRetryAuth, () => agent.retryAuth());
+
+  /* ---- Plan Mode ---- */
+
+  handle<[string], SessionPlan | null>(IpcChannels.agentGetPlan, (_event, sessionId) =>
+    agent.getPlan(assertSessionId(sessionId)),
+  );
+
+  handle<[string], void>(IpcChannels.agentApprovePlan, async (_event, sessionId) => {
+    await agent.approvePlan(assertSessionId(sessionId));
+  });
+
+  handle<[string], void>(IpcChannels.agentRejectPlan, (_event, sessionId) => {
+    agent.rejectPlan(assertSessionId(sessionId));
+  });
+
+  handle<[string, string?], void>(
+    IpcChannels.agentRegeneratePlan,
+    async (_event, sessionId, extra) => {
+      const id = assertSessionId(sessionId);
+      if (extra !== undefined && typeof extra !== 'string') {
+        throw new Error('Regenerate instructions must be a string');
+      }
+      if (typeof extra === 'string' && extra.length > AGENT_LIMITS.promptMax) {
+        throw new Error('Regenerate instructions are too long');
+      }
+      await agent.regeneratePlan(id, extra);
+    },
+  );
 
   handle<[PermissionDecision], void>(IpcChannels.agentPermissionRespond, (_event, decision) => {
     if (!decision || typeof decision !== 'object') {

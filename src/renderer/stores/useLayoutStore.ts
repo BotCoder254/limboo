@@ -16,14 +16,23 @@ interface LayoutState {
   activeTab: ActivityTab | null;
   /** Remembers the last open tab so "toggle sidebar" can restore it. */
   lastTab: ActivityTab;
+  /** Whether the left sessions sidebar is collapsed to a thin rail. */
+  sessionsCollapsed: boolean;
 
-  seed: (layout: { leftWidth: number; rightWidth: number; activeTab: ActivityTab | null }) => void;
+  seed: (layout: {
+    leftWidth: number;
+    rightWidth: number;
+    activeTab: ActivityTab | null;
+    sessionsCollapsed?: boolean;
+  }) => void;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
   setActiveTab: (tab: ActivityTab | null) => void;
   toggleTab: (tab: ActivityTab) => void;
   /** Collapse the drawer if open, otherwise reopen the last-used tab. */
   toggleDrawer: () => void;
+  /** Collapse / expand the left sessions sidebar. */
+  setSessionsCollapsed: (collapsed: boolean) => void;
 }
 
 const persist = debounce((layout: Partial<LayoutState>) => {
@@ -32,6 +41,7 @@ const persist = debounce((layout: Partial<LayoutState>) => {
       leftWidth: layout.leftWidth,
       rightWidth: layout.rightWidth,
       activeTab: layout.activeTab,
+      sessionsCollapsed: layout.sessionsCollapsed,
     },
   });
 }, 300);
@@ -41,6 +51,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   rightWidth: LAYOUT_LIMITS.right.default,
   activeTab: 'files',
   lastTab: 'files',
+  sessionsCollapsed: false,
 
   seed: (layout) =>
     set({
@@ -48,6 +59,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       rightWidth: layout.rightWidth,
       activeTab: layout.activeTab,
       lastTab: layout.activeTab ?? 'files',
+      sessionsCollapsed: layout.sessionsCollapsed ?? false,
     }),
 
   setLeftWidth: (width) => {
@@ -76,6 +88,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   toggleDrawer: () => {
     const { activeTab, lastTab } = get();
     set(activeTab ? { activeTab: null } : { activeTab: lastTab, lastTab });
+    persist(get());
+  },
+
+  setSessionsCollapsed: (collapsed) => {
+    set({ sessionsCollapsed: collapsed });
     persist(get());
   },
 }));

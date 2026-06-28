@@ -9,7 +9,8 @@
  */
 import { useEffect } from 'react';
 import { CircleDot, Plus, Sparkles } from 'lucide-react';
-import { DiffStat, EmptyState } from '@/renderer/components/ui';
+import { DiffStat, EmptyState, Spinner } from '@/renderer/components/ui';
+import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Composer } from './Composer';
 import { ConversationView } from './ConversationView';
@@ -45,14 +46,7 @@ export function CenterWorkspace() {
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-base">
-      {session && (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4">
-          <CircleDot size={12} className="text-success" />
-          <span className="text-[13px] font-medium">{session.title}</span>
-          <span className="text-[11px] text-faint">{session.branch}</span>
-          <DiffStat adds={session.adds} dels={session.dels} className="ml-2" />
-        </div>
-      )}
+      {session && <SessionHeader sessionId={session.id} title={session.title} branch={session.branch} adds={session.adds} dels={session.dels} />}
 
       {/* The scroll region fills the column; the Composer floats over its bottom
           edge (no separator line, no full-width bar) with the conversation
@@ -101,5 +95,38 @@ export function CenterWorkspace() {
         </div>
       </div>
     </main>
+  );
+}
+
+/** Center header reflecting the active session; shows the running spinner while
+ *  this session's agent run is in flight (else a steady status dot). */
+function SessionHeader({
+  sessionId,
+  title,
+  branch,
+  adds,
+  dels,
+}: {
+  sessionId: string;
+  title: string;
+  branch: string;
+  adds: number;
+  dels: number;
+}) {
+  const running = useIsSessionRunning(sessionId);
+  const planStatus = useAgentStore((s) => s.bySession[sessionId]?.plan?.status);
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4">
+      {running ? <Spinner size={12} /> : <CircleDot size={12} className="text-success" />}
+      <span className="text-[13px] font-medium">{title}</span>
+      <span className="text-[11px] text-faint">{branch}</span>
+      <DiffStat adds={adds} dels={dels} className="ml-2" />
+      {running && <span className="text-[11px] text-accent">Working…</span>}
+      {!running && planStatus === 'ready' && (
+        <span className="rounded-full border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+          Plan ready
+        </span>
+      )}
+    </div>
   );
 }

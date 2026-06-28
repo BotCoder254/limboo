@@ -4,10 +4,12 @@
  * limits, expired auth, a pending tool approval, or a context-window warning.
  * Driven by the agent's lifecycle + last-request outcome, never by scraping logs.
  */
-import { AlertTriangle, KeyRound, Loader2, ShieldQuestion, TimerReset } from 'lucide-react';
+import { AlertTriangle, ClipboardCheck, KeyRound, Loader2, ShieldQuestion, TimerReset } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/renderer/lib/cn';
+import { runCommand } from '@/renderer/lib/commands';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
+import { useSessionStore } from '@/renderer/stores/useSessionStore';
 
 type Tone = 'warning' | 'danger' | 'accent';
 
@@ -35,6 +37,10 @@ export function ComposerBanner() {
   const outcome = useAgentStore((s) => s.request.outcome);
   const retryAuth = useAgentStore((s) => s.retryAuth);
   const clearRateLimit = useAgentStore((s) => s.clearRateLimit);
+  const sessionId = useSessionStore((s) => s.selectedId);
+  const planReady = useAgentStore(
+    (s) => (sessionId ? s.bySession[sessionId]?.plan?.status : undefined) === 'ready',
+  );
 
   let tone: Tone | null = null;
   let Icon: LucideIcon = AlertTriangle;
@@ -69,6 +75,12 @@ export function ComposerBanner() {
     Icon = Loader2;
     title = 'Reconnecting to Claude Code';
     body = 'A transient issue interrupted the run. Limboo is restoring the connection and will resume automatically.';
+  } else if (planReady) {
+    tone = 'accent';
+    Icon = ClipboardCheck;
+    title = 'Plan ready for your review';
+    body = 'Claude Code proposed an implementation plan. Review it in the Tasks panel, then approve to begin — nothing changes until you do.';
+    action = { label: 'Review plan', onClick: () => runCommand('drawer.toggleTasks') };
   } else if (outcome === 'context-overflow') {
     tone = 'warning';
     Icon = AlertTriangle;

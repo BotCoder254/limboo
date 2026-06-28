@@ -41,6 +41,17 @@ export const IpcChannels = {
   workspaceGetStats: 'workspace:getStats',
   workspaceRescan: 'workspace:rescan',
 
+  // Session system (Phase 3) — persisted, per-workspace development sessions.
+  sessionList: 'session:list',
+  sessionCreate: 'session:create',
+  sessionUpdate: 'session:update',
+  sessionDuplicate: 'session:duplicate',
+  sessionDelete: 'session:delete',
+  sessionRestore: 'session:restore',
+  sessionPurge: 'session:purge',
+  sessionSetActive: 'session:setActive',
+  sessionGetActive: 'session:getActive',
+
   // Coding agent (Claude Code orchestration).
   agentGetInstall: 'agent:getInstall',
   agentGetState: 'agent:getState',
@@ -52,6 +63,12 @@ export const IpcChannels = {
   agentGetDiagnostics: 'agent:getDiagnostics',
   agentClearRateLimit: 'agent:clearRateLimit',
   agentRetryAuth: 'agent:retryAuth',
+
+  // Plan Mode — review-first workflow over the coding agent.
+  agentGetPlan: 'agent:getPlan',
+  agentApprovePlan: 'agent:approvePlan',
+  agentRejectPlan: 'agent:rejectPlan',
+  agentRegeneratePlan: 'agent:regeneratePlan',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
@@ -69,6 +86,10 @@ export const IpcEvents = {
   workspaceChanged: 'workspace:changed',
   /** The set of registered workspaces changed (created / removed / updated). */
   workspacesUpdated: 'workspaces:updated',
+  /** The set of sessions changed (created / updated / deleted / restored). */
+  sessionsUpdated: 'sessions:updated',
+  /** The active session changed (switched, created, or deleted). */
+  sessionActiveChanged: 'session:active-changed',
   /** The agent runtime state changed (status / install / active session). */
   agentStateChanged: 'agent:state-changed',
   /** A structured agent event (message delta, tool call, file change, …). */

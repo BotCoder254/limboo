@@ -4,17 +4,20 @@
 import type { SettingsManager } from '../managers/SettingsManager';
 import type { NotificationManager } from '../managers/NotificationManager';
 import type { WorkspaceManager } from '../managers/WorkspaceManager';
+import type { SessionManager } from '../managers/SessionManager';
 import type { AgentManager } from '../managers/AgentManager';
 import { registerWindowHandlers } from './windowHandlers';
 import { registerSettingsHandlers } from './settingsHandlers';
 import { registerSystemHandlers } from './systemHandlers';
 import { registerWorkspaceHandlers } from './workspaceHandlers';
+import { registerSessionHandlers } from './sessionHandlers';
 import { registerAgentHandlers } from './agentHandlers';
 
 export interface IpcDeps {
   settings: SettingsManager;
   notifications: NotificationManager;
   workspace: WorkspaceManager;
+  session: SessionManager;
   agent: AgentManager;
 }
 
@@ -23,5 +26,6 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerSettingsHandlers(deps.settings);
   registerSystemHandlers(deps.notifications);
   registerWorkspaceHandlers(deps.workspace);
+  registerSessionHandlers(deps.session);
   registerAgentHandlers(deps.agent);
 }

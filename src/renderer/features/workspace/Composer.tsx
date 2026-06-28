@@ -13,12 +13,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { ArrowUp, CircleStop, Paperclip, Sparkles } from 'lucide-react';
+import type { AgentMode } from '@shared/types';
 import { cn } from '@/renderer/lib/cn';
 import { Spinner } from '@/renderer/components/ui';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
+import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { BUSY_LIFECYCLES, lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
 import { ComposerControls } from './ComposerControls';
+import { ComposerModeSwitch } from './ComposerModeSwitch';
 import { ComposerBanner } from './ComposerBanner';
 
 /** Max grow height before the editor scrolls internally (~40vh). */
@@ -39,6 +42,14 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   );
   const send = useAgentStore((s) => s.send);
   const stop = useAgentStore((s) => s.stop);
+  const defaultMode = useSettingsStore((s) => s.settings.agent.plan.defaultMode);
+
+  // Per-session composer mode, defaulting to the configured Plan-first default.
+  // Reset to the default whenever the active session changes.
+  const [mode, setMode] = useState<AgentMode>(defaultMode);
+  useEffect(() => {
+    setMode(defaultMode);
+  }, [sessionId, defaultMode]);
 
   const busy = activeSessionId === sessionId && BUSY_LIFECYCLES.has(lifecycle);
   const restricted = lifecycle === 'rate-limited' || lifecycle === 'auth-required';
@@ -60,7 +71,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   const submit = () => {
     const text = value.trim();
     if (!text || blocked || !sessionId) return;
-    void send(sessionId, text);
+    void send(sessionId, text, mode);
     setValue('');
     if (ref.current) {
       ref.current.style.height = 'auto';
@@ -99,7 +110,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                 autoGrow();
               }}
               onKeyDown={onKeyDown}
-              placeholder={composerPlaceholder(disabled, installed, restricted)}
+              placeholder={composerPlaceholder(disabled, installed, restricted, mode)}
               className="flex-1 resize-none bg-transparent py-1 text-[13px] leading-relaxed text-fg placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
               style={{ maxHeight: MAX_HEIGHT }}
             />
@@ -131,6 +142,8 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
           </div>
 
           <div className="flex items-center gap-2 border-t border-line/60 pt-1.5">
+            <ComposerModeSwitch mode={mode} onChange={setMode} disabled={disabled || !installed} />
+            <span className="h-3.5 w-px bg-line" />
             <ComposerControls disabled={disabled || !installed} />
             <span className="ml-auto flex items-center gap-2 text-[11px] text-faint">
               <StatusHint
@@ -149,10 +162,16 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   );
 }
 
-function composerPlaceholder(disabled: boolean, installed: boolean, restricted: boolean): string {
+function composerPlaceholder(
+  disabled: boolean,
+  installed: boolean,
+  restricted: boolean,
+  mode: AgentMode,
+): string {
   if (!installed) return 'Sign in to Claude Code to start…';
   if (restricted) return 'Drafting is fine — sending resumes shortly…';
   if (disabled) return 'Select or create a session to begin…';
+  if (mode === 'plan') return 'Describe what to build — Claude Code will plan it first (read-only)…';
   return 'Ask Claude Code to build something…';
 }
 

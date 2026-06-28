@@ -31,6 +31,7 @@ import type {
   AgentEvent,
   AgentInstall,
   AgentLifecycleStatus,
+  AgentMode,
   AgentSessionSnapshot,
   AgentState,
   AgentToolCall,
@@ -40,12 +41,17 @@ import type {
   FileChange,
   PermissionDecision,
   PermissionRequest,
+  PlanMeta,
+  PlanStatus,
   RateLimitInfo,
   RequestOutcome,
   RequestState,
+  SessionPlan,
   TaskItem,
+  TaskStatus,
   ToolRisk,
 } from '@shared/types';
+import { AGENT_LIMITS } from '@shared/constants';
 import { IpcEvents } from '@shared/ipc-channels';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
@@ -73,6 +79,11 @@ const READ_TOOLS = new Set([
 ]);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const COMMAND_TOOLS = new Set(['Bash', 'BashOutput', 'KillBash', 'KillShell']);
+
+/** The SDK tool the agent calls to present its plan and exit planning mode. */
+const EXIT_PLAN_TOOL = 'ExitPlanMode';
+/** The SDK tool the agent uses to maintain its implementation checklist. */
+const TODO_TOOL = 'TodoWrite';
 
 function classifyTool(name: string): ToolRisk {
   if (WRITE_TOOLS.has(name)) return 'write';
@@ -218,8 +229,12 @@ interface SessionRuntime {
 interface ActiveRun {
   abort: AbortController;
   query: { close?: () => void } | null;
+  /** Whether this run is a read-only plan run or a normal implement run. */
+  mode: AgentMode;
   /** Terminal SDK result for the active attempt (drives outcome classification). */
   result?: { ok: boolean; text: string };
+  /** Set true once an ExitPlanMode plan was captured (suppresses the failure throw). */
+  planCaptured?: boolean;
 }
 
 export class AgentManager {
@@ -351,6 +366,7 @@ export class AgentManager {
       changes: rt ? [...rt.changes.values()] : [],
       tasks: rt ? rt.tasks : [],
       toolCalls: rt ? rt.toolCalls : [],
+      plan: this.loadPlan(sessionId),
     };
   }
 
@@ -449,6 +465,7 @@ export class AgentManager {
     db.prepare('DELETE FROM agent_activity WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_session_meta WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_diagnostics WHERE session_id = ?').run(sessionId);
+    db.prepare('DELETE FROM agent_plans WHERE session_id = ?').run(sessionId);
   }
 
   /** Abort every active run + stop all supervision timers. Called on quit. */
@@ -464,7 +481,7 @@ export class AgentManager {
    * with transparent recovery on transient failures. A failed *request* never
    * marks the whole agent dead — only a genuinely degraded *capability* does.
    */
-  async send(sessionId: string, prompt: string): Promise<void> {
+  async send(sessionId: string, prompt: string, mode: AgentMode = 'implement'): Promise<void> {
     if (this.runs.has(sessionId)) {
       throw new Error('The agent is already working on this session.');
     }
@@ -494,9 +511,15 @@ export class AgentManager {
     this.pushEvent({ kind: 'message-done', sessionId, message: userMsg });
     this.pushActivity(sessionId, 'prompt', 'You', prompt.slice(0, 120), 'info');
 
+    // Plan run: open a fresh planning artifact so the panel switches into its
+    // "analyzing repository" state immediately while the agent reads.
+    if (mode === 'plan') {
+      this.beginPlan(sessionId, prompt);
+    }
+
     const cfg = this.settings.getAll().agent.connection;
     const abort = new AbortController();
-    this.runs.set(sessionId, { abort, query: null });
+    this.runs.set(sessionId, { abort, query: null, mode });
     this.clearIdleTimer();
     this.setRequest({
       sessionId,
@@ -507,12 +530,23 @@ export class AgentManager {
       detail: undefined,
     });
     this.setLifecycle('busy', { activeSessionId: sessionId, error: undefined });
-    this.diag('request', 'info', 'Prompt submitted', prompt.slice(0, 160), sessionId);
+    this.diag('request', 'info', `Prompt submitted (${mode})`, prompt.slice(0, 160), sessionId);
 
     try {
-      await this.runWithRecovery(sessionId, prompt, abort, cfg);
+      await this.runWithRecovery(sessionId, prompt, abort, cfg, mode);
     } finally {
+      const captured = this.runs.get(sessionId)?.planCaptured;
       this.runs.delete(sessionId);
+      // A plan run that ended without presenting a plan (error/cancel) must not
+      // leave the panel stuck "analyzing" — settle it back to a rejected state.
+      if (mode === 'plan' && !captured) {
+        const plan = this.loadPlan(sessionId);
+        if (plan && plan.status === 'planning') {
+          const settled: SessionPlan = { ...plan, status: 'rejected' };
+          this.savePlan(settled);
+          this.pushEvent({ kind: 'plan', sessionId, plan: settled });
+        }
+      }
       if (!this.isCapabilityDegraded()) this.setLifecycle('ready', { activeSessionId: null });
       this.armIdleTimer(cfg);
     }
@@ -524,15 +558,24 @@ export class AgentManager {
     prompt: string,
     abort: AbortController,
     cfg: ReturnType<SettingsManager['getAll']>['agent']['connection'],
+    mode: AgentMode,
   ): Promise<void> {
     let attempt = 0;
     for (;;) {
       try {
-        await this.runOnce(sessionId, prompt, abort);
+        await this.runOnce(sessionId, prompt, abort, mode);
         if (abort.signal.aborted) {
           // The user stopped mid-stream; stop() already recorded 'cancelled'.
           return;
         }
+        // A captured plan ends the read-only run cleanly — it is not a failure.
+        if (this.runs.get(sessionId)?.planCaptured) {
+          this.completeRequest(sessionId, 'success');
+          this.markHeartbeatOk();
+          return;
+        }
+        // A successful implement run that fulfilled a plan marks it completed.
+        if (mode === 'implement') this.markPlanCompletedIfImplementing(sessionId);
         this.completeRequest(sessionId, 'success');
         this.markHeartbeatOk();
         if (this.state.lifecycle === 'reconnecting') {
@@ -600,7 +643,12 @@ export class AgentManager {
   }
 
   /** A single SDK run attempt. Streams events; re-throws on any failure. */
-  private async runOnce(sessionId: string, prompt: string, abort: AbortController): Promise<void> {
+  private async runOnce(
+    sessionId: string,
+    prompt: string,
+    abort: AbortController,
+    mode: AgentMode,
+  ): Promise<void> {
     const ws = this.workspace.getActive();
     if (!ws) throw new Error('Open a workspace before talking to the agent.');
     const cwd = ws.path;
@@ -636,7 +684,7 @@ export class AgentManager {
 
     try {
       const { query } = await loadSdk();
-      const options = this.buildOptions(sessionId, cwd, abort, agent);
+      const options = this.buildOptions(sessionId, cwd, abort, agent, mode);
       this.diag('lifecycle', 'debug', 'Handshake — query opened', undefined, sessionId);
       const q = query({ prompt, options }) as unknown as AsyncIterable<SDKMessage> & {
         close?: () => void;
@@ -653,6 +701,10 @@ export class AgentManager {
     } finally {
       finishStreaming();
     }
+
+    // A captured plan halts the read-only run via an ExitPlanMode interrupt;
+    // that is the intended terminal state, not an error to classify/retry.
+    if (this.runs.get(sessionId)?.planCaptured) return;
 
     // A non-success terminal result is surfaced as a throw so the recovery loop
     // can classify it (rate-limit / auth / context / transient / hard failure).
@@ -765,6 +817,14 @@ export class AgentManager {
     name: string,
     input: Record<string, unknown>,
   ): void {
+    // TodoWrite drives the live task checklist rather than an inline chip.
+    if (name === TODO_TOOL) {
+      this.onTodoWrite(sessionId, input);
+      return;
+    }
+    // ExitPlanMode is captured by canUseTool; don't render it as a tool chip.
+    if (name === EXIT_PLAN_TOOL) return;
+
     const risk = classifyTool(name);
     const call: AgentToolCall = {
       id,
@@ -803,6 +863,178 @@ export class AgentManager {
     this.pushEvent({ kind: 'tool-end', sessionId, callId: toolUseId, status });
   }
 
+  /** Map a TodoWrite call into the live task checklist + broadcast it. */
+  private onTodoWrite(sessionId: string, input: Record<string, unknown>): void {
+    const todos = Array.isArray(input.todos) ? (input.todos as Array<Record<string, unknown>>) : [];
+    const tasks: TaskItem[] = todos.map((t, i) => {
+      const status = normalizeTaskStatus(t.status);
+      const label = String(t.content ?? t.activeForm ?? `Task ${i + 1}`).slice(0, 300);
+      return { id: `${sessionId}_todo_${i}`, label, status, done: status === 'completed' };
+    });
+    const rt = this.runtime(sessionId);
+    rt.tasks = tasks;
+    this.pushEvent({ kind: 'tasks', sessionId, tasks });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Plan Mode                                                        */
+  /* ---------------------------------------------------------------- */
+
+  /** Public accessor (IPC): the current plan artifact for a session, if any. */
+  getPlan(sessionId: string): SessionPlan | null {
+    return this.loadPlan(sessionId);
+  }
+
+  /** Open a fresh planning artifact when a plan run starts. */
+  private beginPlan(sessionId: string, prompt: string): void {
+    const plan: SessionPlan = {
+      sessionId,
+      status: 'planning',
+      title: deriveTitle('', prompt),
+      markdown: '',
+      meta: { frameworks: this.workspace.getActive()?.metadata.frameworks?.slice(0, 6) },
+      createdAt: Date.now(),
+    };
+    this.savePlan(plan);
+    this.pushEvent({ kind: 'plan', sessionId, plan });
+    this.pushActivity(sessionId, 'status', 'Planning started', 'Analyzing the repository (read-only)', 'info');
+    this.diag('request', 'info', 'Plan run started', undefined, sessionId);
+  }
+
+  /** Capture the plan the agent presented through ExitPlanMode, awaiting approval. */
+  private capturePlan(sessionId: string, rawMarkdown: string): void {
+    const markdown = rawMarkdown.slice(0, AGENT_LIMITS.planMarkdownMax);
+    const existing = this.loadPlan(sessionId);
+    const rt = this.runtimes.get(sessionId);
+    const taskCount = rt?.tasks.length || undefined;
+    const plan: SessionPlan = {
+      sessionId,
+      status: 'ready',
+      title: deriveTitle(markdown, existing?.title),
+      markdown,
+      meta: {
+        taskCount,
+        affectedFiles: countAffectedFiles(markdown),
+        risk: estimateRisk(taskCount),
+        frameworks: existing?.meta.frameworks,
+      },
+      createdAt: existing?.createdAt ?? Date.now(),
+      pinned: existing?.pinned,
+    };
+    this.savePlan(plan);
+    this.pushEvent({ kind: 'plan', sessionId, plan });
+    this.pushActivity(sessionId, 'status', 'Plan ready for review', undefined, 'info');
+    this.diag('request', 'info', 'Plan captured — awaiting approval', undefined, sessionId);
+  }
+
+  /**
+   * Approve a ready plan and begin implementation. Records the approval, unlocks
+   * writes (implement mode), and resumes the same SDK session so the agent keeps
+   * the plan in context. The only transition that lets the agent touch the repo.
+   */
+  async approvePlan(sessionId: string): Promise<void> {
+    const plan = this.loadPlan(sessionId);
+    if (!plan || plan.status !== 'ready') {
+      throw new Error('There is no plan ready to approve for this session.');
+    }
+    const approved: SessionPlan = { ...plan, status: 'implementing', approvedAt: Date.now() };
+    this.savePlan(approved);
+    this.pushEvent({ kind: 'plan', sessionId, plan: approved });
+    this.pushActivity(sessionId, 'status', 'Plan approved — implementing', undefined, 'success');
+    this.diag('request', 'info', 'Plan approved', undefined, sessionId);
+
+    await this.send(
+      sessionId,
+      'The plan is approved. Implement it now, working through the steps in order and tracking your progress with the TodoWrite tool. Ask for approval before any change you are unsure about.',
+      'implement',
+    );
+  }
+
+  /** Reject a ready plan; the session returns to an idle, no-plan state. */
+  rejectPlan(sessionId: string): void {
+    const plan = this.loadPlan(sessionId);
+    if (!plan) return;
+    const rejected: SessionPlan = { ...plan, status: 'rejected' };
+    this.savePlan(rejected);
+    this.pushEvent({ kind: 'plan', sessionId, plan: rejected });
+    this.pushActivity(sessionId, 'status', 'Plan rejected', undefined, 'warning');
+    this.diag('request', 'info', 'Plan rejected', undefined, sessionId);
+  }
+
+  /** Discard the current plan and run a fresh planning pass (optionally guided). */
+  async regeneratePlan(sessionId: string, extra?: string): Promise<void> {
+    const plan = this.loadPlan(sessionId);
+    const base = plan?.title ? `Reconsider the plan for: ${plan.title}.` : 'Produce a new implementation plan.';
+    const prompt = extra && extra.trim().length > 0 ? `${base}\n\n${extra.trim()}` : base;
+    await this.send(sessionId, prompt, 'plan');
+  }
+
+  /** When a plan was being implemented and the run succeeds, mark it completed. */
+  private markPlanCompletedIfImplementing(sessionId: string): void {
+    const plan = this.loadPlan(sessionId);
+    if (!plan || plan.status !== 'implementing') return;
+    const completed: SessionPlan = { ...plan, status: 'completed' };
+    this.savePlan(completed);
+    this.pushEvent({ kind: 'plan', sessionId, plan: completed });
+    this.diag('request', 'info', 'Plan implementation completed', undefined, sessionId);
+  }
+
+  private savePlan(plan: SessionPlan): void {
+    getDb()
+      .prepare(
+        `INSERT OR REPLACE INTO agent_plans
+           (session_id, status, title, markdown, meta, pinned, created_at, approved_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        plan.sessionId,
+        plan.status,
+        plan.title,
+        plan.markdown,
+        JSON.stringify(plan.meta ?? {}),
+        plan.pinned ? 1 : 0,
+        plan.createdAt,
+        plan.approvedAt ?? null,
+        Date.now(),
+      );
+  }
+
+  private loadPlan(sessionId: string): SessionPlan | null {
+    const row = getDb()
+      .prepare(
+        'SELECT session_id, status, title, markdown, meta, pinned, created_at, approved_at FROM agent_plans WHERE session_id = ?',
+      )
+      .get(sessionId) as
+      | {
+          session_id: string;
+          status: string;
+          title: string;
+          markdown: string;
+          meta: string;
+          pinned: number;
+          created_at: number;
+          approved_at: number | null;
+        }
+      | undefined;
+    if (!row) return null;
+    let meta: PlanMeta = {};
+    try {
+      meta = JSON.parse(row.meta) as PlanMeta;
+    } catch {
+      /* keep empty meta on a corrupt row */
+    }
+    return {
+      sessionId: row.session_id,
+      status: row.status as PlanStatus,
+      title: row.title,
+      markdown: row.markdown,
+      meta,
+      pinned: row.pinned === 1,
+      createdAt: row.created_at,
+      approvedAt: row.approved_at ?? undefined,
+    };
+  }
+
   /* ---------------------------------------------------------------- */
   /* Permission bridge                                                */
   /* ---------------------------------------------------------------- */
@@ -812,12 +1044,16 @@ export class AgentManager {
     cwd: string,
     abort: AbortController,
     agent: ReturnType<SettingsManager['getAll']>['agent'],
+    mode: AgentMode,
   ): Options {
     const options: Options = {
       cwd,
       model: agent.model,
-      permissionMode: 'default',
-      canUseTool: this.makeCanUseTool(sessionId, cwd),
+      // Plan mode keeps the SDK read-only and lets the agent present a plan via
+      // the ExitPlanMode tool; our canUseTool captures it. Implement mode runs
+      // normally with the per-tool approval bridge.
+      permissionMode: mode === 'plan' ? 'plan' : 'default',
+      canUseTool: this.makeCanUseTool(sessionId, cwd, mode),
       maxTurns: agent.maxTurns,
       includePartialMessages: true,
       abortController: abort,
@@ -841,13 +1077,31 @@ export class AgentManager {
     return row?.sdk_session_id || undefined;
   }
 
-  private makeCanUseTool(sessionId: string, cwd: string) {
+  private makeCanUseTool(sessionId: string, cwd: string, mode: AgentMode) {
     return async (
       toolName: string,
       input: Record<string, unknown>,
       { signal }: { signal: AbortSignal },
     ): Promise<PermissionResult> => {
+      // ExitPlanMode: the agent is presenting its plan. Capture it for review and
+      // interrupt the run — nothing is executed until the user approves.
+      if (toolName === EXIT_PLAN_TOOL) {
+        const markdown = typeof input.plan === 'string' ? input.plan : '';
+        this.capturePlan(sessionId, markdown);
+        const run = this.runs.get(sessionId);
+        if (run) run.planCaptured = true;
+        return { behavior: 'deny', message: 'Plan captured for your review.', interrupt: true };
+      }
+
       const risk = classifyTool(toolName);
+
+      // Read-only contract (defense in depth): while a plan run is underway the
+      // SDK already blocks writes, but we also refuse any write/command here so a
+      // misbehaving tool can never touch the repo before approval.
+      if (mode === 'plan' && risk !== 'read') {
+        this.pushActivity(sessionId, 'permission', `Blocked ${toolName} during planning`, undefined, 'warning');
+        return { behavior: 'deny', message: 'Planning is read-only — approve the plan to make changes.' };
+      }
 
       // Path guard: confine every filesystem tool to the workspace root.
       const target = filePathOf(input);
@@ -1227,6 +1481,42 @@ function mapThinking(thinking: 'off' | 'on' | 'adaptive'): Options['thinking'] {
   if (thinking === 'off') return { type: 'disabled' };
   if (thinking === 'on') return { type: 'enabled', budgetTokens: 10_000 };
   return { type: 'adaptive' };
+}
+
+/** Coerce a TodoWrite status string into our TaskStatus union. */
+function normalizeTaskStatus(value: unknown): TaskStatus {
+  if (value === 'completed' || value === 'in_progress') return value;
+  return 'pending';
+}
+
+/**
+ * Pick a short plan title: the first markdown heading, else the first non-empty
+ * line, else a prior title / prompt, else a sensible default.
+ */
+function deriveTitle(markdown: string, fallback?: string): string {
+  const lines = markdown.split('\n').map((l) => l.trim());
+  const heading = lines.find((l) => /^#{1,3}\s+/.test(l));
+  if (heading) return truncate(heading.replace(/^#{1,3}\s+/, ''), 80);
+  const firstLine = lines.find((l) => l.length > 0);
+  if (firstLine) return truncate(firstLine.replace(/^[-*]\s+/, ''), 80);
+  if (fallback && fallback.trim().length > 0) return truncate(fallback.trim(), 80);
+  return 'Implementation plan';
+}
+
+/** Best-effort count of distinct file-ish paths referenced in a plan. */
+function countAffectedFiles(markdown: string): number | undefined {
+  const matches = markdown.match(/[\w./-]+\.[a-zA-Z]{1,5}\b/g);
+  if (!matches) return undefined;
+  const files = new Set(matches.filter((m) => m.includes('/') || m.includes('.')));
+  return files.size > 0 ? files.size : undefined;
+}
+
+/** Coarse risk estimate from the number of checklist tasks. */
+function estimateRisk(taskCount?: number): PlanMeta['risk'] {
+  if (!taskCount) return undefined;
+  if (taskCount <= 3) return 'low';
+  if (taskCount <= 8) return 'medium';
+  return 'high';
 }
 
 /** True when `target` resolves to a path inside `root` (symlink-aware). */
