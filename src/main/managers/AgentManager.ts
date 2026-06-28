@@ -822,8 +822,17 @@ export class AgentManager {
       this.onTodoWrite(sessionId, input);
       return;
     }
-    // ExitPlanMode is captured by canUseTool; don't render it as a tool chip.
-    if (name === EXIT_PLAN_TOOL) return;
+    // ExitPlanMode presents the plan. It is normally captured in canUseTool; do
+    // it here too as a fallback (in case the SDK doesn't route it through the
+    // permission callback) and never render it as a tool chip.
+    if (name === EXIT_PLAN_TOOL) {
+      const run = this.runs.get(sessionId);
+      if (!run?.planCaptured) {
+        this.capturePlan(sessionId, typeof input.plan === 'string' ? input.plan : '');
+        if (run) run.planCaptured = true;
+      }
+      return;
+    }
 
     const risk = classifyTool(name);
     const call: AgentToolCall = {
@@ -1078,6 +1087,7 @@ export class AgentManager {
   }
 
   private makeCanUseTool(sessionId: string, cwd: string, mode: AgentMode) {
+    const planRun = mode === 'plan';
     return async (
       toolName: string,
       input: Record<string, unknown>,
@@ -1086,10 +1096,11 @@ export class AgentManager {
       // ExitPlanMode: the agent is presenting its plan. Capture it for review and
       // interrupt the run — nothing is executed until the user approves.
       if (toolName === EXIT_PLAN_TOOL) {
-        const markdown = typeof input.plan === 'string' ? input.plan : '';
-        this.capturePlan(sessionId, markdown);
         const run = this.runs.get(sessionId);
-        if (run) run.planCaptured = true;
+        if (!run?.planCaptured) {
+          this.capturePlan(sessionId, typeof input.plan === 'string' ? input.plan : '');
+          if (run) run.planCaptured = true;
+        }
         return { behavior: 'deny', message: 'Plan captured for your review.', interrupt: true };
       }
 
@@ -1098,7 +1109,7 @@ export class AgentManager {
       // Read-only contract (defense in depth): while a plan run is underway the
       // SDK already blocks writes, but we also refuse any write/command here so a
       // misbehaving tool can never touch the repo before approval.
-      if (mode === 'plan' && risk !== 'read') {
+      if (planRun && risk !== 'read') {
         this.pushActivity(sessionId, 'permission', `Blocked ${toolName} during planning`, undefined, 'warning');
         return { behavior: 'deny', message: 'Planning is read-only — approve the plan to make changes.' };
       }
