@@ -19,6 +19,7 @@ import { TrayManager } from './managers/TrayManager';
 import { WorkspaceManager } from './managers/WorkspaceManager';
 import { SessionManager } from './managers/SessionManager';
 import { AgentManager } from './managers/AgentManager';
+import { FileSystemManager } from './managers/FileSystemManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -62,6 +63,7 @@ function bootstrap(): void {
   let workspace: WorkspaceManager;
   let sessions: SessionManager;
   let agent: AgentManager;
+  let fileSystem: FileSystemManager;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
   const tray = new TrayManager();
@@ -83,11 +85,17 @@ function bootstrap(): void {
     workspace = new WorkspaceManager();
     sessions = new SessionManager();
     agent = new AgentManager(workspace, settings, notifications);
+    fileSystem = new FileSystemManager(workspace);
 
     hardenSession();
-    registerAllIpc({ settings, notifications, workspace, session: sessions, agent });
+    registerAllIpc({ settings, notifications, workspace, session: sessions, agent, fs: fileSystem });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();
+
+    // File System Layer: watch + index the active workspace, and follow every
+    // subsequent active-workspace change (open / switch / clear).
+    workspace.onActiveChanged((ws) => fileSystem.setActiveWorkspace(ws));
+    fileSystem.setActiveWorkspace(workspace.getActive());
 
     appMenu.install();
     const win = createMainWindow(windowState);
@@ -112,6 +120,7 @@ function bootstrap(): void {
 
   app.on('before-quit', () => {
     agent?.cleanup();
+    void fileSystem?.dispose();
     tray.destroy();
     closeDb();
   });

@@ -12,23 +12,26 @@ import { useUIStore } from '@/renderer/stores/useUIStore';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
+import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 
 /** Set the composer's default execution mode (Plan-first vs direct Implement). */
 function setDefaultMode(defaultMode: AgentMode): void {
   void useSettingsStore.getState().update({ agent: { plan: { defaultMode } } });
 }
 
-/** Reindex the active workspace, surfacing the outcome as a toast. */
+/**
+ * Reindex the active workspace's file tree through the File System Layer. Live
+ * progress streams into the Files drawer header; this only kicks it off and
+ * surfaces a failure as a toast (success is self-evident from the populated tree).
+ */
 async function reindexActiveWorkspace(): Promise<void> {
-  const store = useWorkspaceStore.getState();
-  const id = store.activeId;
+  const id = useWorkspaceStore.getState().activeId;
   if (!id) {
     useUIStore.getState().addToast({ title: 'No active workspace to reindex', tone: 'warning' });
     return;
   }
   try {
-    await store.rescan(id);
-    useUIStore.getState().addToast({ title: 'Workspace reindexed', tone: 'success' });
+    await useFileSystemStore.getState().reindex(id);
   } catch (err) {
     useUIStore.getState().addToast({
       title: 'Reindex failed',

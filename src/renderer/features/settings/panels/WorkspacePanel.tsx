@@ -8,7 +8,9 @@ import { useState } from 'react';
 import { FolderGit2, RefreshCw } from 'lucide-react';
 import type { Workspace } from '@shared/types';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
+import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
+import { CircularProgress } from '@/renderer/components/ui';
 import { Section, Field, StackedField, Toggle, TextInput } from '../controls';
 
 export function WorkspacePanel() {
@@ -35,9 +37,12 @@ export function WorkspacePanel() {
 function WorkspaceConfig({ workspace }: { workspace: Workspace }) {
   const updateConfig = useWorkspaceStore((s) => s.updateConfig);
   const rescan = useWorkspaceStore((s) => s.rescan);
+  const reindex = useFileSystemStore((s) => s.reindex);
+  const progress = useFileSystemStore((s) => s.progressByWs[workspace.id]);
   const addToast = useUIStore((s) => s.addToast);
   const [ignoredDraft, setIgnoredDraft] = useState(workspace.config.ignoredDirs.join('\n'));
   const [rescanning, setRescanning] = useState(false);
+  const indexing = !!progress && progress.phase !== 'done';
 
   const commitIgnored = () => {
     const ignoredDirs = Array.from(
@@ -60,7 +65,9 @@ function WorkspaceConfig({ workspace }: { workspace: Workspace }) {
   const runRescan = async () => {
     setRescanning(true);
     try {
-      await rescan(workspace.id);
+      // Refresh detected metadata AND rebuild the file index (progress streams
+      // into the ring below and the Files drawer header).
+      await Promise.all([rescan(workspace.id), reindex(workspace.id)]);
       addToast({ title: `Rescanned ${workspace.name}`, tone: 'info' });
     } catch (err) {
       addToast({
@@ -117,18 +124,21 @@ function WorkspaceConfig({ workspace }: { workspace: Workspace }) {
 
       <Field
         id="rescan"
-        label="Refresh detected metadata"
-        hint="Re-detect languages, frameworks, and the git branch."
+        label="Refresh & reindex"
+        hint="Re-detect languages, frameworks, and the git branch, and rebuild the file index."
       >
-        <button
-          type="button"
-          disabled={rescanning}
-          onClick={() => void runRescan()}
-          className="flex items-center gap-1.5 rounded-md border border-line bg-surface-2 px-2.5 py-1 text-[12px] text-fg transition-colors hover:border-line-strong disabled:opacity-60"
-        >
-          <RefreshCw size={13} className={rescanning ? 'animate-spin' : undefined} />
-          {rescanning ? 'Rescanning…' : 'Rescan'}
-        </button>
+        <div className="flex items-center gap-2">
+          {indexing && <CircularProgress value={progress?.percent ?? 0} size={28} showLabel />}
+          <button
+            type="button"
+            disabled={rescanning || indexing}
+            onClick={() => void runRescan()}
+            className="flex items-center gap-1.5 rounded-md border border-line bg-surface-2 px-2.5 py-1 text-[12px] text-fg transition-colors hover:border-line-strong disabled:opacity-60"
+          >
+            <RefreshCw size={13} className={rescanning || indexing ? 'animate-spin' : undefined} />
+            {rescanning || indexing ? 'Rescanning…' : 'Rescan'}
+          </button>
+        </div>
       </Field>
     </Section>
   );

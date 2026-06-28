@@ -2,8 +2,18 @@
  * The collapsible right drawer. Renders the panel for the currently-open tab
  * (driven by the layout store). When no tab is active the drawer is not
  * rendered at all (the AppShell collapses it), so this component assumes a tab.
+ *
+ * The Files tab adds a header action group on the right: a reindex button and a
+ * circular progress ring that fills while the File System Layer rebuilds the
+ * workspace's directory tree.
  */
+import { RefreshCw } from 'lucide-react';
 import type { ActivityTab } from '@shared/types';
+import { CircularProgress, IconButton } from '@/renderer/components/ui';
+import { cn } from '@/renderer/lib/cn';
+import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
+import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
+import { runCommand } from '@/renderer/lib/commands';
 import { ACTIVITY_TABS } from './tabs';
 import { ActivityFeedPanel, ChangesPanel, FilesPanel, TasksPanel } from './panels';
 import { AgentConsolePanel } from './AgentConsolePanel';
@@ -16,6 +26,7 @@ export function ActivityDrawer({ tab }: { tab: ActivityTab }) {
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-3 text-[11px] font-semibold uppercase tracking-wider text-fg">
         <meta.icon size={13} className="text-muted" />
         <span>{meta.label}</span>
+        {tab === 'files' && <FilesHeaderActions />}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {tab === 'files' && <FilesPanel />}
@@ -25,5 +36,27 @@ export function ActivityDrawer({ tab }: { tab: ActivityTab }) {
         {tab === 'console' && <AgentConsolePanel />}
       </div>
     </section>
+  );
+}
+
+/** Reindex button + live circular progress, shown to the right of the Files title. */
+function FilesHeaderActions() {
+  const activeId = useWorkspaceStore((s) => s.activeId);
+  const progress = useFileSystemStore((s) => (activeId ? s.progressByWs[activeId] : undefined));
+  const indexing = !!progress && progress.phase !== 'done';
+
+  return (
+    <div className="ml-auto flex items-center gap-1.5">
+      {indexing && <CircularProgress value={progress?.percent ?? 0} size={14} />}
+      <IconButton
+        label={indexing ? 'Reindexing…' : 'Reindex workspace'}
+        size="sm"
+        disabled={!activeId || indexing}
+        onClick={() => runCommand('workspace.reindex')}
+        className="disabled:pointer-events-none disabled:opacity-50"
+      >
+        <RefreshCw size={13} className={cn(indexing && 'animate-spin')} />
+      </IconButton>
+    </div>
   );
 }

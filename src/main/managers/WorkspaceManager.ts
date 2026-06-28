@@ -54,8 +54,31 @@ export class WorkspaceValidationError extends Error {
 }
 
 export class WorkspaceManager {
+  /** In-process listeners notified when the *active* workspace changes. */
+  private readonly activeListeners = new Set<(ws: Workspace | null) => void>();
+
   private get db(): Database.Database {
     return getDb();
+  }
+
+  /**
+   * Subscribe to active-workspace changes inside the main process (e.g. the File
+   * System Layer starts watching/indexing the new root). Returns an unsubscribe.
+   */
+  onActiveChanged(cb: (ws: Workspace | null) => void): () => void {
+    this.activeListeners.add(cb);
+    return () => this.activeListeners.delete(cb);
+  }
+
+  private emitActiveChanged(): void {
+    const active = this.getActive();
+    for (const cb of this.activeListeners) {
+      try {
+        cb(active);
+      } catch {
+        /* a listener fault must never break workspace state */
+      }
+    }
   }
 
   /* -------------------------------------------------------------- reads */
@@ -80,6 +103,11 @@ export class WorkspaceManager {
     const ws = this.byId(id);
     if (!ws) return null;
     return computeStats(ws.path, ws.config);
+  }
+
+  /** Public lookup by id (null when unknown). Used by the File System Layer. */
+  getById(id: string): Workspace | null {
+    return this.byId(id);
   }
 
   /* ------------------------------------------------------------- writes */
@@ -275,11 +303,13 @@ export class WorkspaceManager {
       .prepare('INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(ACTIVE_KEY, id);
     this.broadcast();
+    this.emitActiveChanged();
   }
 
   private clearActive(): void {
     this.db.prepare('DELETE FROM app_state WHERE key = ?').run(ACTIVE_KEY);
     this.broadcast();
+    this.emitActiveChanged();
   }
 
   private broadcast(): void {

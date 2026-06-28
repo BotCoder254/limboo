@@ -356,6 +356,86 @@ export interface WorkspaceValidationResult {
 }
 
 /* ------------------------------------------------------------------ */
+/* File System Layer (Phase 4 — read + watch + index foundation)       */
+/* ------------------------------------------------------------------ */
+
+/** Whether a tree node is a file or a directory. */
+export type FileNodeType = 'file' | 'dir';
+
+/**
+ * One node in the synchronized directory tree maintained by the File System
+ * Layer. Paths are workspace-relative (POSIX `/` separators) so the renderer can
+ * key/render them consistently across platforms. The root node uses `path: ''`.
+ */
+export interface FileNode {
+  /** Workspace-relative path (POSIX separators). Empty string for the root. */
+  path: string;
+  /** Base name of the entry. */
+  name: string;
+  type: FileNodeType;
+  /** File size in bytes (files only; omitted for dirs). */
+  size?: number;
+  /** True when the entry is a symlink (never followed — see security notes). */
+  isSymlink?: boolean;
+  /** True when the walk hit the entry cap and stopped descending here. */
+  truncated?: boolean;
+  /** Child nodes (dirs only), sorted dirs-first then alphabetically. */
+  children?: FileNode[];
+}
+
+/** A full directory-tree snapshot for one workspace. */
+export interface FileTree {
+  workspaceId: string;
+  root: FileNode;
+  /** Total file + directory nodes contained in the tree. */
+  nodeCount: number;
+  /** True when the walk was capped (the tree is partial). */
+  truncated: boolean;
+  /** Epoch ms the tree was built. */
+  builtAt: number;
+}
+
+/** Phase of an indexing pass (drives the progress UI). */
+export type IndexPhase = 'counting' | 'building' | 'done';
+
+/** Progress of an indexing pass, pushed to the renderer as it proceeds. */
+export interface IndexProgress {
+  workspaceId: string;
+  phase: IndexPhase;
+  /** Entries processed so far. */
+  processed: number;
+  /** Best-effort total (from the counting pass); 0 until known. */
+  total: number;
+  /** Integer 0–100; reaches 100 when `phase === 'done'`. */
+  percent: number;
+}
+
+/** Result of a centralized File Reader read. */
+export interface FileReadResult {
+  /** Workspace-relative path (POSIX separators). */
+  path: string;
+  /** UTF-8 text content; omitted when binary or too large to return. */
+  content?: string;
+  /** Detected encoding (currently always 'utf-8' when text is returned). */
+  encoding: 'utf-8';
+  /** True when binary content was detected (content is withheld). */
+  isBinary: boolean;
+  /** Size on disk in bytes. */
+  size: number;
+  /** True when the file exceeded the read cap and content was withheld. */
+  tooLarge: boolean;
+}
+
+/** App-level interaction recorded by the File History (distinct from git). */
+export interface FileHistoryEntry {
+  /** Workspace-relative path (POSIX separators). */
+  path: string;
+  action: 'read' | 'index' | 'change';
+  /** Epoch ms. */
+  at: number;
+}
+
+/* ------------------------------------------------------------------ */
 /* Coding agent (Claude Code orchestration)                            */
 /* ------------------------------------------------------------------ */
 

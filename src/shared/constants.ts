@@ -131,6 +131,33 @@ export const WORKSPACE_LIMITS = {
   pathMax: 4096,
 } as const;
 
+/* ------------------------------------------------------------------ */
+/* File System Layer (Phase 4)                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Bounds the File System Layer enforces so a hostile or simply enormous tree can
+ * never stall the main process or exfiltrate large/binary blobs through a read.
+ */
+export const FS_LIMITS = {
+  /** Hard ceiling on tree nodes per index pass (mirrors the stats walk cap). */
+  maxTreeEntries: 50_000,
+  /** Max directory depth the walker/watcher will descend. */
+  maxDepth: 24,
+  /** Max bytes a single `fs:readFile` may return as text (2 MiB). */
+  maxReadBytes: 2 * 1024 * 1024,
+  /** Bytes sniffed from the head of a file for binary (NUL) detection. */
+  binarySniffBytes: 8_000,
+  /** Min interval (ms) between progress pushes to the renderer. */
+  progressThrottleMs: 80,
+  /** Debounce (ms) coalescing watcher bursts into one tree push. */
+  watchDebounceMs: 250,
+  /** Bounded length of the per-workspace in-memory File History ring. */
+  historyMax: 200,
+  /** Per-relative-path length cap for `fs:readFile` requests. */
+  relPathMax: 4096,
+} as const;
+
 /** Directories never walked for stats and excluded by default from indexing. */
 export const DEFAULT_IGNORED_DIRS = [
   'node_modules',
