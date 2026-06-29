@@ -16,7 +16,7 @@
  * file tools are canonicalized + confined to the workspace; secrets are redacted
  * before logging; prompt size is capped upstream in the IPC handler.
  */
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -261,7 +261,7 @@ export class AgentManager {
   /** Pending permission prompts awaiting a renderer decision. */
   private readonly pending = new Map<
     string,
-    { resolve: (r: PermissionResult) => void; sessionId: string }
+    { resolve: (r: PermissionResult) => void; sessionId: string; input: Record<string, unknown> }
   >();
   /** Remembered "always allow" choices, keyed `sessionId:risk`. */
   private readonly remembered = new Set<string>();
@@ -514,7 +514,7 @@ export class AgentManager {
     if (decision.behavior === 'allow') {
       if (decision.remember) this.remembered.add(`${entry.sessionId}:remember`);
       this.diag('tool', 'info', 'Tool approved', undefined, entry.sessionId);
-      entry.resolve({ behavior: 'allow' });
+      entry.resolve({ behavior: 'allow', updatedInput: entry.input });
     } else {
       this.diag('tool', 'warning', 'Tool rejected', decision.message, entry.sessionId);
       entry.resolve({
@@ -1306,10 +1306,22 @@ export class AgentManager {
         return { behavior: 'deny', message: 'Plan captured for your review.', interrupt: true };
       }
 
+      // App-data guard (defense in depth): the agent must never reach Limboo's own
+      // store directly — the memory tools are the only sanctioned read path. This is
+      // checked before any auto-allow so a Bash `sqlite3 …/limboo.db` can't slip past.
+      if (touchesAppData(toolName, input)) {
+        this.pushActivity(sessionId, 'permission', `Blocked ${toolName} on Limboo app data`, undefined, 'danger');
+        return {
+          behavior: 'deny',
+          message:
+            "Reading Limboo's own app data (the local database/settings) is not allowed — use the memory tools instead.",
+        };
+      }
+
       // Limboo's own memory tools are internal and strictly read-only — always
       // allow them (even during a plan run) so reading memories never prompts.
       if (toolName.startsWith('mcp__limboo_memory__')) {
-        return { behavior: 'allow' };
+        return { behavior: 'allow', updatedInput: input };
       }
 
       const risk = classifyTool(toolName);
@@ -1338,10 +1350,10 @@ export class AgentManager {
       const mode = this.settings.getAll().agent;
       const autoRead = risk === 'read' && mode.autoApproveReads && mode.permissionMode !== 'approve-all';
       if (mode.permissionMode === 'auto' || autoRead) {
-        return { behavior: 'allow' };
+        return { behavior: 'allow', updatedInput: input };
       }
       if (this.remembered.has(`${sessionId}:remember`)) {
-        return { behavior: 'allow' };
+        return { behavior: 'allow', updatedInput: input };
       }
 
       // Interactive approval — bridge to the renderer and await its decision.
@@ -1369,6 +1381,7 @@ export class AgentManager {
         signal.addEventListener('abort', onAbort, { once: true });
         this.pending.set(request.id, {
           sessionId,
+          input,
           resolve: (r) => {
             signal.removeEventListener('abort', onAbort);
             resolve(r);
@@ -1777,6 +1790,56 @@ function isInside(root: string, target: string): boolean {
 function shortPath(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts.slice(-2).join('/') || p;
+}
+
+/**
+ * Limboo's own data directory (the `userData` root holding `limboo.db`,
+ * `settings.json`, `window-state.json`, logs and safeStorage material). The agent
+ * must never read or write inside it: the Local Memory System (the
+ * `mcp__limboo_memory__*` tools) is the *only* sanctioned read path into that DB,
+ * and direct access would bypass scoping and leak other workspaces' memories and
+ * app internals. Resolved once (lazily, so a non-Electron test context can't crash).
+ */
+let protectedRoot: string | null | undefined;
+function appDataRoot(): string | null {
+  if (protectedRoot === undefined) {
+    try {
+      protectedRoot = fs.realpathSync(app.getPath('userData'));
+    } catch {
+      try {
+        protectedRoot = app.getPath('userData');
+      } catch {
+        protectedRoot = null;
+      }
+    }
+  }
+  return protectedRoot;
+}
+
+/**
+ * True when a tool call would touch Limboo's own app data — either a path-bearing
+ * tool resolving inside `userData` (defense in depth) or a `Bash`/command tool whose
+ * command string references the data dir or the SQLite DB by name. Heuristic for
+ * shell, but deliberately broad: there is no legitimate reason for the agent to
+ * reach the app's private store.
+ */
+function touchesAppData(toolName: string, input: Record<string, unknown>): boolean {
+  const root = appDataRoot();
+  if (!root) return false;
+
+  const file = filePathOf(input);
+  if (file && isInside(root, file)) return true;
+
+  if (toolName === 'Bash') {
+    const cmd = String(input.command ?? '');
+    if (!cmd) return false;
+    // The absolute userData path, or the DB / config dir by name (covers WAL/SHM
+    // siblings and `sqlite3 .../limboo.db` style access regardless of cwd).
+    if (cmd.includes(root)) return true;
+    if (/limboo\.db\b/i.test(cmd)) return true;
+    if (/[\\/]limboo[\\/](limboo\.db|settings\.json|window-state\.json)/i.test(cmd)) return true;
+  }
+  return false;
 }
 
 function summarizeTool(name: string, input: Record<string, unknown>, risk: ToolRisk): string {
