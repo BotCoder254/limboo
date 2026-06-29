@@ -36,6 +36,19 @@ export function closeDb(): void {
   }
 }
 
+/** Add a column to a table if it isn't already present (idempotent migration). */
+function addColumnIfMissing(
+  database: Database.Database,
+  table: string,
+  column: string,
+  type: string,
+): void {
+  const cols = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === column)) return;
+  database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  logger.info(`DB migration: added ${table}.${column}`);
+}
+
 /** Create tables on first run and record the schema version for future upgrades. */
 function migrate(database: Database.Database): void {
   database.exec(`
@@ -80,7 +93,8 @@ function migrate(database: Database.Database): void {
       deleted_at   INTEGER,
       adds         INTEGER NOT NULL DEFAULT 0,
       dels         INTEGER NOT NULL DEFAULT 0,
-      unread       INTEGER NOT NULL DEFAULT 0
+      unread       INTEGER NOT NULL DEFAULT 0,
+      mode         TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_workspace
       ON sessions (workspace_id, pinned DESC, updated_at DESC);
@@ -146,7 +160,30 @@ function migrate(database: Database.Database): void {
       approved_at INTEGER,
       updated_at  INTEGER NOT NULL
     );
+
+    -- Git checkpoints — lightweight, session-scoped recovery points stored as
+    -- dedicated git refs (refs/limboo/checkpoints/<sessionId>/<ts>); this table
+    -- holds only the metadata + which ref to restore. Never on a branch, never
+    -- pushed. Soft history of an agent's work, separate from real commits.
+    CREATE TABLE IF NOT EXISTS git_checkpoints (
+      id            TEXT PRIMARY KEY,
+      session_id    TEXT NOT NULL,
+      workspace_id  TEXT NOT NULL,
+      ref           TEXT NOT NULL,
+      commit_hash   TEXT NOT NULL,
+      label         TEXT NOT NULL,
+      auto          INTEGER NOT NULL DEFAULT 0,
+      message_id    TEXT,
+      files         TEXT NOT NULL,
+      created_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session
+      ON git_checkpoints (session_id, created_at DESC);
   `);
+
+  // Idempotent column additions for databases created before a column existed.
+  // (SQLite has no "ADD COLUMN IF NOT EXISTS"; guard against the existing set.)
+  addColumnIfMissing(database, 'sessions', 'mode', 'TEXT');
 
   const current = database
     .prepare('SELECT value FROM meta WHERE key = ?')

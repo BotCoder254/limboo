@@ -16,6 +16,7 @@ import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
+import { useGitStore } from '@/renderer/stores/useGitStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -36,6 +37,8 @@ export function App() {
     useFileSystemStore.getState().hydrate();
     // Subscribe to terminal lifecycle + agent-command-mirror pushes.
     useTerminalStore.getState().hydrate();
+    // Subscribe to live git status + checkpoint pushes for the Git workspace.
+    useGitStore.getState().hydrate();
   }, []);
 
   return (

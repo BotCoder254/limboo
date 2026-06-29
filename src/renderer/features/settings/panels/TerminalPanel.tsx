@@ -7,7 +7,16 @@
  */
 import { TERMINAL_LIMITS, clamp } from '@shared/constants';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
-import { Field, Section, Select, SegmentedControl, StackedField, TextInput, Toggle } from '../controls';
+import {
+  Field,
+  JsonEditor,
+  Section,
+  Select,
+  SegmentedControl,
+  StackedField,
+  TextInput,
+  Toggle,
+} from '../controls';
 
 export function TerminalPanel() {
   const term = useSettingsStore((s) => s.settings.agent.terminal);
@@ -120,6 +129,18 @@ export function TerminalPanel() {
             onChange={(v) => set('mirrorAgentCommands', v)}
           />
         </Field>
+      </Section>
+
+      <Section
+        title="Advanced (edit as JSON)"
+        hint="Edit the terminal settings directly. Saving validates and merges through the same checked path as the controls above — out-of-range values are clamped."
+      >
+        <StackedField id="terminalJson" label="terminal.json">
+          <JsonEditor
+            value={term}
+            onSave={(next) => update({ agent: { terminal: next } })}
+          />
+        </StackedField>
       </Section>
     </div>
   );

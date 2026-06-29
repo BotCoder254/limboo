@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 5;
+export const SETTINGS_VERSION = 6;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -27,6 +27,14 @@ export const AGENT_LIMITS = {
   planMarkdownMax: 262_144,
 } as const;
 
+/** Caps for the audit-style agent activity feed (label + detail truncation). */
+export const ACTIVITY_LIMITS = {
+  /** Max chars kept for an activity item's detail line. */
+  detailMax: 160,
+  /** Max chars kept for an activity item's label / short prompt echo. */
+  labelMax: 120,
+} as const;
+
 /** Bounds the main process clamps agent connection-monitoring settings against. */
 export const AGENT_CONNECTION_LIMITS = {
   heartbeatInterval: { min: 0, max: 600_000, default: 30_000 },
@@ -41,6 +49,8 @@ export const LAYOUT_LIMITS = {
   left: { min: 200, max: 420, default: 264 },
   right: { min: 240, max: 560, default: 320 },
   terminal: { min: 320, max: 900, default: 480 },
+  /** The Git workspace drawer benefits from a wider default (diffs/history). */
+  git: { min: 360, max: 1_000, default: 560 },
 } as const;
 
 /** Bounds for the integrated terminal subsystem (main + renderer both clamp). */
@@ -58,6 +68,20 @@ export const TERMINAL_LIMITS = {
   rows: { min: 1, max: 1_000, default: 24 },
   /** Font-size bounds for the terminal appearance setting. */
   fontSize: { min: 9, max: 24, default: 13 },
+} as const;
+
+/** Bounds + caps for the git subsystem (main + renderer clamp against these). */
+export const GIT_LIMITS = {
+  /** Checkpoints kept per session before older ones are pruned. */
+  maxCheckpoints: { min: 1, max: 200, default: 50 },
+  /** Commits fetched in a single history page. */
+  logPageSize: 100,
+  /** Max bytes of raw diff output parsed for one file (elided past this). */
+  diffBytesMax: 1_500_000,
+  /** Commit message length cap accepted from the renderer. */
+  commitMessageMax: 20_000,
+  /** Branch / tag / checkpoint label length cap. */
+  refNameMax: 255,
 } as const;
 
 export const FONT_SCALE_LIMITS = { min: 0.85, max: 1.3, default: 1 } as const;
@@ -83,6 +107,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     sessionsCollapsed: false,
     terminalOpen: false,
     terminalWidth: LAYOUT_LIMITS.terminal.default,
+    gitWidth: LAYOUT_LIMITS.git.default,
   },
   behavior: {
     minimizeToTray: false,
@@ -129,6 +154,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
       confirmKill: true,
       mirrorAgentCommands: true,
     },
+  },
+  git: {
+    userName: '',
+    userEmail: '',
+    commitMessageTemplate: '',
+    suggestCommitFromConversation: true,
+    autoCheckpoint: true,
+    maxCheckpoints: GIT_LIMITS.maxCheckpoints.default,
+    confirmBranchSwitchWithChanges: true,
+    commandApproval: 'destructive',
   },
 };
 

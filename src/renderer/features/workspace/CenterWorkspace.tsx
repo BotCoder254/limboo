@@ -8,7 +8,7 @@
  * into the scroll region.
  */
 import { useEffect } from 'react';
-import { CircleDot, Plus, Sparkles, TerminalSquare } from 'lucide-react';
+import { CircleDot, GitBranch, Plus, Sparkles, TerminalSquare } from 'lucide-react';
 import { DiffStat, EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
 import { Logo } from '@/renderer/components/brand/Logo';
@@ -19,6 +19,7 @@ import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
+import { useGitStore } from '@/renderer/stores/useGitStore';
 
 export function CenterWorkspace() {
   const session = useSessionStore((s) =>
@@ -122,6 +123,10 @@ function SessionHeader({
   const planStatus = useAgentStore((s) => s.bySession[sessionId]?.plan?.status);
   const terminalOpen = useLayoutStore((s) => s.activeTab === 'terminal');
   const toggleTerminal = useLayoutStore((s) => s.toggleTerminal);
+  const gitOpen = useLayoutStore((s) => s.activeTab === 'git');
+  const toggleGit = useLayoutStore((s) => s.toggleTab);
+  // Dirty indicator on the git toggle so a glance shows uncommitted work.
+  const gitDirty = useGitStore((s) => !!s.status && !s.status.clean);
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4">
       {running ? <Spinner size={12} /> : <CircleDot size={12} className="text-success" />}
@@ -135,9 +140,22 @@ function SessionHeader({
         </span>
       )}
       <IconButton
-        label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
+        label={gitOpen ? 'Hide git' : 'Show git'}
         size="sm"
         className="ml-auto"
+        active={gitOpen}
+        onClick={() => toggleGit('git')}
+      >
+        <span className="relative">
+          <GitBranch size={14} />
+          {gitDirty && (
+            <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-warning" />
+          )}
+        </span>
+      </IconButton>
+      <IconButton
+        label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
+        size="sm"
         active={terminalOpen}
         onClick={toggleTerminal}
       >

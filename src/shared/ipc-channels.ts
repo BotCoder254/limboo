@@ -85,6 +85,31 @@ export const IpcChannels = {
   terminalKill: 'terminal:kill',
   terminalRename: 'terminal:rename',
   terminalClear: 'terminal:clear',
+
+  // Deep Git integration — read + safe-write git ops, all workspace-scoped.
+  gitStatus: 'git:status',
+  gitDiff: 'git:diff',
+  gitStage: 'git:stage',
+  gitUnstage: 'git:unstage',
+  gitStageAll: 'git:stageAll',
+  gitUnstageAll: 'git:unstageAll',
+  gitDiscard: 'git:discard',
+  gitCommit: 'git:commit',
+  gitLog: 'git:log',
+  gitCommitDetail: 'git:commitDetail',
+  gitBranches: 'git:branches',
+  gitCheckout: 'git:checkout',
+  gitCreateBranch: 'git:createBranch',
+  gitTags: 'git:tags',
+  gitCreateTag: 'git:createTag',
+  gitBlame: 'git:blame',
+  gitFetch: 'git:fetch',
+  gitInit: 'git:init',
+  gitCheckpointCreate: 'git:checkpointCreate',
+  gitCheckpointList: 'git:checkpointList',
+  gitCheckpointDiff: 'git:checkpointDiff',
+  gitCheckpointRestore: 'git:checkpointRestore',
+  gitCheckpointDelete: 'git:checkpointDelete',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
@@ -124,6 +149,10 @@ export const IpcEvents = {
   terminalsUpdated: 'terminal:updated',
   /** An agent-run shell command mirrored into the integrated terminal. */
   terminalCommand: 'terminal:command',
+  /** The active workspace's git state changed (status/branch/commit/stage). */
+  gitChanged: 'git:changed',
+  /** A session's git checkpoints changed (created / restored / pruned). */
+  gitCheckpointsChanged: 'git:checkpoints-changed',
 } as const;
 
 export type IpcEvent = (typeof IpcEvents)[keyof typeof IpcEvents];

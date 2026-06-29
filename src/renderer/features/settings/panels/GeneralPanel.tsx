@@ -3,10 +3,12 @@ import { useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
-import { Section, Field } from '../controls';
+import { Section, Field, JsonEditor, StackedField } from '../controls';
 
 export function GeneralPanel() {
   const reset = useSettingsStore((s) => s.reset);
+  const settings = useSettingsStore((s) => s.settings);
+  const update = useSettingsStore((s) => s.update);
   const addToast = useUIStore((s) => s.addToast);
   const [confirming, setConfirming] = useState(false);
 
@@ -26,6 +28,7 @@ export function GeneralPanel() {
   };
 
   return (
+    <div className="flex flex-col gap-5">
     <Section
       title="General"
       hint="Limboo is local-first and private — the only network traffic is the coding agent talking to its provider."
@@ -64,5 +67,15 @@ export function GeneralPanel() {
         )}
       </Field>
     </Section>
+
+      <Section
+        title="Advanced (edit as JSON)"
+        hint="Edit all preferences directly. Saving validates and merges through the checked settings path; invalid or out-of-range values are rejected or clamped. Restricted keys are ignored."
+      >
+        <StackedField id="settingsJson" label="settings.json">
+          <JsonEditor value={settings} onSave={(next) => update(next)} rows={16} />
+        </StackedField>
+      </Section>
+    </div>
   );
 }

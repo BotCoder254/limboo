@@ -23,14 +23,15 @@ export function AppShell() {
   const leftWidth = useLayoutStore((s) => s.leftWidth);
   const rightWidth = useLayoutStore((s) => s.rightWidth);
   const terminalWidth = useLayoutStore((s) => s.terminalWidth);
+  const gitWidth = useLayoutStore((s) => s.gitWidth);
   const activeTab = useLayoutStore((s) => s.activeTab);
   const sessionsCollapsed = useLayoutStore((s) => s.sessionsCollapsed);
   const setLeftWidth = useLayoutStore((s) => s.setLeftWidth);
 
-  // The terminal tab uses its own (wider) remembered width; every other tab uses
-  // the shared right-drawer width.
-  const drawerIsTerminal = activeTab === 'terminal';
-  const drawerWidth = drawerIsTerminal ? terminalWidth : rightWidth;
+  // The terminal and git tabs each use their own (wider) remembered width; every
+  // other tab uses the shared right-drawer width.
+  const drawerWidth =
+    activeTab === 'terminal' ? terminalWidth : activeTab === 'git' ? gitWidth : rightWidth;
 
   const left = useResizable({
     edge: 'left',
@@ -41,11 +42,14 @@ export function AppShell() {
     edge: 'right',
     getWidth: () => {
       const s = useLayoutStore.getState();
-      return s.activeTab === 'terminal' ? s.terminalWidth : s.rightWidth;
+      if (s.activeTab === 'terminal') return s.terminalWidth;
+      if (s.activeTab === 'git') return s.gitWidth;
+      return s.rightWidth;
     },
     setWidth: (w) => {
       const s = useLayoutStore.getState();
       if (s.activeTab === 'terminal') s.setTerminalWidth(w);
+      else if (s.activeTab === 'git') s.setGitWidth(w);
       else s.setRightWidth(w);
     },
   });

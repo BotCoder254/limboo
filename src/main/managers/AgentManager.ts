@@ -52,7 +52,7 @@ import type {
   TerminalCommandRecord,
   ToolRisk,
 } from '@shared/types';
-import { AGENT_LIMITS } from '@shared/constants';
+import { ACTIVITY_LIMITS, AGENT_LIMITS } from '@shared/constants';
 import { IpcEvents } from '@shared/ipc-channels';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
@@ -61,6 +61,7 @@ import type { WorkspaceManager } from './WorkspaceManager';
 import type { NotificationManager } from './NotificationManager';
 import type { TerminalManager } from './TerminalManager';
 import type { SessionManager } from './SessionManager';
+import type { GitManager } from './GitManager';
 
 /* ------------------------------------------------------------------ */
 /* ESM loader — the SDK is ESM-only; main is a CJS bundle. Load it with */
@@ -286,6 +287,39 @@ export class AgentManager {
   /** Inject the Session Manager so the first prompt can name an untitled session. */
   setSessionManager(sessions: SessionManager): void {
     this.sessions = sessions;
+  }
+
+  /** Git Manager, wired after construction (auto-checkpoints + live refresh). */
+  private git: GitManager | null = null;
+
+  /** Inject the Git Manager so the agent can checkpoint before heavy work. */
+  setGitManager(git: GitManager): void {
+    this.git = git;
+  }
+
+  /**
+   * Create one automatic checkpoint per run, the first time the agent performs a
+   * write/command, so the pre-edit state is always recoverable. Fire-and-forget:
+   * never blocks or fails the stream. Honors the `git.autoCheckpoint` setting.
+   */
+  private maybeAutoCheckpoint(sessionId: string): void {
+    if (!this.git) return;
+    const run = this.runs.get(sessionId) as { checkpointed?: boolean } | undefined;
+    if (!run || run.checkpointed) return;
+    run.checkpointed = true;
+    if (!this.settings.getAll().git.autoCheckpoint) return;
+    const ws = this.workspace.getActive();
+    if (!ws) return;
+    void this.git
+      .createCheckpoint(ws.id, sessionId, 'Before agent changes', { auto: true })
+      .then((cp) => {
+        if (cp) {
+          this.pushActivity(sessionId, 'status', 'Created checkpoint', cp.label, 'info');
+        }
+      })
+      .catch(() => {
+        /* checkpointing is best-effort and never breaks a run */
+      });
   }
 
   /* ---------------------------------------------------------------- */
@@ -531,9 +565,11 @@ export class AgentManager {
     };
     this.persistMessage(userMsg);
     this.pushEvent({ kind: 'message-done', sessionId, message: userMsg });
-    this.pushActivity(sessionId, 'prompt', 'You', prompt.slice(0, 120), 'info');
+    this.pushActivity(sessionId, 'prompt', 'You', prompt.slice(0, ACTIVITY_LIMITS.labelMax), 'info');
     // Name an untitled session after its first prompt (a no-op once renamed).
     this.sessions?.autoTitle(sessionId, prompt);
+    // Remember the mode so the composer restores it when this session reopens.
+    this.sessions?.setMode(sessionId, mode);
 
     // Plan run: open a fresh planning artifact so the panel switches into its
     // "analyzing repository" state immediately while the agent reads.
@@ -554,7 +590,7 @@ export class AgentManager {
       detail: undefined,
     });
     this.setLifecycle('busy', { activeSessionId: sessionId, error: undefined });
-    this.diag('request', 'info', `Prompt submitted (${mode})`, prompt.slice(0, 160), sessionId);
+    this.diag('request', 'info', `Prompt submitted (${mode})`, prompt.slice(0, ACTIVITY_LIMITS.detailMax), sessionId);
 
     try {
       await this.runWithRecovery(sessionId, prompt, abort, cfg, mode);
@@ -654,7 +690,7 @@ export class AgentManager {
         logger.error('Agent run failed', redact(raw));
         this.completeRequest(sessionId, cls.outcome, redact(raw));
         this.pushEvent({ kind: 'error', sessionId, message: redact(raw), outcome: cls.outcome });
-        this.pushActivity(sessionId, 'error', 'Agent error', redact(raw).slice(0, 160), 'danger');
+        this.pushActivity(sessionId, 'error', 'Agent error', redact(raw).slice(0, ACTIVITY_LIMITS.detailMax), 'danger');
         if (cls.recoverable) {
           // A transport error whose recovery budget is spent — capability degraded.
           this.setLifecycle('failed', { error: redact(raw) });
@@ -699,6 +735,8 @@ export class AgentManager {
       streaming.streaming = false;
       this.persistMessage(streaming);
       this.pushEvent({ kind: 'message-done', sessionId, message: { ...streaming } });
+      // Badge the session as unread if the user is looking at a different one.
+      this.sessions?.bumpUnread(sessionId);
       streaming = null;
     };
 
@@ -880,6 +918,9 @@ export class AgentManager {
     // sees exactly what the agent executes. The Agent SDK does not stream tool
     // stdout, so this is a record (command now, output on result) — not a live PTY.
     if (name === 'Bash') this.mirrorCommandStart(sessionId, id, input);
+
+    // Snapshot the pre-edit state before the first write/command of this run.
+    if (risk === 'write' || name === 'Bash') this.maybeAutoCheckpoint(sessionId);
 
     if (risk === 'write') {
       const change = changeFromInput(name, input);
@@ -1497,7 +1538,7 @@ export class AgentManager {
   private enterRateLimited(info: RateLimitInfo, sessionId: string): void {
     this.setLifecycle('rate-limited', { rateLimit: info, activeSessionId: null });
     this.diag('rate-limit', 'warning', 'Rate / session limit hit', info.message);
-    this.pushActivity(sessionId, 'status', 'Rate limited', info.message.slice(0, 160), 'warning');
+    this.pushActivity(sessionId, 'status', 'Rate limited', info.message.slice(0, ACTIVITY_LIMITS.detailMax), 'warning');
     this.clearRateLimitTimer();
     if (info.resetsAt) {
       const ms = Math.max(0, info.resetsAt - Date.now());

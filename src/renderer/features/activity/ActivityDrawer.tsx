@@ -18,13 +18,15 @@ import { ACTIVITY_TABS } from './tabs';
 import { ActivityFeedPanel, ChangesPanel, FilesPanel, TasksPanel } from './panels';
 import { AgentConsolePanel } from './AgentConsolePanel';
 import { TerminalPanel } from '@/renderer/features/terminal/TerminalPanel';
+import { GitPanel } from '@/renderer/features/git/GitPanel';
 
 export function ActivityDrawer({ tab }: { tab: ActivityTab }) {
   const meta = ACTIVITY_TABS.find((t) => t.id === tab) ?? ACTIVITY_TABS[0];
 
-  // The terminal owns its own header (tab strip + new/close), so it renders
-  // full-bleed without the drawer's title bar or content padding.
+  // The terminal and git workspaces own their own headers (tab strip + controls),
+  // so they render full-bleed without the drawer's title bar or content padding.
   if (tab === 'terminal') return <TerminalPanel />;
+  if (tab === 'git') return <GitPanel />;
 
   return (
     <section className="flex h-full min-h-0 flex-col border-l border-line bg-surface">

@@ -12,6 +12,7 @@ import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
 import { CircularProgress } from '@/renderer/components/ui';
 import { Section, Field, StackedField, Toggle, TextInput } from '../controls';
+import { detectedStack, suggestedIgnores } from '../detectIgnores';
 
 export function WorkspacePanel() {
   const workspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === s.activeId) ?? null);
@@ -43,6 +44,29 @@ function WorkspaceConfig({ workspace }: { workspace: Workspace }) {
   const [ignoredDraft, setIgnoredDraft] = useState(workspace.config.ignoredDirs.join('\n'));
   const [rescanning, setRescanning] = useState(false);
   const indexing = !!progress && progress.phase !== 'done';
+
+  // Project-detection driven suggestions (advisory; applied only on click).
+  const stack = detectedStack(workspace.metadata);
+  const suggestions = suggestedIgnores(workspace.metadata);
+  const current = new Set(
+    ignoredDraft
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  const missingSuggestions = suggestions.filter((s) => !current.has(s));
+
+  const applySuggestions = () => {
+    const merged = Array.from(new Set([...current, ...suggestions])).sort();
+    setIgnoredDraft(merged.join('\n'));
+    void updateConfig(workspace.id, { ignoredDirs: merged }).catch((err) =>
+      addToast({
+        title: 'Could not apply suggestions',
+        description: err instanceof Error ? err.message : String(err),
+        tone: 'danger',
+      }),
+    );
+  };
 
   const commitIgnored = () => {
     const ignoredDirs = Array.from(
@@ -85,6 +109,36 @@ function WorkspaceConfig({ workspace }: { workspace: Workspace }) {
       title="Workspace"
       hint={`Settings for ${workspace.name} only — separate from the global preferences.`}
     >
+      {stack.length > 0 && (
+        <StackedField
+          id="detected"
+          label="Detected stack"
+          hint="Auto-detected from the project's lockfiles, config, and sources."
+        >
+          <div className="flex flex-wrap items-center gap-1.5">
+            {stack.map((item) => (
+              <span
+                key={item}
+                className="rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[11px] text-muted"
+              >
+                {item}
+              </span>
+            ))}
+            {missingSuggestions.length > 0 && (
+              <button
+                type="button"
+                onClick={applySuggestions}
+                className="ml-1 rounded-md border border-accent/40 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20"
+                title={`Adds: ${missingSuggestions.join(', ')}`}
+              >
+                Add {missingSuggestions.length} recommended ignore
+                {missingSuggestions.length === 1 ? '' : 's'}
+              </button>
+            )}
+          </div>
+        </StackedField>
+      )}
+
       <Field
         id="approveTerminal"
         label="Approve terminal commands"

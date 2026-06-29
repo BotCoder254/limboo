@@ -21,6 +21,7 @@ import { SessionManager } from './managers/SessionManager';
 import { AgentManager } from './managers/AgentManager';
 import { FileSystemManager } from './managers/FileSystemManager';
 import { TerminalManager } from './managers/TerminalManager';
+import { GitManager } from './managers/GitManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -66,6 +67,7 @@ function bootstrap(): void {
   let agent: AgentManager;
   let fileSystem: FileSystemManager;
   let terminal: TerminalManager;
+  let git: GitManager;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
   const tray = new TrayManager();
@@ -89,12 +91,17 @@ function bootstrap(): void {
     agent = new AgentManager(workspace, settings, notifications);
     fileSystem = new FileSystemManager(workspace);
     terminal = new TerminalManager(workspace, settings);
+    git = new GitManager(workspace, settings);
     // The agent mirrors its shell commands into the integrated terminal.
     agent.setTerminalManager(terminal);
     // The agent auto-titles untitled sessions from their first prompt.
     agent.setSessionManager(sessions);
-    // The File System Layer pushes live git status (branch + diff) into sessions.
+    // The agent drives checkpoints + live git refresh through the Git Manager.
+    agent.setGitManager(git);
+    // The File System Layer pushes live git status (branch + diff) into sessions
+    // and notifies the Git workspace whenever the working tree changes.
     fileSystem.setSessionManager(sessions);
+    fileSystem.setGitManager(git);
 
     hardenSession();
     registerAllIpc({
@@ -105,6 +112,7 @@ function bootstrap(): void {
       agent,
       fs: fileSystem,
       terminal,
+      git,
     });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();

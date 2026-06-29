@@ -24,6 +24,16 @@ import type {
   FileHistoryEntry,
   FileReadResult,
   FileTree,
+  GitBlameLine,
+  GitBranch,
+  GitCheckoutResult,
+  GitCheckpoint,
+  GitCommit,
+  GitCommitDetail,
+  GitFileChange,
+  GitFileDiff,
+  GitStatus,
+  GitTag,
   IndexProgress,
   PermissionDecision,
   PermissionRequest,
@@ -229,6 +239,75 @@ const terminalApi = {
     subscribe<TerminalCommandRecord>(IpcEvents.terminalCommand, cb),
 };
 
+const gitApi = {
+  status: (workspaceId: string): Promise<GitStatus> =>
+    ipcRenderer.invoke(IpcChannels.gitStatus, workspaceId),
+  diff: (
+    workspaceId: string,
+    path: string,
+    opts?: { staged?: boolean; baseRef?: string },
+  ): Promise<GitFileDiff> => ipcRenderer.invoke(IpcChannels.gitDiff, workspaceId, path, opts),
+  stage: (workspaceId: string, path: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitStage, workspaceId, path),
+  unstage: (workspaceId: string, path: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitUnstage, workspaceId, path),
+  stageAll: (workspaceId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitStageAll, workspaceId),
+  unstageAll: (workspaceId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitUnstageAll, workspaceId),
+  discard: (workspaceId: string, path: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitDiscard, workspaceId, path),
+  commit: (workspaceId: string, message: string): Promise<GitCommit | null> =>
+    ipcRenderer.invoke(IpcChannels.gitCommit, workspaceId, message),
+  log: (workspaceId: string, opts?: { limit?: number; offset?: number }): Promise<GitCommit[]> =>
+    ipcRenderer.invoke(IpcChannels.gitLog, workspaceId, opts),
+  commitDetail: (workspaceId: string, hash: string): Promise<GitCommitDetail | null> =>
+    ipcRenderer.invoke(IpcChannels.gitCommitDetail, workspaceId, hash),
+  branches: (workspaceId: string): Promise<GitBranch[]> =>
+    ipcRenderer.invoke(IpcChannels.gitBranches, workspaceId),
+  checkout: (
+    workspaceId: string,
+    branch: string,
+    opts?: { force?: boolean },
+  ): Promise<GitCheckoutResult> =>
+    ipcRenderer.invoke(IpcChannels.gitCheckout, workspaceId, branch, opts),
+  createBranch: (
+    workspaceId: string,
+    name: string,
+    checkout?: boolean,
+  ): Promise<GitCheckoutResult> =>
+    ipcRenderer.invoke(IpcChannels.gitCreateBranch, workspaceId, name, checkout),
+  tags: (workspaceId: string): Promise<GitTag[]> =>
+    ipcRenderer.invoke(IpcChannels.gitTags, workspaceId),
+  createTag: (workspaceId: string, name: string, message?: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitCreateTag, workspaceId, name, message),
+  blame: (workspaceId: string, path: string): Promise<GitBlameLine[]> =>
+    ipcRenderer.invoke(IpcChannels.gitBlame, workspaceId, path),
+  fetch: (workspaceId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IpcChannels.gitFetch, workspaceId),
+  init: (workspaceId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IpcChannels.gitInit, workspaceId),
+  checkpointCreate: (
+    workspaceId: string,
+    sessionId: string,
+    label: string,
+    opts?: { messageId?: string },
+  ): Promise<GitCheckpoint | null> =>
+    ipcRenderer.invoke(IpcChannels.gitCheckpointCreate, workspaceId, sessionId, label, opts),
+  checkpointList: (sessionId: string): Promise<GitCheckpoint[]> =>
+    ipcRenderer.invoke(IpcChannels.gitCheckpointList, sessionId),
+  checkpointDiff: (workspaceId: string, checkpointId: string): Promise<GitFileChange[]> =>
+    ipcRenderer.invoke(IpcChannels.gitCheckpointDiff, workspaceId, checkpointId),
+  checkpointRestore: (workspaceId: string, checkpointId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IpcChannels.gitCheckpointRestore, workspaceId, checkpointId),
+  checkpointDelete: (workspaceId: string, checkpointId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitCheckpointDelete, workspaceId, checkpointId),
+  onChanged: (cb: (payload: { workspaceId: string }) => void): (() => void) =>
+    subscribe<{ workspaceId: string }>(IpcEvents.gitChanged, cb),
+  onCheckpointsChanged: (cb: (payload: { sessionId: string }) => void): (() => void) =>
+    subscribe<{ sessionId: string }>(IpcEvents.gitCheckpointsChanged, cb),
+};
+
 const limbooApi = {
   window: windowApi,
   settings: settingsApi,
@@ -240,6 +319,7 @@ const limbooApi = {
   agent: agentApi,
   fs: fsApi,
   terminal: terminalApi,
+  git: gitApi,
 };
 
 contextBridge.exposeInMainWorld('limboo', limbooApi);
