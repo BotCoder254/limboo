@@ -130,12 +130,31 @@ html[data-reduced-motion="true"] *::after {
   100% { transform: translateX(320%); }
 }
 
+/* Skeleton shimmer for the pre-first-token assistant placeholder. Sweeps a
+   surface-2 → elevated → surface-2 highlight across the bar, on-palette (no new
+   hex, no content gradient — purely a loading affordance). */
+@keyframes limboo-shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+
 @utility animate-fade-in {
   animation: limboo-fade-in 120ms ease-out;
 }
 
 @utility animate-pop-in {
   animation: limboo-pop-in 140ms ease-out;
+}
+
+@utility animate-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-surface-2) 25%,
+    var(--color-elevated) 50%,
+    var(--color-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: limboo-shimmer 1.4s ease-in-out infinite;
 }
 
 /* ------------------------------------------------------------------ */

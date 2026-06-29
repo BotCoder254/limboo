@@ -1,16 +1,23 @@
 /**
- * The conversation timeline for a session. Renders chat turns and the agent's
- * tool calls interleaved chronologically, streaming assistant tokens in as they
- * arrive. Pure presentation — all data comes from the agent store, which applies
- * the structured event stream from the main process.
+ * The conversation timeline for a session — rendered as ONE continuous event
+ * stream rather than a set of separate cards. Each user prompt opens a *turn*;
+ * everything the agent does in response (streamed text, tool execution, file/
+ * git changes, terminal activity, memory/checkpoint markers, completion) is
+ * interleaved chronologically inside that turn's single assistant block, under
+ * one avatar. There are no bordered "tool cards" or a detached approval dialog:
+ * tool calls, status markers, and the permission prompt all read as lightweight
+ * inline continuations of the assistant's response.
  *
- * Assistant turns render as full-width Markdown (with highlighted code blocks);
- * user turns render as a compact right-aligned bubble. Tool calls render as
- * expandable cards that surface intent + target (e.g. a web search query/URL).
+ * Pure presentation — all data comes from the agent store, which applies the
+ * structured event stream from the main process. Assistant text renders as
+ * full-width Markdown (with streaming-aware highlighted code blocks); the user's
+ * turn renders as a compact right-aligned bubble.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
+  Check,
   ChevronRight,
+  CircleAlert,
   Eye,
   FilePen,
   FilePlus,
@@ -21,7 +28,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import type { AgentToolCall, ChatMessage } from '@shared/types';
+import type { AgentActivityItem, AgentToolCall, ChatMessage, PermissionRequest } from '@shared/types';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Spinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
@@ -29,11 +36,27 @@ import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
 import { Markdown } from './Markdown';
+import { MessageSkeleton } from './MessageSkeleton';
 import { InlineApproval } from './InlineApproval';
 
-type TimelineItem =
-  | { kind: 'message'; at: number; message: ChatMessage }
-  | { kind: 'tool'; at: number; call: AgentToolCall };
+/** Activity types that surface inline in the conversation as status markers.
+ *  Tool / prompt / file-change / permission activity is intentionally excluded —
+ *  those are already represented by the tool rows and the user bubble, so showing
+ *  them again would double up the timeline. */
+const MARKER_TYPES: ReadonlySet<AgentActivityItem['type']> = new Set(['result', 'status', 'error']);
+
+/** A single chronological item inside an assistant block. */
+type Block =
+  | { kind: 'text'; at: number; message: ChatMessage }
+  | { kind: 'tool'; at: number; call: AgentToolCall }
+  | { kind: 'marker'; at: number; item: AgentActivityItem };
+
+/** A conversation turn: the user's prompt (if any) + the assistant's response. */
+interface Turn {
+  key: string;
+  user: ChatMessage | null;
+  blocks: Block[];
+}
 
 function toolIcon(call: AgentToolCall): LucideIcon {
   switch (call.name) {
@@ -57,6 +80,51 @@ function toolIcon(call: AgentToolCall): LucideIcon {
   }
 }
 
+/** Fold the session snapshot into chronological turns. A user message opens a
+ *  new turn; assistant text, tool calls, and status markers attach to the turn
+ *  in flight (sorted by their own timestamps so they interleave naturally). */
+function buildTurns(
+  messages: ChatMessage[],
+  toolCalls: AgentToolCall[],
+  activity: AgentActivityItem[],
+): Turn[] {
+  const blocks: Block[] = [
+    ...messages
+      .filter((m) => m.role !== 'user')
+      .map((message) => ({ kind: 'text' as const, at: message.createdAt, message })),
+    ...toolCalls.map((call) => ({ kind: 'tool' as const, at: call.startedAt, call })),
+    ...activity
+      .filter((item) => MARKER_TYPES.has(item.type))
+      .map((item) => ({ kind: 'marker' as const, at: item.at, item })),
+  ].sort((a, b) => a.at - b.at);
+
+  const users = messages
+    .filter((m) => m.role === 'user')
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  const turns: Turn[] = [];
+  let cursor = 0; // index into `blocks`
+  // Any assistant activity that predates the first user prompt (rare) becomes a
+  // leading authorless turn so nothing is dropped.
+  const leading: Block[] = [];
+  const firstUserAt = users[0]?.createdAt ?? Infinity;
+  while (cursor < blocks.length && blocks[cursor].at < firstUserAt) {
+    leading.push(blocks[cursor++]);
+  }
+  if (leading.length) turns.push({ key: 'lead', user: null, blocks: leading });
+
+  users.forEach((user, i) => {
+    const nextAt = users[i + 1]?.createdAt ?? Infinity;
+    const turnBlocks: Block[] = [];
+    while (cursor < blocks.length && blocks[cursor].at < nextAt) {
+      turnBlocks.push(blocks[cursor++]);
+    }
+    turns.push({ key: user.id, user, blocks: turnBlocks });
+  });
+
+  return turns;
+}
+
 export function ConversationView({ sessionId }: { sessionId: string }) {
   const snapshot = useAgentStore((s) => s.bySession[sessionId]) ?? EMPTY_SNAPSHOT;
   const pending = useAgentStore((s) => s.pending);
@@ -66,13 +134,10 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
   // prompt into view even if they had scrolled up reading the previous reply.
   const lastUserId = useRef<string | null>(null);
 
-  const timeline = useMemo<TimelineItem[]>(() => {
-    const items: TimelineItem[] = [
-      ...snapshot.messages.map((message) => ({ kind: 'message' as const, at: message.createdAt, message })),
-      ...snapshot.toolCalls.map((call) => ({ kind: 'tool' as const, at: call.startedAt, call })),
-    ];
-    return items.sort((a, b) => a.at - b.at);
-  }, [snapshot.messages, snapshot.toolCalls]);
+  const turns = useMemo(
+    () => buildTurns(snapshot.messages, snapshot.toolCalls, snapshot.activity),
+    [snapshot.messages, snapshot.toolCalls, snapshot.activity],
+  );
 
   // Auto-stick to the bottom while streaming, but only if the user hasn't
   // scrolled up — preserving their scroll position is the whole point.
@@ -99,20 +164,26 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
       stick.current = true;
     }
     if (stick.current) bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [timeline, pending, snapshot.messages]);
+  }, [turns, pending, snapshot.messages]);
 
   const approval = pending && pending.sessionId === sessionId ? pending : null;
+  const lastKey = turns.length ? turns[turns.length - 1].key : null;
 
   return (
     <div className="flex flex-col gap-6 pb-4">
-      {timeline.map((item) =>
-        item.kind === 'message' ? (
-          <MessageRow key={item.message.id} message={item.message} />
-        ) : (
-          <ToolCard key={item.call.id} call={item.call} />
-        ),
+      {turns.map((turn) => (
+        <TurnView
+          key={turn.key}
+          turn={turn}
+          // The pending approval docks inside the most recent turn's assistant
+          // block, immediately beneath the latest streamed content.
+          approval={approval && turn.key === lastKey ? approval : null}
+        />
+      ))}
+      {/* Approval arriving before any assistant content has a turn to attach to. */}
+      {approval && !turns.length && (
+        <AssistantBlock blocks={[]} trailing={<InlineApproval request={approval} />} />
       )}
-      {approval && <InlineApproval request={approval} />}
       {/* Scroll anchor — a small bottom margin keeps the last line off the very
           edge when auto-scrolling (honored by scrollIntoView). The composer is
           docked in flow below the scroller, so no large reserve is needed. */}
@@ -132,140 +203,172 @@ function findScrollParent(node: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-function MessageRow({ message }: { message: ChatMessage }) {
-  if (message.role === 'user') {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-md bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
-          {message.text}
-        </div>
-      </div>
-    );
-  }
-
-  const empty = message.text.trim().length === 0;
+function TurnView({ turn, approval }: { turn: Turn; approval: PermissionRequest | null }) {
+  const showAssistant = turn.blocks.length > 0 || !!approval;
   return (
-    <div className="flex gap-3 animate-fade-in">
-      <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2">
-        <Logo size={16} tone={message.streaming ? 'accent' : 'fg'} />
-      </div>
-      <div className="min-w-0 flex-1 pt-0.5">
-        {empty && message.streaming ? (
-          <ThinkingDots />
-        ) : (
-          <>
-            <Markdown text={message.text} streaming={message.streaming} />
-            {message.streaming && (
-              <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-accent align-middle" />
-            )}
-          </>
-        )}
+    <div className="flex flex-col gap-4">
+      {turn.user && <UserBubble message={turn.user} />}
+      {showAssistant && (
+        <AssistantBlock
+          blocks={turn.blocks}
+          trailing={approval ? <InlineApproval request={approval} /> : null}
+        />
+      )}
+    </div>
+  );
+}
+
+function UserBubble({ message }: { message: ChatMessage }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-md bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
+        {message.text}
       </div>
     </div>
   );
 }
 
-function ThinkingDots() {
+/** The assistant's response for a turn: a single avatar plus a vertical flow of
+ *  chronologically-interleaved sub-items (text, tool rows, status markers, and an
+ *  optional trailing approval). */
+function AssistantBlock({ blocks, trailing }: { blocks: Block[]; trailing?: ReactNode }) {
+  const streaming = blocks.some((b) => b.kind === 'text' && b.message.streaming);
   return (
-    <span className="flex items-center gap-1 py-1 text-muted" aria-label="Thinking">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:0ms]" />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:150ms]" />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
-    </span>
+    <div className="flex gap-3 animate-fade-in">
+      <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2">
+        <Logo size={16} tone={streaming ? 'accent' : 'fg'} />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5">
+        {blocks.map((block) => {
+          if (block.kind === 'text') return <AssistantText key={block.message.id} message={block.message} />;
+          if (block.kind === 'tool') return <InlineEventRow key={block.call.id} call={block.call} />;
+          return <InlineMarkerRow key={block.item.id} item={block.item} />;
+        })}
+        {trailing}
+      </div>
+    </div>
   );
 }
 
-/** Open the Git workspace focused on the changes view (activity-card jump). */
+function AssistantText({ message }: { message: ChatMessage }) {
+  // A streaming message with no text yet is the pre-first-token moment — reserve
+  // the reply's shape with a shimmer skeleton until the first delta lands.
+  if (message.streaming && message.text.trim().length === 0) return <MessageSkeleton />;
+  return (
+    <div>
+      <Markdown text={message.text} streaming={message.streaming} />
+      {message.streaming && (
+        <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-accent align-middle" />
+      )}
+    </div>
+  );
+}
+
+/** Open the Git workspace focused on the changes view (inline-event jump). */
 function openGit(path?: string): void {
   useGitStore.getState().setFocus({ view: 'status', path });
   useLayoutStore.getState().setActiveTab('git');
 }
 
-function ToolCard({ call }: { call: AgentToolCall }) {
+/** A de-carded tool invocation: a lightweight inline row that reads as a
+ *  continuation of the assistant's message rather than a bordered card. Keeps the
+ *  expandable detail and the Git / terminal click-throughs. */
+function InlineEventRow({ call }: { call: AgentToolCall }) {
   const Icon = toolIcon(call);
   const isWeb = call.name === 'WebSearch' || call.name === 'WebFetch';
   const [open, setOpen] = useState(false);
   const expandable = !!call.detail && call.detail !== call.target;
 
   return (
-    <div className="ml-10 max-w-[85%] self-start overflow-hidden rounded-md border border-line bg-surface-2/60">
-      <button
-        type="button"
-        onClick={() => expandable && setOpen((v) => !v)}
-        className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 text-left',
-          expandable && 'transition-colors hover:bg-elevated',
-        )}
-      >
-        <Icon size={14} className={cn('shrink-0', call.risk === 'command' ? 'text-warning' : 'text-muted')} />
-        <span className="shrink-0 text-[12px] font-medium text-fg">{call.summary}</span>
-        {call.target && (
-          <span
-            className={cn(
-              'min-w-0 flex-1 truncate text-[11.5px]',
-              isWeb ? 'font-mono text-accent-fg' : 'text-faint',
-            )}
-            title={call.target}
-          >
-            {call.target}
-          </span>
-        )}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {call.name === 'Bash' && (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => expandable && setOpen((v) => !v)}
+          disabled={!expandable}
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 text-left',
+            expandable ? 'transition-colors hover:bg-surface-2' : 'cursor-default',
+          )}
+        >
+          <Icon size={13} className={cn('shrink-0', call.risk === 'command' ? 'text-warning' : 'text-faint')} />
+          <span className="shrink-0 text-[12px] text-muted">{call.summary}</span>
+          {call.target && (
             <span
-              role="button"
-              tabIndex={0}
+              className={cn(
+                'min-w-0 flex-1 truncate text-[11.5px]',
+                isWeb ? 'font-mono text-accent-fg' : 'text-faint',
+              )}
+              title={call.target}
+            >
+              {call.target}
+            </span>
+          )}
+        </button>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {call.name === 'Bash' && (
+            <button
+              type="button"
               title="Focus terminal"
-              onClick={(e) => {
-                e.stopPropagation();
-                useLayoutStore.getState().setActiveTab('terminal');
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.stopPropagation();
-                  useLayoutStore.getState().setActiveTab('terminal');
-                }
-              }}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-fg"
+              onClick={() => useLayoutStore.getState().setActiveTab('terminal')}
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-faint transition-colors hover:bg-elevated hover:text-fg"
             >
               <Terminal size={11} />
               Terminal
-            </span>
+            </button>
           )}
           {call.risk === 'write' && (
-            <span
-              role="button"
-              tabIndex={0}
+            <button
+              type="button"
               title="Review change in Git"
-              onClick={(e) => {
-                e.stopPropagation();
-                openGit(call.target);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.stopPropagation();
-                  openGit(call.target);
-                }
-              }}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-fg"
+              onClick={() => openGit(call.target)}
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-faint transition-colors hover:bg-elevated hover:text-fg"
             >
               <GitBranch size={11} />
               Git
-            </span>
+            </button>
           )}
           <ToolStatus status={call.status} />
           {expandable && (
             <ChevronRight size={13} className={cn('text-faint transition-transform', open && 'rotate-90')} />
           )}
         </span>
-      </button>
+      </div>
       {open && expandable && (
-        <pre className="max-h-48 overflow-auto border-t border-line bg-[#0a0a0a] px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
+        <pre className="ml-6 max-h-48 overflow-auto rounded-md border border-line bg-[#0a0a0a] px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
           {call.detail}
         </pre>
       )}
     </div>
   );
+}
+
+/** A faint inline status marker (completion, checkpoint, plan transitions,
+ *  memory recall, rate-limit, errors) sourced from the activity feed. */
+function InlineMarkerRow({ item }: { item: AgentActivityItem }) {
+  const tone = item.tone ?? 'info';
+  return (
+    <div className="flex items-center gap-2 px-1 text-[11.5px]">
+      <MarkerIcon item={item} />
+      <span className={cn('truncate', tone === 'danger' ? 'text-danger' : 'text-faint')} title={item.detail}>
+        {item.label}
+      </span>
+    </div>
+  );
+}
+
+function MarkerIcon({ item }: { item: AgentActivityItem }) {
+  if (item.type === 'result') return <Check size={12} className="shrink-0 text-success" />;
+  if (item.type === 'error') return <CircleAlert size={12} className="shrink-0 text-danger" />;
+  const dot =
+    item.tone === 'success'
+      ? 'bg-success'
+      : item.tone === 'warning'
+        ? 'bg-warning'
+        : item.tone === 'danger'
+          ? 'bg-danger'
+          : 'bg-faint';
+  return <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dot)} />;
 }
 
 function ToolStatus({ status }: { status: AgentToolCall['status'] }) {
