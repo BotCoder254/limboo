@@ -52,9 +52,9 @@ export function registerAgentHandlers(agent: AgentManager): void {
     agent.getSnapshot(assertSessionId(sessionId)),
   );
 
-  handle<[string, string, AgentMode?], void>(
+  handle<[string, string, AgentMode?, string?], void>(
     IpcChannels.agentSend,
-    async (_event, sessionId, prompt, mode) => {
+    async (_event, sessionId, prompt, mode, clientMessageId) => {
       const id = assertSessionId(sessionId);
       if (typeof prompt !== 'string' || prompt.trim().length === 0) {
         throw new Error('Prompt must be a non-empty string');
@@ -62,7 +62,15 @@ export function registerAgentHandlers(agent: AgentManager): void {
       if (prompt.length > AGENT_LIMITS.promptMax) {
         throw new Error('Prompt is too long');
       }
-      await agent.send(id, prompt, assertMode(mode));
+      // Optional renderer-supplied id so the optimistic bubble and the persisted
+      // message share one id (dedup on echo). Validated: a short, plain string.
+      const clientId =
+        typeof clientMessageId === 'string' &&
+        clientMessageId.length > 0 &&
+        clientMessageId.length <= 64
+          ? clientMessageId
+          : undefined;
+      await agent.send(id, prompt, assertMode(mode), clientId);
     },
   );
 

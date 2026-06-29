@@ -63,6 +63,7 @@ import type { TerminalManager } from './TerminalManager';
 import type { SessionManager } from './SessionManager';
 import type { GitManager } from './GitManager';
 import type { MemoryManager } from './memory/MemoryManager';
+import { createMemoryMcpServer } from './memory/memoryTools';
 
 /* ------------------------------------------------------------------ */
 /* ESM loader — the SDK is ESM-only; main is a CJS bundle. Load it with */
@@ -578,7 +579,12 @@ export class AgentManager {
    * with transparent recovery on transient failures. A failed *request* never
    * marks the whole agent dead — only a genuinely degraded *capability* does.
    */
-  async send(sessionId: string, prompt: string, mode: AgentMode = 'implement'): Promise<void> {
+  async send(
+    sessionId: string,
+    prompt: string,
+    mode: AgentMode = 'implement',
+    clientMessageId?: string,
+  ): Promise<void> {
     if (this.runs.has(sessionId)) {
       throw new Error('The agent is already working on this session.');
     }
@@ -595,9 +601,11 @@ export class AgentManager {
       throw new Error('Open a workspace before talking to the agent.');
     }
 
-    // Record + persist the user turn immediately so it feels live.
+    // Record + persist the user turn immediately so it feels live. Reuse the
+    // renderer's optimistic id when supplied so the echoed event upserts in place
+    // (no duplicate bubble).
     const userMsg: ChatMessage = {
-      id: newId(),
+      id: clientMessageId ?? newId(),
       sessionId,
       role: 'user',
       text: prompt,
@@ -786,9 +794,19 @@ export class AgentManager {
     this.setRequest({ phase: 'connecting' });
 
     try {
-      const { query } = await loadSdk();
+      const sdk = await loadSdk();
+      const { query } = sdk;
       const memoryContext = this.memoryContextFor(sessionId, prompt);
       const options = this.buildOptions(sessionId, cwd, abort, agent, mode, memoryContext);
+      // Expose a live, read-only view of the Local Memory System so the agent can
+      // actually list/search the developer's memories on demand (the injected
+      // <project-memory> block is only a one-shot snapshot).
+      if (this.memory && this.settings.getAll().memory.enabled) {
+        options.mcpServers = {
+          ...(options.mcpServers ?? {}),
+          limboo_memory: createMemoryMcpServer(sdk, this.memory, this.workspace),
+        };
+      }
       this.diag('lifecycle', 'debug', 'Handshake — query opened', undefined, sessionId);
       const q = query({ prompt, options }) as unknown as AsyncIterable<SDKMessage> & {
         close?: () => void;
@@ -1286,6 +1304,12 @@ export class AgentManager {
           if (run) run.planCaptured = true;
         }
         return { behavior: 'deny', message: 'Plan captured for your review.', interrupt: true };
+      }
+
+      // Limboo's own memory tools are internal and strictly read-only — always
+      // allow them (even during a plan run) so reading memories never prompts.
+      if (toolName.startsWith('mcp__limboo_memory__')) {
+        return { behavior: 'allow' };
       }
 
       const risk = classifyTool(toolName);

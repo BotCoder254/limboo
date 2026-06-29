@@ -159,8 +159,13 @@ const agentApi = {
   getState: (): Promise<AgentState> => ipcRenderer.invoke(IpcChannels.agentGetState),
   getSnapshot: (sessionId: string): Promise<AgentSessionSnapshot> =>
     ipcRenderer.invoke(IpcChannels.agentGetSnapshot, sessionId),
-  send: (sessionId: string, prompt: string, mode?: AgentMode): Promise<void> =>
-    ipcRenderer.invoke(IpcChannels.agentSend, sessionId, prompt, mode),
+  send: (
+    sessionId: string,
+    prompt: string,
+    mode?: AgentMode,
+    clientMessageId?: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentSend, sessionId, prompt, mode, clientMessageId),
   stop: (sessionId: string): Promise<void> => ipcRenderer.invoke(IpcChannels.agentStop, sessionId),
   getPlan: (sessionId: string): Promise<SessionPlan | null> =>
     ipcRenderer.invoke(IpcChannels.agentGetPlan, sessionId),

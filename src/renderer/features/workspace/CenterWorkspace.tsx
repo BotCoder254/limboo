@@ -7,7 +7,7 @@
  * a welcome / empty state. The structure is final; later phases stream messages
  * into the scroll region.
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { CircleDot, GitBranch, Plus, Sparkles, TerminalSquare } from 'lucide-react';
 import { DiffStat, EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
@@ -31,11 +31,29 @@ export function CenterWorkspace() {
   const messageCount = useAgentStore((s) =>
     session ? (s.bySession[session.id]?.messages.length ?? 0) : 0,
   );
+  // The Composer floats over the bottom of the scroll column; publish its live
+  // height as `--composer-h` so the scroll area can reserve exactly that much
+  // space (+ a gap) and the streaming reply is never hidden behind it.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
 
   // Restore the transcript whenever the selected session changes.
   useEffect(() => {
     if (session) void loadSession(session.id);
   }, [session?.id, loadSession]);
+
+  useEffect(() => {
+    const composer = composerRef.current;
+    const container = containerRef.current;
+    if (!composer || !container) return;
+    const apply = () => {
+      container.style.setProperty('--composer-h', `${composer.offsetHeight}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(composer);
+    return () => ro.disconnect();
+  }, [hasWorkspace, session?.id]);
 
   // No workspace selected yet → the Recent-Workspaces launcher owns the column.
   if (!hasWorkspace) {
@@ -53,8 +71,11 @@ export function CenterWorkspace() {
       {/* The scroll region fills the column; the Composer floats over its bottom
           edge (no separator line, no full-width bar) with the conversation
           scrolling cleanly behind it. */}
-      <div className="relative min-h-0 flex-1">
-        <div className="h-full overflow-y-auto px-4 pb-32 pt-6">
+      <div ref={containerRef} className="relative min-h-0 flex-1">
+        <div
+          className="h-full overflow-y-auto px-4 pt-6"
+          style={{ paddingBottom: 'calc(var(--composer-h, 360px) + 1.5rem)' }}
+        >
           <div className="mx-auto flex h-full max-w-3xl flex-col">
             {session ? (
               messageCount > 0 ? (
@@ -93,10 +114,15 @@ export function CenterWorkspace() {
         </div>
 
         {/* Fade scrim: messages dissolve into the background as they scroll toward
-            the composer, so nothing is ever visible behind the (opaque) card. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-base via-base/85 to-transparent" />
+            the composer, so nothing is ever visible behind the (opaque) card.
+            Its height tracks the composer so the fade always covers exactly the
+            composer zone. */}
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-base via-base/85 to-transparent"
+          style={{ height: 'calc(var(--composer-h, 360px) + 1.5rem)' }}
+        />
 
-        <div className="absolute inset-x-0 bottom-0">
+        <div ref={composerRef} className="absolute inset-x-0 bottom-0">
           <Composer disabled={!session} />
         </div>
       </div>
