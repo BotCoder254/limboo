@@ -1,13 +1,14 @@
 /**
- * Inline permission approval — rendered directly in the conversation stream
- * instead of a modal. The Coding Agent Manager intercepts every gated tool call
+ * Inline permission approval — rendered directly inside the active assistant
+ * turn, immediately beneath the latest streamed content, instead of a modal or a
+ * detached card. The Coding Agent Manager intercepts every gated tool call
  * (writes, commands, anything outside the auto-approve policy) and bridges the
- * request into `useAgentStore.pending`; this card surfaces it at the bottom of
- * the active session's timeline. The run stays paused until the user allows or
- * denies, so generation literally cannot continue without a decision.
+ * request into `useAgentStore.pending`. The run stays paused until the user
+ * allows or denies, so generation literally cannot continue without a decision.
  *
- * Visual language matches `ToolCard` (6px radius, hairline border, surface) so it
- * reads as part of the stream, not a separate chrome layer.
+ * Visual language matches the de-carded inline tool rows: a faint lead icon + a
+ * one-line explanation + the action buttons, with only a subtle accent edge to
+ * signal the run is waiting on a decision — not a separate chrome layer.
  */
 import { useEffect } from 'react';
 import { FilePen, ShieldCheck, Terminal, type LucideIcon } from 'lucide-react';
@@ -42,59 +43,52 @@ export function InlineApproval({ request }: { request: PermissionRequest }) {
   }, [request.id, respond]);
 
   return (
-    <div className="ml-10 max-w-[85%] self-start overflow-hidden rounded-md border border-accent/40 bg-surface-2 animate-fade-in">
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <span
+    <div className="flex flex-col gap-2 border-l border-accent/50 pl-3 animate-fade-in">
+      <div className="flex items-center gap-2">
+        <Icon
+          size={13}
           className={cn(
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
-            request.risk === 'command' && 'bg-danger/15 text-danger',
-            request.risk === 'write' && 'bg-warning/15 text-warning',
-            request.risk === 'read' && 'bg-elevated text-muted',
+            'shrink-0',
+            request.risk === 'command' && 'text-danger',
+            request.risk === 'write' && 'text-warning',
+            request.risk === 'read' && 'text-muted',
           )}
-        >
-          <Icon size={14} />
+        />
+        <span className="text-[12px] font-medium text-fg">Permission required</span>
+        <span className="truncate text-[11px] text-faint">
+          {RISK_LABEL[request.risk]} · {request.tool}
         </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-[12px] font-semibold text-fg">Permission required</p>
-          <p className="truncate text-[11px] text-faint">
-            {RISK_LABEL[request.risk]} · {request.tool}
-          </p>
-        </div>
       </div>
 
-      <div className="px-3 py-2.5">
-        <p className="text-[12.5px] text-fg">{request.summary}</p>
-        {request.detail && (
-          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-base px-3 py-2 font-mono text-[11px] leading-relaxed text-muted">
-            {request.detail}
-          </pre>
-        )}
-      </div>
+      <p className="text-[12.5px] leading-relaxed text-fg">{request.summary}</p>
+      {request.detail && (
+        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-base px-3 py-2 font-mono text-[11px] leading-relaxed text-muted">
+          {request.detail}
+        </pre>
+      )}
 
-      <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2">
+      <div className="flex items-center gap-3 pt-0.5">
+        <button
+          type="button"
+          onClick={() => respond('allow')}
+          className="rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90"
+        >
+          Allow
+        </button>
+        <button
+          type="button"
+          onClick={() => respond('deny')}
+          className="rounded-md border border-line px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-elevated hover:text-fg"
+        >
+          Deny
+        </button>
         <button
           type="button"
           onClick={() => respond('allow', true)}
-          className="text-[11.5px] text-muted transition-colors hover:text-fg"
+          className="ml-auto text-[11.5px] text-faint transition-colors hover:text-fg"
         >
           Always allow this session
         </button>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => respond('deny')}
-            className="rounded-md border border-line px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-elevated hover:text-fg"
-          >
-            Deny
-          </button>
-          <button
-            type="button"
-            onClick={() => respond('allow')}
-            className="rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90"
-          >
-            Allow
-          </button>
-        </div>
       </div>
     </div>
   );

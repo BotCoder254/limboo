@@ -331,6 +331,10 @@ export class AgentManager {
       const block = this.memory.buildContextBlock(hits);
       if (block) {
         this.diag('request', 'debug', `Injected ${hits.length} memories`, undefined, sessionId);
+        // Surface an inline marker in the conversation so the recall is visible in
+        // the timeline, not just the diagnostics console.
+        const label = hits.length === 1 ? 'Recalled 1 memory' : `Recalled ${hits.length} memories`;
+        this.pushActivity(sessionId, 'status', label, undefined, 'info');
       }
       return block || undefined;
     } catch (err) {
