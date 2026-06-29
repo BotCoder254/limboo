@@ -1,0 +1,13 @@
+# Code owners for Limboo.
+# These owners are requested for review automatically when a matching path changes.
+# See https://docs.github.com/articles/about-code-owners
+
+# Default owner for everything in the repository.
+*       @BotCoder254
+
+# Documentation subsystem.
+/docs/  @BotCoder254
+*.md    @BotCoder254
+
+# Repository automation and policy.
+/.github/   @BotCoder254

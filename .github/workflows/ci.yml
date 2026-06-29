@@ -1,0 +1,45 @@
+name: CI
+
+# Lightweight verification matching the project's prescribed checks (CLAUDE.md §9):
+# lint, then the renderer Vite build. TypeScript is old (~4.5) and the renderer is
+# transpiled by esbuild via Vite, so `tsc --noEmit` is intentionally NOT used.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint and renderer build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install system build dependencies
+        # Native modules (better-sqlite3, node-pty) need a C/C++ toolchain to install.
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build renderer
+        run: npx vite build --config vite.renderer.config.mts

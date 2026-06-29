@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a new capability or improvement.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the use case first, the solution second. Proposals that fit the
+        process boundary and the local-first, dark-only, manager-per-responsibility
+        principles are easiest to accept. See ROADMAP.md and CONTRIBUTING.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do, and what makes it hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like Limboo to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, and why they fall short.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, links, or notes on how this fits the architecture.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and discussions for a duplicate.
+          required: true

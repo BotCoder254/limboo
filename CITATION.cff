@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use Limboo in your work, please cite it using these metadata."
+title: "Limboo"
+abstract: >-
+  Limboo is a local-first desktop application that acts as the operating system for
+  AI software development. It provides the environment around a connected coding
+  agent: workspaces, sessions, file watching, repository indexing, git operations,
+  terminal execution, memory, permissions, and context.
+type: software
+authors:
+  - given-names: "BotCoder254"
+    alias: "BotCoder254"
+repository-code: "https://github.com/BotCoder254/limboo"
+url: "https://github.com/BotCoder254/limboo"
+license: MIT
+version: "1.0.0"
+keywords:
+  - electron
+  - ai
+  - coding-agent
+  - local-first
+  - developer-tools
+  - typescript
+  - react
