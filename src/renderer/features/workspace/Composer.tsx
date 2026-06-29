@@ -1,8 +1,10 @@
 /**
- * The composer — a self-contained, floating interaction surface. It is NOT a
- * full-width bar welded to the bottom: it's a rounded card that floats over the
- * transparent page with a gap on every side and no separator line, so the
- * conversation scrolls cleanly behind it.
+ * The composer — a self-contained interaction surface docked at the bottom of
+ * the center column in normal flow. It is NOT a full-width bar welded to the
+ * window edge: it's a centered rounded card with a gap on every side and no
+ * separator line. Because it sits in flow (not absolutely positioned), the
+ * conversation scroll area above it shrinks to fit and messages are never
+ * hidden behind it.
  *
  * Wired to the Coding Agent Manager: submitting forwards the prompt to the active
  * session's Claude Code run. The footer reflects the live agent *lifecycle* and
@@ -87,8 +89,8 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   };
 
   return (
-    <div className="pointer-events-none px-4 pb-6">
-      <div className="pointer-events-auto mx-auto w-full max-w-3xl">
+    <div className="bg-base px-4 pb-6 pt-1">
+      <div className="mx-auto w-full max-w-3xl">
         <ComposerBanner />
         <div className="flex flex-col gap-1.5 rounded-md border border-line bg-surface-2 px-3 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors focus-within:border-line-strong">
           <div className="flex items-end gap-2">

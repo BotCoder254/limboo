@@ -1,22 +1,24 @@
 /**
  * Center column — the largest region. A thin header reflecting the active
- * session, a scrolling conversation area, and the Composer pinned at the bottom
+ * session, a scrolling conversation area, and the Composer docked at the bottom
  * of THIS column (it does not span the whole window).
  *
- * Phase 1 has no agent and no mock conversation, so the conversation area shows
- * a welcome / empty state. The structure is final; later phases stream messages
- * into the scroll region.
+ * Layout is a plain 3-row flex column: header (shrink-0), scroll region
+ * (flex-1, min-h-0, the ONLY scroller), and the Composer footer (shrink-0, in
+ * normal flow). Because the composer occupies real layout space, the scroll
+ * area's height always excludes it — streamed messages can never be hidden
+ * behind the composer. This is the standard chat-UI pattern (ChatGPT/Claude);
+ * it replaces the previous floating-absolute composer + `--composer-h` reserve
+ * hack that raced the real height and overlapped tall replies.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { CircleDot, GitBranch, Plus, Sparkles, TerminalSquare } from 'lucide-react';
 import { DiffStat, EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Composer } from './Composer';
 import { ConversationView } from './ConversationView';
-import { WorkspaceLauncher } from './WorkspaceLauncher';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
-import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
@@ -26,105 +28,65 @@ export function CenterWorkspace() {
     s.sessions.find((item) => item.id === s.selectedId) ?? null,
   );
   const createSession = useSessionStore((s) => s.createSession);
-  const hasWorkspace = useWorkspaceStore((s) => s.activeId !== null);
   const loadSession = useAgentStore((s) => s.loadSession);
   const messageCount = useAgentStore((s) =>
     session ? (s.bySession[session.id]?.messages.length ?? 0) : 0,
   );
-  // The Composer floats over the bottom of the scroll column; publish its live
-  // height as `--composer-h` so the scroll area can reserve exactly that much
-  // space (+ a gap) and the streaming reply is never hidden behind it.
-  const containerRef = useRef<HTMLDivElement>(null);
-  const composerRef = useRef<HTMLDivElement>(null);
 
   // Restore the transcript whenever the selected session changes.
   useEffect(() => {
     if (session) void loadSession(session.id);
   }, [session?.id, loadSession]);
 
-  useEffect(() => {
-    const composer = composerRef.current;
-    const container = containerRef.current;
-    if (!composer || !container) return;
-    const apply = () => {
-      container.style.setProperty('--composer-h', `${composer.offsetHeight}px`);
-    };
-    apply();
-    const ro = new ResizeObserver(apply);
-    ro.observe(composer);
-    return () => ro.disconnect();
-  }, [hasWorkspace, session?.id]);
-
-  // No workspace selected yet → the Recent-Workspaces launcher owns the column.
-  if (!hasWorkspace) {
-    return (
-      <main className="flex h-full min-h-0 flex-col bg-base px-4">
-        <WorkspaceLauncher />
-      </main>
-    );
-  }
-
   return (
     <main className="flex h-full min-h-0 flex-col bg-base">
       {session && <SessionHeader sessionId={session.id} title={session.title} branch={session.branch} adds={session.adds} dels={session.dels} />}
 
-      {/* The scroll region fills the column; the Composer floats over its bottom
-          edge (no separator line, no full-width bar) with the conversation
-          scrolling cleanly behind it. */}
-      <div ref={containerRef} className="relative min-h-0 flex-1">
-        <div
-          className="h-full overflow-y-auto px-4 pt-6"
-          style={{ paddingBottom: 'calc(var(--composer-h, 360px) + 1.5rem)' }}
-        >
-          <div className="mx-auto flex h-full max-w-3xl flex-col">
-            {session ? (
-              messageCount > 0 ? (
-                <ConversationView sessionId={session.id} />
-              ) : (
-                <EmptyState
-                  className="m-auto"
-                  icon={Sparkles}
-                  title="Start the conversation"
-                  description="Describe what you want to build. Limboo coordinates the repository, files, terminal, and tasks while Claude Code does the work."
-                />
-              )
+      {/* Scroll region — the single scroller. Messages live entirely above the
+          docked composer below, so they are never overlapped or clipped. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-6">
+        <div className="mx-auto flex min-h-full max-w-3xl flex-col">
+          {session ? (
+            messageCount > 0 ? (
+              <ConversationView sessionId={session.id} />
             ) : (
-              <div className="m-auto flex flex-col items-center gap-4 text-center">
-                <Logo size={40} />
-                <div className="flex flex-col gap-1">
-                  <span className="text-[15px] font-semibold tracking-tight text-fg">
-                    Welcome to Limboo
-                  </span>
-                  <span className="max-w-md text-[13px] leading-relaxed text-muted">
-                    The local-first workspace for orchestrating coding agents. Create
-                    a session to begin — every task lives inside one.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => createSession()}
-                  className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90"
-                >
-                  <Plus size={13} />
-                  New session
-                </button>
+              <EmptyState
+                className="m-auto"
+                icon={Sparkles}
+                title="Start the conversation"
+                description="Describe what you want to build. Limboo coordinates the repository, files, terminal, and tasks while Claude Code does the work."
+              />
+            )
+          ) : (
+            <div className="m-auto flex flex-col items-center gap-4 text-center">
+              <Logo size={40} />
+              <div className="flex flex-col gap-1">
+                <span className="text-[15px] font-semibold tracking-tight text-fg">
+                  Welcome to Limboo
+                </span>
+                <span className="max-w-md text-[13px] leading-relaxed text-muted">
+                  The local-first workspace for orchestrating coding agents. Create
+                  a session to begin — every task lives inside one.
+                </span>
               </div>
-            )}
-          </div>
+              <button
+                type="button"
+                onClick={() => createSession()}
+                className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90"
+              >
+                <Plus size={13} />
+                New session
+              </button>
+            </div>
+          )}
         </div>
+      </div>
 
-        {/* Fade scrim: messages dissolve into the background as they scroll toward
-            the composer, so nothing is ever visible behind the (opaque) card.
-            Its height tracks the composer so the fade always covers exactly the
-            composer zone. */}
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-base via-base/85 to-transparent"
-          style={{ height: 'calc(var(--composer-h, 360px) + 1.5rem)' }}
-        />
-
-        <div ref={composerRef} className="absolute inset-x-0 bottom-0">
-          <Composer disabled={!session} />
-        </div>
+      {/* Composer docked in normal flow — a soft top fade gives a clean scroll
+          edge without floating over (and hiding) the conversation. */}
+      <div className="shrink-0">
+        <div className="pointer-events-none h-3 bg-gradient-to-t from-base to-transparent" />
+        <Composer disabled={!session} />
       </div>
     </main>
   );

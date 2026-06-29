@@ -80,9 +80,8 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
     const el = findScrollParent(bottomRef.current);
     if (!el) return;
     const onScroll = () => {
-      // The scroll area reserves the composer's height as bottom padding, so the
-      // resting "at bottom" position is only ~16px from the true scroll bottom;
-      // a modest threshold keeps auto-follow sticky through fast streaming.
+      // A modest threshold keeps auto-follow sticky through fast streaming while
+      // still releasing it the moment the user scrolls up to read.
       stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     };
     el.addEventListener('scroll', onScroll, { passive: true });
@@ -114,9 +113,10 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
         ),
       )}
       {approval && <InlineApproval request={approval} />}
-      {/* Scroll anchor — its scroll-margin keeps the last line above the floating
-          composer when auto-scrolling (honored by scrollIntoView). */}
-      <div ref={bottomRef} style={{ scrollMarginBottom: 'calc(var(--composer-h, 360px) + 1.5rem)' }} />
+      {/* Scroll anchor — a small bottom margin keeps the last line off the very
+          edge when auto-scrolling (honored by scrollIntoView). The composer is
+          docked in flow below the scroller, so no large reserve is needed. */}
+      <div ref={bottomRef} style={{ scrollMarginBottom: '1rem' }} />
     </div>
   );
 }

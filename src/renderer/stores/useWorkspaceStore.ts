@@ -8,7 +8,7 @@
  * the UI still renders.
  */
 import { create } from 'zustand';
-import type { Workspace, WorkspaceConfig, DeepPartial } from '@shared/types';
+import type { Workspace, WorkspaceConfig, WorkspaceStats, DeepPartial } from '@shared/types';
 
 interface WorkspaceState {
   workspaces: Workspace[];
@@ -16,6 +16,9 @@ interface WorkspaceState {
   hydrated: boolean;
   /** True while a native directory picker is open (mirrors the main-process guard). */
   picking: boolean;
+  /** Lazily-loaded per-workspace statistics, memoized by id (each entry is one
+   *  bounded filesystem walk, so we fetch on demand — not eagerly for every card). */
+  statsById: Record<string, WorkspaceStats>;
   hydrate: () => Promise<void>;
   pickDirectory: () => Promise<string | null>;
   open: (path: string) => Promise<Workspace | null>;
@@ -26,6 +29,8 @@ interface WorkspaceState {
   toggleFavorite: (id: string) => Promise<void>;
   updateConfig: (id: string, patch: DeepPartial<WorkspaceConfig>) => Promise<void>;
   rescan: (id: string) => Promise<void>;
+  /** Fetch + cache stats for one workspace (no-op if already loaded). */
+  loadStats: (id: string) => Promise<void>;
 }
 
 /** Resolve the workspace bridge, warning (dev) when it is unexpectedly absent so a
@@ -49,6 +54,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   activeId: null,
   hydrated: false,
   picking: false,
+  statsById: {},
 
   hydrate: async () => {
     if (get().hydrated) return;
@@ -123,7 +129,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     await api.remove(id);
     set((s) => {
       const workspaces = s.workspaces.filter((w) => w.id !== id);
-      return { workspaces, activeId: s.activeId === id ? null : s.activeId };
+      const statsById = { ...s.statsById };
+      delete statsById[id];
+      return { workspaces, statsById, activeId: s.activeId === id ? null : s.activeId };
     });
   },
 
@@ -145,6 +153,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const api = workspaceApi();
     if (!api) return;
     const ws = await api.rescan(id);
-    set((s) => ({ workspaces: mergeWorkspace(s.workspaces, ws) }));
+    // A rescan re-walks the project, so drop the cached stats and let the next
+    // view re-request fresh numbers.
+    set((s) => {
+      const statsById = { ...s.statsById };
+      delete statsById[id];
+      return { workspaces: mergeWorkspace(s.workspaces, ws), statsById };
+    });
+  },
+
+  loadStats: async (id) => {
+    if (get().statsById[id]) return;
+    const api = workspaceApi();
+    if (!api) return;
+    const stats = await api.getStats(id);
+    if (!stats) return;
+    set((s) => ({ statsById: { ...s.statsById, [id]: stats } }));
   },
 }));

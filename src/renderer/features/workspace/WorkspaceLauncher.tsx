@@ -1,26 +1,29 @@
 /**
- * Recent-Workspaces launcher, shown in the center column when no workspace is
- * active. Rich cards (project icon, name, path, language/framework badges, git
- * branch, last-opened time, favorite pin, rescan) with search and favorites-first
- * sort. Workspaces are added via the native directory picker OR by dropping a
- * folder onto the drop zone (which doubles as the modern empty state).
+ * Recent-Workspaces launcher body. Rich cards (project icon, name, path,
+ * language/framework badges, git branch, last-opened time, live statistics,
+ * favorite pin, rescan) with search and favorites-first sort. Workspaces are
+ * added via the native directory picker OR by dropping a folder onto the drop
+ * zone (which doubles as the modern empty state).
+ *
+ * Rendered full-screen by `WorkspaceSelection` when no workspace is active, so
+ * it owns the project-launcher experience that gates the rest of the shell.
  */
-import { useMemo, useState } from 'react';
-import { GitBranch, Pin, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { FileText, GitBranch, GitCommitHorizontal, HardDrive, Pin, RefreshCw, Search, Trash2 } from 'lucide-react';
+import type { Workspace } from '@shared/types';
 import { Badge, EmptyState, IconButton } from '@/renderer/components/ui';
-import { relativeTime } from '@/renderer/lib/format';
+import { formatBytes, formatCount, relativeTime } from '@/renderer/lib/format';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { WorkspaceIconBadge } from './WorkspaceIconBadge';
 import { WorkspaceDropZone } from './WorkspaceDropZone';
+import { WorkspaceRemoveDialog } from './WorkspaceRemoveDialog';
 
 export function WorkspaceLauncher() {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
-  const switchTo = useWorkspaceStore((s) => s.switchTo);
-  const toggleFavorite = useWorkspaceStore((s) => s.toggleFavorite);
-  const remove = useWorkspaceStore((s) => s.remove);
-  const rescan = useWorkspaceStore((s) => s.rescan);
 
   const [query, setQuery] = useState('');
+  // Workspace pending safe-delete confirmation (null = dialog closed).
+  const [pendingRemove, setPendingRemove] = useState<Workspace | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -77,71 +80,113 @@ export function WorkspaceLauncher() {
             ) : (
               <ul className="flex flex-col gap-2">
                 {filtered.map((ws) => (
-                  <li key={ws.id}>
-                    <div className="group flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2.5 transition-colors hover:border-line-strong">
-                      <button
-                        type="button"
-                        onClick={() => switchTo(ws.id)}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                      >
-                        <WorkspaceIconBadge icon={ws.icon} size={36} />
-                        <div className="flex min-w-0 flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-[13px] font-medium text-fg">
-                              {ws.name}
-                            </span>
-                            {ws.metadata.languages.slice(0, 2).map((lang) => (
-                              <Badge key={lang} tone="neutral">
-                                {lang}
-                              </Badge>
-                            ))}
-                          </div>
-                          <div className="flex items-center gap-2 text-[11px] text-faint">
-                            <span className="truncate">{ws.path}</span>
-                            {ws.metadata.hasGit && ws.metadata.branch && (
-                              <span className="flex shrink-0 items-center gap-1">
-                                <GitBranch size={10} />
-                                {ws.metadata.branch}
-                              </span>
-                            )}
-                            <span className="shrink-0">· {relativeTime(ws.lastOpenedAt)}</span>
-                          </div>
-                        </div>
-                      </button>
-                      <div className="flex shrink-0 items-center gap-0.5">
-                        <IconButton
-                          size="sm"
-                          label="Rescan workspace"
-                          className="opacity-0 transition-opacity group-hover:opacity-100"
-                          onClick={() => rescan(ws.id)}
-                        >
-                          <RefreshCw size={13} />
-                        </IconButton>
-                        <IconButton
-                          size="sm"
-                          label={ws.favorite ? 'Unpin' : 'Pin to top'}
-                          active={ws.favorite}
-                          onClick={() => toggleFavorite(ws.id)}
-                        >
-                          <Pin size={13} className={ws.favorite ? 'fill-current' : undefined} />
-                        </IconButton>
-                        <IconButton
-                          size="sm"
-                          label="Remove from list"
-                          className="opacity-0 transition-opacity group-hover:opacity-100"
-                          onClick={() => remove(ws.id)}
-                        >
-                          <Trash2 size={13} />
-                        </IconButton>
-                      </div>
-                    </div>
-                  </li>
+                  <WorkspaceCard key={ws.id} ws={ws} onRequestRemove={() => setPendingRemove(ws)} />
                 ))}
               </ul>
             )}
           </div>
         </>
       )}
+
+      {pendingRemove && (
+        <WorkspaceRemoveDialog
+          workspace={pendingRemove}
+          onClose={() => setPendingRemove(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/** One workspace row. Lazily loads + shows project statistics on mount. */
+function WorkspaceCard({ ws, onRequestRemove }: { ws: Workspace; onRequestRemove: () => void }) {
+  const switchTo = useWorkspaceStore((s) => s.switchTo);
+  const toggleFavorite = useWorkspaceStore((s) => s.toggleFavorite);
+  const rescan = useWorkspaceStore((s) => s.rescan);
+  const loadStats = useWorkspaceStore((s) => s.loadStats);
+  const stats = useWorkspaceStore((s) => s.statsById[ws.id]);
+
+  // Fetch stats once when the card appears (the store memoizes per id).
+  useEffect(() => {
+    void loadStats(ws.id);
+  }, [ws.id, loadStats]);
+
+  return (
+    <li>
+      <div className="group flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2.5 transition-colors hover:border-line-strong">
+        <button
+          type="button"
+          onClick={() => switchTo(ws.id)}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <WorkspaceIconBadge icon={ws.icon} size={36} />
+          <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-[13px] font-medium text-fg">{ws.name}</span>
+              {ws.metadata.languages.slice(0, 2).map((lang) => (
+                <Badge key={lang} tone="neutral">
+                  {lang}
+                </Badge>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-faint">
+              <span className="truncate">{ws.path}</span>
+              {ws.metadata.hasGit && ws.metadata.branch && (
+                <span className="flex shrink-0 items-center gap-1">
+                  <GitBranch size={10} />
+                  {ws.metadata.branch}
+                </span>
+              )}
+              <span className="shrink-0">· {relativeTime(ws.lastOpenedAt)}</span>
+              {stats && (
+                <span className="flex shrink-0 items-center gap-2 font-mono text-faint">
+                  <span className="text-line-strong">·</span>
+                  <span className="flex items-center gap-1" title="Files">
+                    <FileText size={10} />
+                    {formatCount(stats.fileCount)}
+                  </span>
+                  <span className="flex items-center gap-1" title="Size on disk">
+                    <HardDrive size={10} />
+                    {formatBytes(stats.sizeBytes)}
+                  </span>
+                  {stats.commitCount != null && (
+                    <span className="flex items-center gap-1" title="Commits">
+                      <GitCommitHorizontal size={10} />
+                      {formatCount(stats.commitCount)}
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton
+            size="sm"
+            label="Rescan workspace"
+            className="opacity-0 transition-opacity group-hover:opacity-100"
+            onClick={() => rescan(ws.id)}
+          >
+            <RefreshCw size={13} />
+          </IconButton>
+          <IconButton
+            size="sm"
+            label={ws.favorite ? 'Unpin' : 'Pin to top'}
+            active={ws.favorite}
+            onClick={() => toggleFavorite(ws.id)}
+          >
+            <Pin size={13} className={ws.favorite ? 'fill-current' : undefined} />
+          </IconButton>
+          <IconButton
+            size="sm"
+            label="Remove from list"
+            className="opacity-0 transition-opacity group-hover:opacity-100"
+            onClick={onRequestRemove}
+          >
+            <Trash2 size={13} />
+          </IconButton>
+        </div>
+      </div>
+    </li>
   );
 }

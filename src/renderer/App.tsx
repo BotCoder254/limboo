@@ -5,6 +5,7 @@
  */
 import { useEffect } from 'react';
 import { AppShell } from '@/renderer/app/AppShell';
+import { WorkspaceSelection } from '@/renderer/features/workspace/WorkspaceSelection';
 import { CommandPalette } from '@/renderer/features/command-palette/CommandPalette';
 import { SettingsModal } from '@/renderer/features/settings/SettingsModal';
 import { Toaster } from '@/renderer/components/feedback/Toaster';
@@ -23,6 +24,13 @@ export function App() {
   useKeyboardShortcuts();
   useCommandBridge();
   usePreventFileDrop();
+
+  // Gate the shell on an active workspace: until one is selected, the full-screen
+  // Workspace Selection screen owns the window and every workspace-dependent panel
+  // stays out of reach. `hydrated` avoids a flash of the selection screen before
+  // the persisted active workspace has loaded.
+  const hydrated = useWorkspaceStore((s) => s.hydrated);
+  const hasWorkspace = useWorkspaceStore((s) => s.activeId !== null);
 
   // Load registered workspaces + sessions + connect to the coding agent once the
   // shell is up. Workspaces hydrate first so the session list can scope to the
@@ -46,7 +54,7 @@ export function App() {
 
   return (
     <>
-      <AppShell />
+      {!hydrated ? null : hasWorkspace ? <AppShell /> : <WorkspaceSelection />}
       <CommandPalette />
       <SettingsModal />
       <Toaster />
