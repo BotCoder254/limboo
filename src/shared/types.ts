@@ -33,7 +33,7 @@ export type UiDensity = 'comfortable' | 'compact';
 /**
  * The right activity drawer tabs. Mirrors the rail in the UI.
  */
-export type ActivityTab = 'files' | 'changes' | 'tasks' | 'activity' | 'console';
+export type ActivityTab = 'files' | 'changes' | 'tasks' | 'activity' | 'console' | 'terminal';
 
 /**
  * Persistent, user-facing preferences. NOTE: there is intentionally NO light
@@ -59,6 +59,10 @@ export interface AppSettings {
     activeTab: ActivityTab | null;
     /** Whether the left sessions sidebar is collapsed to a thin rail. */
     sessionsCollapsed: boolean;
+    /** Whether the integrated terminal panel is open. */
+    terminalOpen: boolean;
+    /** Integrated terminal panel width in px. */
+    terminalWidth: number;
   };
   behavior: {
     /** Keep running in the tray when the last window closes. */
@@ -139,6 +143,31 @@ export interface AppSettings {
       highlightRisk: boolean;
       /** Archive a plan once its implementation completes. */
       archiveCompleted: boolean;
+    };
+    /**
+     * Integrated-terminal preferences. Appearance + behavior knobs for the
+     * workspace terminal panel; the per-workspace shell + command-approval policy
+     * live on {@link WorkspaceConfig} instead.
+     */
+    terminal: {
+      /** Shell binary override (empty = per-workspace / OS default). */
+      shell: string;
+      /** Terminal font family (empty = the app mono token). */
+      fontFamily: string;
+      /** Terminal font size in px. */
+      fontSize: number;
+      /** Cursor shape. */
+      cursorStyle: 'block' | 'bar' | 'underline';
+      /** Blink the cursor. */
+      cursorBlink: boolean;
+      /** Scrollback buffer length in lines. */
+      scrollback: number;
+      /** Copy the selection to the clipboard automatically on mouse-up. */
+      copyOnSelect: boolean;
+      /** Ask for confirmation before killing a terminal with a live process. */
+      confirmKill: boolean;
+      /** Mirror agent-run shell commands into the integrated terminal. */
+      mirrorAgentCommands: boolean;
     };
   };
 }
@@ -433,6 +462,85 @@ export interface FileHistoryEntry {
   action: 'read' | 'index' | 'change';
   /** Epoch ms. */
   at: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Integrated Terminal — workspace-scoped PTY sessions                 */
+/* ------------------------------------------------------------------ */
+
+/** Lifecycle state of a managed terminal's underlying PTY. */
+export type TerminalStatus = 'running' | 'exited' | 'crashed';
+
+/** Who opened a terminal — a user action or the coding agent. */
+export type TerminalOrigin = 'user' | 'agent';
+
+/**
+ * A managed terminal session. The PTY itself lives in the main process
+ * (node-pty); this is the metadata the renderer renders and persists.
+ */
+export interface TerminalSession {
+  id: string;
+  workspaceId: string;
+  /** User-facing label (editable). */
+  title: string;
+  /** Working directory the PTY was spawned in (always inside the workspace root). */
+  cwd: string;
+  /** Resolved shell binary path (e.g. /bin/zsh). */
+  shell: string;
+  status: TerminalStatus;
+  origin: TerminalOrigin;
+  createdAt: number;
+  /** Exit code, once the PTY has exited. */
+  exitCode?: number;
+}
+
+/** A chunk of raw PTY output (VT byte stream) for one terminal. */
+export interface TerminalChunk {
+  terminalId: string;
+  data: string;
+}
+
+/** A terminal's PTY exit notification. */
+export interface TerminalExit {
+  terminalId: string;
+  exitCode: number;
+  signal?: number;
+}
+
+/** Options accepted when creating a terminal. */
+export interface TerminalCreateOptions {
+  /** Optional label; a default ("Terminal N") is assigned when omitted. */
+  title?: string;
+  /** Initial PTY size. */
+  cols?: number;
+  rows?: number;
+  /** Marks an agent-initiated terminal (used for the mirror flow). */
+  origin?: TerminalOrigin;
+}
+
+/** Status of a mirrored agent command record. */
+export type TerminalCommandStatus = 'running' | 'done' | 'error';
+
+/**
+ * A coding-agent shell command mirrored into the integrated terminal. The Agent
+ * SDK does not stream tool stdout, so the command is echoed on `tool-start`
+ * (status `running`) and completed on `tool-end` (output + exit). This is a
+ * record surfaced in the terminal, not a live PTY stream.
+ */
+export interface TerminalCommandRecord {
+  terminalId: string;
+  /** The agent session that initiated the command. */
+  sessionId: string;
+  /** The agent tool-call id this record mirrors. */
+  callId: string;
+  /** The command text the agent ran. */
+  command: string;
+  /** Final command output (filled on completion); omitted while running. */
+  output?: string;
+  status: TerminalCommandStatus;
+  exitCode?: number;
+  startedAt: number;
+  endedAt?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -751,4 +859,6 @@ export type CommandId =
   | 'agent.newSession'
   | 'agent.planMode'
   | 'agent.implementMode'
-  | 'plan.approve';
+  | 'plan.approve'
+  | 'terminal.toggle'
+  | 'terminal.new';

@@ -7,7 +7,6 @@ import { useEffect } from 'react';
 import { AppShell } from '@/renderer/app/AppShell';
 import { CommandPalette } from '@/renderer/features/command-palette/CommandPalette';
 import { SettingsModal } from '@/renderer/features/settings/SettingsModal';
-import { ApprovalModal } from '@/renderer/features/agent/ApprovalModal';
 import { Toaster } from '@/renderer/components/feedback/Toaster';
 import { useKeyboardShortcuts } from '@/renderer/hooks/useKeyboardShortcuts';
 import { useCommandBridge } from '@/renderer/hooks/useCommandBridge';
@@ -16,6 +15,7 @@ import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
+import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -34,6 +34,8 @@ export function App() {
     // Subscribe to live index progress + directory-tree pushes from the File
     // System Layer (main auto-indexes the active workspace on open/switch).
     useFileSystemStore.getState().hydrate();
+    // Subscribe to terminal lifecycle + agent-command-mirror pushes.
+    useTerminalStore.getState().hydrate();
   }, []);
 
   return (
@@ -41,7 +43,6 @@ export function App() {
       <AppShell />
       <CommandPalette />
       <SettingsModal />
-      <ApprovalModal />
       <Toaster />
     </>
   );

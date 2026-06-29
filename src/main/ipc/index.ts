@@ -7,6 +7,7 @@ import type { WorkspaceManager } from '../managers/WorkspaceManager';
 import type { SessionManager } from '../managers/SessionManager';
 import type { AgentManager } from '../managers/AgentManager';
 import type { FileSystemManager } from '../managers/FileSystemManager';
+import type { TerminalManager } from '../managers/TerminalManager';
 import { registerWindowHandlers } from './windowHandlers';
 import { registerSettingsHandlers } from './settingsHandlers';
 import { registerSystemHandlers } from './systemHandlers';
@@ -14,6 +15,7 @@ import { registerWorkspaceHandlers } from './workspaceHandlers';
 import { registerSessionHandlers } from './sessionHandlers';
 import { registerAgentHandlers } from './agentHandlers';
 import { registerFsHandlers } from './fsHandlers';
+import { registerTerminalHandlers } from './terminalHandlers';
 
 export interface IpcDeps {
   settings: SettingsManager;
@@ -22,6 +24,7 @@ export interface IpcDeps {
   session: SessionManager;
   agent: AgentManager;
   fs: FileSystemManager;
+  terminal: TerminalManager;
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -32,4 +35,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerSessionHandlers(deps.session);
   registerAgentHandlers(deps.agent);
   registerFsHandlers(deps.fs);
+  registerTerminalHandlers(deps.terminal);
 }

@@ -87,10 +87,10 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   };
 
   return (
-    <div className="pointer-events-none px-4 pb-4">
+    <div className="pointer-events-none px-4 pb-6">
       <div className="pointer-events-auto mx-auto w-full max-w-3xl">
         <ComposerBanner />
-        <div className="flex flex-col gap-1.5 rounded-2xl border border-line bg-surface-2/95 px-3 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] backdrop-blur-sm transition-colors focus-within:border-line-strong">
+        <div className="flex flex-col gap-1.5 rounded-md border border-line bg-surface-2 px-3 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors focus-within:border-line-strong">
           <div className="flex items-end gap-2">
             <button
               type="button"
@@ -118,7 +118,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
               <button
                 type="button"
                 onClick={() => sessionId && stop(sessionId)}
-                className="mb-0.5 flex h-7 items-center gap-1.5 rounded-lg bg-surface px-2.5 text-[12px] font-semibold text-fg transition-colors hover:bg-elevated"
+                className="mb-0.5 flex h-7 items-center gap-1.5 rounded-md bg-surface px-2.5 text-[12px] font-semibold text-fg transition-colors hover:bg-elevated"
               >
                 <CircleStop size={14} />
                 Stop
@@ -129,7 +129,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                 onClick={submit}
                 disabled={blocked || value.trim().length === 0}
                 className={cn(
-                  'mb-0.5 flex h-7 w-7 items-center justify-center rounded-lg transition-opacity',
+                  'mb-0.5 flex h-7 w-7 items-center justify-center rounded-md transition-opacity',
                   blocked || value.trim().length === 0
                     ? 'cursor-not-allowed bg-surface text-faint'
                     : 'bg-accent text-base hover:opacity-90',

@@ -67,7 +67,7 @@ export function CommandPalette() {
       onMouseDown={close}
     >
       <div
-        className="animate-pop-in flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-line-strong bg-elevated shadow-2xl"
+        className="animate-pop-in flex w-full max-w-xl flex-col overflow-hidden rounded-md border border-line-strong bg-elevated shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-line px-3">

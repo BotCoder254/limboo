@@ -75,6 +75,16 @@ export const IpcChannels = {
   fsGetTree: 'fs:getTree',
   fsReadFile: 'fs:readFile',
   fsGetHistory: 'fs:getHistory',
+  fsReveal: 'fs:reveal',
+
+  // Integrated Terminal — workspace-scoped PTY sessions (node-pty in main).
+  terminalCreate: 'terminal:create',
+  terminalList: 'terminal:list',
+  terminalWrite: 'terminal:write',
+  terminalResize: 'terminal:resize',
+  terminalKill: 'terminal:kill',
+  terminalRename: 'terminal:rename',
+  terminalClear: 'terminal:clear',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
@@ -106,6 +116,14 @@ export const IpcEvents = {
   fsIndexProgress: 'fs:index-progress',
   /** The active workspace's directory tree changed (watcher or reindex). */
   fsTreeChanged: 'fs:tree-changed',
+  /** A chunk of PTY output for a terminal (stdout/stderr, raw VT bytes). */
+  terminalData: 'terminal:data',
+  /** A terminal's PTY exited (with code / signal). */
+  terminalExit: 'terminal:exit',
+  /** The set of terminals for a workspace changed (created / renamed / killed). */
+  terminalsUpdated: 'terminal:updated',
+  /** An agent-run shell command mirrored into the integrated terminal. */
+  terminalCommand: 'terminal:command',
 } as const;
 
 export type IpcEvent = (typeof IpcEvents)[keyof typeof IpcEvents];

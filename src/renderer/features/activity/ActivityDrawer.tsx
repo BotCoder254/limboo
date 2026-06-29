@@ -7,7 +7,7 @@
  * circular progress ring that fills while the File System Layer rebuilds the
  * workspace's directory tree.
  */
-import { RefreshCw } from 'lucide-react';
+import { FolderOpen, RefreshCw } from 'lucide-react';
 import type { ActivityTab } from '@shared/types';
 import { CircularProgress, IconButton } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
@@ -17,9 +17,14 @@ import { runCommand } from '@/renderer/lib/commands';
 import { ACTIVITY_TABS } from './tabs';
 import { ActivityFeedPanel, ChangesPanel, FilesPanel, TasksPanel } from './panels';
 import { AgentConsolePanel } from './AgentConsolePanel';
+import { TerminalPanel } from '@/renderer/features/terminal/TerminalPanel';
 
 export function ActivityDrawer({ tab }: { tab: ActivityTab }) {
   const meta = ACTIVITY_TABS.find((t) => t.id === tab) ?? ACTIVITY_TABS[0];
+
+  // The terminal owns its own header (tab strip + new/close), so it renders
+  // full-bleed without the drawer's title bar or content padding.
+  if (tab === 'terminal') return <TerminalPanel />;
 
   return (
     <section className="flex h-full min-h-0 flex-col border-l border-line bg-surface">
@@ -48,6 +53,15 @@ function FilesHeaderActions() {
   return (
     <div className="ml-auto flex items-center gap-1.5">
       {indexing && <CircularProgress value={progress?.percent ?? 0} size={14} />}
+      <IconButton
+        label="Reveal in file explorer"
+        size="sm"
+        disabled={!activeId}
+        onClick={() => activeId && void window.limboo?.fs?.reveal(activeId)}
+        className="disabled:pointer-events-none disabled:opacity-50"
+      >
+        <FolderOpen size={13} />
+      </IconButton>
       <IconButton
         label={indexing ? 'Reindexing…' : 'Reindex workspace'}
         size="sm"

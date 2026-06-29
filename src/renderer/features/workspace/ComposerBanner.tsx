@@ -4,7 +4,7 @@
  * limits, expired auth, a pending tool approval, or a context-window warning.
  * Driven by the agent's lifecycle + last-request outcome, never by scraping logs.
  */
-import { AlertTriangle, ClipboardCheck, KeyRound, Loader2, ShieldQuestion, TimerReset } from 'lucide-react';
+import { AlertTriangle, ClipboardCheck, KeyRound, Loader2, TimerReset } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/renderer/lib/cn';
 import { runCommand } from '@/renderer/lib/commands';
@@ -65,11 +65,6 @@ export function ComposerBanner() {
     body =
       'Your Claude Code authentication expired. Open a terminal, run `claude`, and sign in — Limboo reuses that login. Then retry.';
     action = { label: 'Re-check sign-in', onClick: retryAuth };
-  } else if (lifecycle === 'awaiting-permission') {
-    tone = 'accent';
-    Icon = ShieldQuestion;
-    title = 'Paused for your approval';
-    body = 'The agent requested a tool that needs your decision. Generation continues once you approve or reject it.';
   } else if (lifecycle === 'reconnecting') {
     tone = 'warning';
     Icon = Loader2;
@@ -94,7 +89,7 @@ export function ComposerBanner() {
   return (
     <div
       className={cn(
-        'mb-2 flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-[12px] animate-fade-in',
+        'mb-2 flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[12px] animate-fade-in',
         t.border,
         t.bg,
       )}

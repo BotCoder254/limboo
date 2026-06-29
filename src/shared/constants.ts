@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -40,6 +40,24 @@ export const AGENT_CONNECTION_LIMITS = {
 export const LAYOUT_LIMITS = {
   left: { min: 200, max: 420, default: 264 },
   right: { min: 240, max: 560, default: 320 },
+  terminal: { min: 320, max: 900, default: 480 },
+} as const;
+
+/** Bounds for the integrated terminal subsystem (main + renderer both clamp). */
+export const TERMINAL_LIMITS = {
+  /** Max concurrent terminals per workspace. */
+  maxPerWorkspace: 12,
+  /** In-memory PTY scrollback ring (lines) kept for replay on rehydrate. */
+  scrollbackLines: 5_000,
+  /** Max bytes accepted in a single `terminal:write` from the renderer. */
+  writeBytesMax: 8_192,
+  /** Terminal title length cap. */
+  titleMax: 80,
+  /** PTY grid bounds. */
+  cols: { min: 2, max: 1_000, default: 80 },
+  rows: { min: 1, max: 1_000, default: 24 },
+  /** Font-size bounds for the terminal appearance setting. */
+  fontSize: { min: 9, max: 24, default: 13 },
 } as const;
 
 export const FONT_SCALE_LIMITS = { min: 0.85, max: 1.3, default: 1 } as const;
@@ -63,6 +81,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     rightWidth: LAYOUT_LIMITS.right.default,
     activeTab: 'files',
     sessionsCollapsed: false,
+    terminalOpen: false,
+    terminalWidth: LAYOUT_LIMITS.terminal.default,
   },
   behavior: {
     minimizeToTray: false,
@@ -97,6 +117,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
       showReasoning: true,
       highlightRisk: true,
       archiveCompleted: false,
+    },
+    terminal: {
+      shell: '',
+      fontFamily: '',
+      fontSize: TERMINAL_LIMITS.fontSize.default,
+      cursorStyle: 'block',
+      cursorBlink: true,
+      scrollback: TERMINAL_LIMITS.scrollbackLines,
+      copyOnSelect: false,
+      confirmKill: true,
+      mirrorAgentCommands: true,
     },
   },
 };

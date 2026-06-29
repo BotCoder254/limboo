@@ -25,7 +25,9 @@ import { Logo } from '@/renderer/components/brand/Logo';
 import { Spinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
+import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { Markdown } from './Markdown';
+import { InlineApproval } from './InlineApproval';
 
 type TimelineItem =
   | { kind: 'message'; at: number; message: ChatMessage }
@@ -55,6 +57,7 @@ function toolIcon(call: AgentToolCall): LucideIcon {
 
 export function ConversationView({ sessionId }: { sessionId: string }) {
   const snapshot = useAgentStore((s) => s.bySession[sessionId]) ?? EMPTY_SNAPSHOT;
+  const pending = useAgentStore((s) => s.pending);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
@@ -80,7 +83,9 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     if (stick.current) bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [timeline]);
+  }, [timeline, pending]);
+
+  const approval = pending && pending.sessionId === sessionId ? pending : null;
 
   return (
     <div className="flex flex-col gap-6 pb-4">
@@ -91,6 +96,7 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
           <ToolCard key={item.call.id} call={item.call} />
         ),
       )}
+      {approval && <InlineApproval request={approval} />}
       <div ref={bottomRef} />
     </div>
   );
@@ -111,7 +117,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-md bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
           {message.text}
         </div>
       </div>
@@ -157,7 +163,7 @@ function ToolCard({ call }: { call: AgentToolCall }) {
   const expandable = !!call.detail && call.detail !== call.target;
 
   return (
-    <div className="ml-10 max-w-[85%] self-start overflow-hidden rounded-xl border border-line bg-surface-2/60">
+    <div className="ml-10 max-w-[85%] self-start overflow-hidden rounded-md border border-line bg-surface-2/60">
       <button
         type="button"
         onClick={() => expandable && setOpen((v) => !v)}
@@ -180,6 +186,27 @@ function ToolCard({ call }: { call: AgentToolCall }) {
           </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {call.name === 'Bash' && (
+            <span
+              role="button"
+              tabIndex={0}
+              title="Focus terminal"
+              onClick={(e) => {
+                e.stopPropagation();
+                useLayoutStore.getState().setActiveTab('terminal');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.stopPropagation();
+                  useLayoutStore.getState().setActiveTab('terminal');
+                }
+              }}
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-fg"
+            >
+              <Terminal size={11} />
+              Terminal
+            </span>
+          )}
           <ToolStatus status={call.status} />
           {expandable && (
             <ChevronRight size={13} className={cn('text-faint transition-transform', open && 'rotate-90')} />
