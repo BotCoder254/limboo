@@ -111,8 +111,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   },
 
   setSessionsCollapsed: (collapsed) => {
-    // A manual sidebar toggle clears the "collapsed by terminal" memory.
-    set({ sessionsCollapsed: collapsed, sidebarCollapsedByTerminal: false });
+    set({ sessionsCollapsed: collapsed });
     persist(get());
   },
 
