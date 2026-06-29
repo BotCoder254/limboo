@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # npm dependencies. Pinned to versions compatible with Vite 5 / Electron 42 —
+  # review peer warnings on any bump (especially anything touching Vite).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+      production-dependencies:
+        dependency-type: "production"
+    ignore:
+      # Electron and Vite are intentionally pinned; bump them deliberately, not via
+      # automated PRs, because of the toolchain coupling documented in CLAUDE.md.
+      - dependency-name: "electron"
+      - dependency-name: "vite"
+
+  # GitHub Actions used by the workflows in this repository.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

@@ -1,0 +1,29 @@
+name: Documentation
+description: Report a problem with the documentation or request a new page.
+title: "[Docs]: "
+labels: ["documentation", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for missing, unclear, or inaccurate documentation. For doc writing
+        conventions, see docs/contributing/documentation-standards.md.
+  - type: input
+    id: page
+    attributes:
+      label: Affected page
+      description: The doc path or URL (e.g. docs/guides/git-workflow.md).
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+      description: Describe the inaccuracy, gap, or confusion.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
+      description: What should it say instead? Optional.
