@@ -383,46 +383,82 @@ terminals), `worker_threads`, `events`, `stream`, `crypto`.
 
 ---
 
-## 8. Roadmap — what is NOT built yet
+## 8. Roadmap — current reality
 
-**Phase 1 — Desktop Foundation (DONE).** The full operating environment is built:
-multi-process architecture with a typed IPC layer (`shared/ipc-channels`,
-`main/ipc/*`, `preload`), frameless window with custom controls, **window-state
-persistence** (`WindowStateManager`), **persistent settings** (`SettingsManager`),
-**native menu + context menu** (`AppMenuManager`), **system tray** (`TrayManager`),
-**desktop notifications** (`NotificationManager`), single-instance lock, CSP +
-sandbox, main-process logging + global error handlers, a React **ErrorBoundary** +
-**LoadingScreen** hydration gate, **Zustand** stores, a **command palette** +
-keyboard shortcuts, the **Orbit** logo/icon, and the Codex-style shell with **all
-mock data removed** (real empty states everywhere). No AI/agent, git, terminal,
-indexing, or repository logic exists yet.
+**Phase 1 — Desktop Foundation (DONE).** Multi-process architecture with a typed
+IPC layer (`shared/ipc-channels`, `main/ipc/*`, `preload`), frameless window with
+custom controls, **window-state persistence** (`WindowStateManager`), **persistent
+settings** (`SettingsManager`), **native menu + context menu** (`AppMenuManager`),
+**system tray** (`TrayManager`), **desktop notifications** (`NotificationManager`),
+single-instance lock, CSP + sandbox, main-process logging + global error handlers,
+a React **ErrorBoundary** + **LoadingScreen** hydration gate, **Zustand** stores, a
+**command palette** + keyboard shortcuts, the **Orbit** logo/icon, and the
+Codex-style shell.
 
-The following managers from `project.md` are **not yet built**. Each should live in
-the **main process**, own exactly one responsibility, be reached from the renderer
-via IPC, and feed the existing stores/empty-state UI:
+**Phases 2–4 — Platform services (BUILT).** Most managers from `project.md` are now
+operational in the **main process**, reached from the renderer via IPC and backing
+the real (no-mock) UI. Each owns one responsibility:
 
-- **Session Manager** — create/list/switch sessions; persist chat, checkpoints,
-  tasks, context per session. (Renderer `useSessionStore` is ready to back onto it.)
-- **Workspace Manager** — current repo/branch/window state.
-- **Repository Manager** — open/clone/track repositories.
-- **Git Engine** — status, diff, branch, commit, checkpoint (likely `simple-git`
-  or `child_process` around `git`).
-- **Terminal Engine** — PTY-backed command execution + streaming output (likely
-  `node-pty`).
-- **Permission System** — gate agent actions (file writes, shell, network).
-- **Project Indexer** — build a searchable index of the repo (in a
-  `utilityProcess`/worker to keep main responsive).
-- **Local Database** — on-device persistence (SQLite; e.g. `better-sqlite3`).
-- **Memory System** — long-lived, per-project memory.
-- **File Watcher** — react to on-disk changes (likely `chokidar`).
-- **Search Engine** — fast in-repo search.
-- **Agent Manager** — connect/drive the coding agent through a common interface.
+- **Local Database** (`db/database.ts`) — `better-sqlite3` at `{userData}/limboo.db`,
+  WAL, versioned schema (`WORKSPACE_SCHEMA_VERSION`), idempotent migrations. Bound
+  parameters only.
+- **Session Manager** (`managers/SessionManager.ts`) — create/list/switch/trash
+  sessions; persists transcript + activity per session.
+- **Workspace Manager** (`managers/WorkspaceManager.ts`) — repos, lifecycle, active
+  workspace.
+- **Git Engine** (`managers/GitManager.ts` + `managers/git/*`) — status/diff/stage/
+  commit/log/branches/tags/blame/fetch/init, lightweight **checkpoints**, and now
+  **push / pull** (`git:push` / `git:pull`). Git runs argv-only via `runGit`
+  (no shell). Push uses `--force-with-lease` (never bare `--force`) and the user's
+  own credential helper / SSH agent — Limboo stores **no** remote credentials, and
+  embedded-credential remote URLs are redacted from results/logs. The UI shows an
+  ahead/behind pill, an unpushed badge on the Git rail tab, and "publish branch"
+  for an untracked branch. Push/pull preferences live under `settings.git.push` /
+  `settings.git.pull`.
+- **Terminal Engine** (`managers/TerminalManager.ts`) — `node-pty` sessions.
+- **File System Layer** (`managers/FileSystemManager.ts`) — `chokidar` watch +
+  tree index + guarded reads; pushes live git status into sessions.
+- **Agent Manager** (`managers/AgentManager.ts`) — drives `@anthropic-ai/claude-
+  agent-sdk` (plan/implement modes), risk-gated `canUseTool`, path-guarded to the
+  workspace, persists transcript/activity/diagnostics, resumes SDK sessions.
+- **Memory System** (`managers/memory/MemoryManager.ts`) — the **Local Memory
+  System** (see below).
 
-Suggested build order: Session + Workspace + Repository managers → Git Engine →
-File Watcher → Terminal Engine → Local DB + Memory → Indexer + Search → Permission
-System → Agent Manager. Wire each into the existing UI regions as it lands
-(Sessions sidebar, Activity drawer panels, center conversation, composer) — the
-empty states and stores are already in place.
+### Local Memory System
+
+A provider-independent **platform service owned by the app**, not the agent. It
+preserves durable project knowledge across sessions/providers and injects the most
+relevant entries into the agent prompt *before* it reaches the harness.
+
+- **Storage** — three tables in `limboo.db`: `memories` (tiered knowledge with
+  confidence/usage/status/expiry), `memories_fts` (FTS5 over title+body, kept in
+  sync by triggers, for **BM25** keyword retrieval — fully offline, no embeddings
+  API), and `memory_links` (back-links to source). `workspace_id` is NULL for
+  global/user-scope (e.g. preferences). All access is parameterized.
+- **Tiers** — `session < workspace < project < preference < convention < decision
+  < solution`, plus manual `note`. Higher tiers outrank lower ones in retrieval.
+- **Retrieval + ranking** (`retrieve`) — builds an FTS query from the prompt (+
+  active files + branch), then composite-scores candidates by BM25 relevance ×
+  recency × confidence × usage × tier weight × pinned/workspace boosts, returns
+  top-K within a char budget, and `buildContextBlock` renders a `<project-memory>`
+  block appended to the Claude Code system preset in `AgentManager.buildOptions`.
+- **Auto-capture** — commits and conversations become **proposals** (`status =
+  'proposed'`) that the user accepts/dismisses; policy is `settings.memory`
+  (`propose` | `auto` | `off`, with a confidence auto-accept threshold). Never
+  injected until `active`.
+- **Defaults + maintenance** — `seedDefaults` creates starter memories per
+  workspace and for global scope on first run (idempotent, meta-flagged) so the
+  Memory panel is populated on install; an hourly `sweep` flags stale, unpinned
+  entries (never deletes).
+- **UI** — a **Memory** activity tab (`features/memory/MemoryPanel.tsx` + the
+  `Brain` rail icon with a proposals badge), backed by `useMemoryStore`, with
+  search / tier filters / proposals / inline note composer; settings under the
+  **Memory** category.
+
+**Still open / future** — Repository clone/track UI, a dedicated Permission System
+beyond the agent's `canUseTool`, a standalone Project Indexer/Search Engine, merge-
+conflict resolution UI, remote management, and stash. Memory could later layer
+local vector embeddings on top of BM25 (the ranking is already fusion-ready).
 
 ---
 

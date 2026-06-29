@@ -14,6 +14,7 @@ import {
   FONT_SCALE_LIMITS,
   GIT_LIMITS,
   LAYOUT_LIMITS,
+  MEMORY_LIMITS,
   SETTINGS_VERSION,
   clamp,
 } from '@shared/constants';
@@ -124,6 +125,25 @@ export class SettingsManager {
     if (!['destructive', 'all', 'none'].includes(merged.git.commandApproval)) {
       merged.git.commandApproval = 'destructive';
     }
+    if (!['ff-only', 'rebase'].includes(merged.git.pull.strategy)) {
+      merged.git.pull.strategy = 'ff-only';
+    }
+
+    const mem = merged.memory;
+    if (!['propose', 'auto', 'off'].includes(mem.autoCapture)) {
+      mem.autoCapture = 'propose';
+    }
+    mem.maxInjected = Math.round(
+      clamp(mem.maxInjected, MEMORY_LIMITS.maxInjected.min, MEMORY_LIMITS.maxInjected.max),
+    );
+    mem.autoAcceptConfidence = clamp(
+      mem.autoAcceptConfidence,
+      MEMORY_LIMITS.autoAcceptConfidence.min,
+      MEMORY_LIMITS.autoAcceptConfidence.max,
+    );
+    mem.expiry.staleDays = Math.round(
+      clamp(mem.expiry.staleDays, MEMORY_LIMITS.staleDays.min, MEMORY_LIMITS.staleDays.max),
+    );
 
     return merged;
   }

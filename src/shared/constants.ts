@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 6;
+export const SETTINGS_VERSION = 7;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -82,6 +82,28 @@ export const GIT_LIMITS = {
   commitMessageMax: 20_000,
   /** Branch / tag / checkpoint label length cap. */
   refNameMax: 255,
+  /** Timeout (ms) for network git ops (push / pull / fetch). */
+  networkTimeoutMs: 120_000,
+} as const;
+
+/** Bounds + caps for the Local Memory System (main + renderer both clamp). */
+export const MEMORY_LIMITS = {
+  /** Memory title length cap accepted from the renderer. */
+  titleMax: 200,
+  /** Memory body length cap accepted from the renderer. */
+  bodyMax: 20_000,
+  /** Free-text search query length cap. */
+  queryMax: 512,
+  /** Hard ceiling on rows returned by a list / search call. */
+  listMax: 500,
+  /** Memories injected into a single prompt (count). */
+  maxInjected: { min: 0, max: 24, default: 8 },
+  /** Approx character budget for the injected memory context block. */
+  injectCharBudget: 6_000,
+  /** Confidence threshold (0..1) for proposal auto-accept. */
+  autoAcceptConfidence: { min: 0, max: 1, default: 0.92 },
+  /** Days of disuse before an unpinned memory is flagged stale. */
+  staleDays: { min: 7, max: 3_650, default: 180 },
 } as const;
 
 export const FONT_SCALE_LIMITS = { min: 0.85, max: 1.3, default: 1 } as const;
@@ -164,6 +186,24 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxCheckpoints: GIT_LIMITS.maxCheckpoints.default,
     confirmBranchSwitchWithChanges: true,
     commandApproval: 'destructive',
+    push: {
+      autoSetUpstream: true,
+      confirmForcePush: true,
+    },
+    pull: {
+      strategy: 'ff-only',
+    },
+  },
+  memory: {
+    enabled: true,
+    injectIntoPrompt: true,
+    maxInjected: MEMORY_LIMITS.maxInjected.default,
+    autoCapture: 'propose',
+    autoAcceptConfidence: 0,
+    expiry: {
+      enabled: true,
+      staleDays: MEMORY_LIMITS.staleDays.default,
+    },
   },
 };
 
@@ -176,7 +216,7 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 5;
+export const WORKSPACE_SCHEMA_VERSION = 6;
 
 /** Input caps the main process enforces on renderer-supplied session values. */
 export const SESSION_LIMITS = {

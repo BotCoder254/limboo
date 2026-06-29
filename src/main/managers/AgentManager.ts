@@ -62,6 +62,7 @@ import type { NotificationManager } from './NotificationManager';
 import type { TerminalManager } from './TerminalManager';
 import type { SessionManager } from './SessionManager';
 import type { GitManager } from './GitManager';
+import type { MemoryManager } from './memory/MemoryManager';
 
 /* ------------------------------------------------------------------ */
 /* ESM loader — the SDK is ESM-only; main is a CJS bundle. Load it with */
@@ -295,6 +296,46 @@ export class AgentManager {
   /** Inject the Git Manager so the agent can checkpoint before heavy work. */
   setGitManager(git: GitManager): void {
     this.git = git;
+  }
+
+  /** Local Memory System, wired after construction (prompt context injection). */
+  private memory: MemoryManager | null = null;
+
+  /**
+   * Inject the Memory Manager. Memory is a platform service owned by the app, not
+   * the agent — the manager only *consumes* it to enrich each prompt with the most
+   * relevant project knowledge before the harness runs.
+   */
+  setMemoryManager(memory: MemoryManager): void {
+    this.memory = memory;
+  }
+
+  /**
+   * Build the system-prompt addition that injects ranked, relevant memories for a
+   * prompt. Returns undefined when memory is disabled / not injecting / empty.
+   * Fully local and best-effort: a failure never blocks the run.
+   */
+  private memoryContextFor(sessionId: string, prompt: string): string | undefined {
+    if (!this.memory) return undefined;
+    const cfg = this.settings.getAll().memory;
+    if (!cfg.enabled || !cfg.injectIntoPrompt) return undefined;
+    try {
+      const ws = this.workspace.getActive();
+      const hits = this.memory.retrieve({
+        workspaceId: ws?.id ?? null,
+        sessionId,
+        prompt,
+        limit: cfg.maxInjected,
+      });
+      const block = this.memory.buildContextBlock(hits);
+      if (block) {
+        this.diag('request', 'debug', `Injected ${hits.length} memories`, undefined, sessionId);
+      }
+      return block || undefined;
+    } catch (err) {
+      logger.warn('memory: context build failed', err);
+      return undefined;
+    }
   }
 
   /**
@@ -746,7 +787,8 @@ export class AgentManager {
 
     try {
       const { query } = await loadSdk();
-      const options = this.buildOptions(sessionId, cwd, abort, agent, mode);
+      const memoryContext = this.memoryContextFor(sessionId, prompt);
+      const options = this.buildOptions(sessionId, cwd, abort, agent, mode, memoryContext);
       this.diag('lifecycle', 'debug', 'Handshake — query opened', undefined, sessionId);
       const q = query({ prompt, options }) as unknown as AsyncIterable<SDKMessage> & {
         close?: () => void;
@@ -1189,6 +1231,7 @@ export class AgentManager {
     abort: AbortController,
     agent: ReturnType<SettingsManager['getAll']>['agent'],
     mode: AgentMode,
+    memoryContext?: string,
   ): Options {
     const options: Options = {
       cwd,
@@ -1205,6 +1248,12 @@ export class AgentManager {
       thinking: mapThinking(agent.thinking),
       stderr: (data: string) => logger.warn('[claude]', redact(data)),
     };
+    // Local Memory System: append ranked project knowledge to Claude Code's
+    // default system prompt (preset preserved), so the agent starts each task
+    // with the most relevant context instead of an empty slate.
+    if (memoryContext) {
+      options.systemPrompt = { type: 'preset', preset: 'claude_code', append: memoryContext };
+    }
     if (!agent.webSearch) options.disallowedTools = ['WebSearch', 'WebFetch'];
 
     // Resume the Claude Code session so multi-turn conversations keep context.

@@ -84,6 +84,46 @@ export function GitPanel() {
         </Field>
       </Section>
 
+      <Section
+        title="Sync (push & pull)"
+        hint="Limboo never stores remote credentials — push and pull use your existing git credential helper or SSH agent. If none is configured, the operation fails fast with a clear message."
+      >
+        <Field
+          id="gitAutoSetUpstream"
+          label="Publish new branches on first push"
+          hint="Run push -u origin <branch> so a new branch starts tracking its remote automatically."
+        >
+          <Toggle
+            checked={git.push.autoSetUpstream}
+            onChange={(v) => void update({ git: { push: { autoSetUpstream: v } } })}
+          />
+        </Field>
+        <Field
+          id="gitConfirmForcePush"
+          label="Confirm before force push"
+          hint="Shift-click Push force-pushes with --force-with-lease; this asks first."
+        >
+          <Toggle
+            checked={git.push.confirmForcePush}
+            onChange={(v) => void update({ git: { push: { confirmForcePush: v } } })}
+          />
+        </Field>
+        <Field
+          id="gitPullStrategy"
+          label="Pull strategy"
+          hint="Fast-forward only keeps history linear; rebase replays your local commits on top of the remote."
+        >
+          <SegmentedControl<typeof git.pull.strategy>
+            value={git.pull.strategy}
+            options={[
+              { value: 'ff-only', label: 'Fast-forward' },
+              { value: 'rebase', label: 'Rebase' },
+            ]}
+            onChange={(v) => void update({ git: { pull: { strategy: v } } })}
+          />
+        </Field>
+      </Section>
+
       <Section title="Safety">
         <Field
           id="gitConfirmBranchSwitch"

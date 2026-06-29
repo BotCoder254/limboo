@@ -1,5 +1,6 @@
 import {
   Activity,
+  Brain,
   FileDiff,
   Folder,
   GitBranch,
@@ -21,6 +22,7 @@ export const ACTIVITY_TABS: TabMeta[] = [
   { id: 'files', label: 'Files', icon: Folder },
   { id: 'changes', label: 'Changes', icon: FileDiff },
   { id: 'git', label: 'Git', icon: GitBranch },
+  { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
   { id: 'activity', label: 'Activity', icon: Activity },
   { id: 'console', label: 'Console', icon: TerminalSquare },
