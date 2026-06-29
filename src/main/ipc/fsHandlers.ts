@@ -65,4 +65,13 @@ export function registerFsHandlers(fs: FileSystemManager): void {
     assertValidId(id);
     return fs.getHistory(id);
   });
+
+  // Reveal the workspace root (no relPath) or a specific path in the OS file
+  // manager. The relPath is validated like fs:readFile; the manager additionally
+  // re-checks the resolved target stays inside the workspace root.
+  handle<[string, string | undefined], void>(IpcChannels.fsReveal, async (_e, id, relPath) => {
+    assertValidId(id);
+    if (relPath !== undefined && relPath !== '') assertValidRelPath(relPath);
+    await fs.reveal(id, relPath);
+  });
 }

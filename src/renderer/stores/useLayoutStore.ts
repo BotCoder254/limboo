@@ -18,12 +18,19 @@ interface LayoutState {
   lastTab: ActivityTab;
   /** Whether the left sessions sidebar is collapsed to a thin rail. */
   sessionsCollapsed: boolean;
+  /**
+   * Width (px) used for the right drawer when the Terminal tab is active. The
+   * terminal benefits from a wider drawer than the other tabs, so it keeps its
+   * own remembered width (clamped to the terminal bounds).
+   */
+  terminalWidth: number;
 
   seed: (layout: {
     leftWidth: number;
     rightWidth: number;
     activeTab: ActivityTab | null;
     sessionsCollapsed?: boolean;
+    terminalWidth?: number;
   }) => void;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
@@ -33,6 +40,11 @@ interface LayoutState {
   toggleDrawer: () => void;
   /** Collapse / expand the left sessions sidebar. */
   setSessionsCollapsed: (collapsed: boolean) => void;
+  setTerminalWidth: (width: number) => void;
+  /** Open the terminal tab if closed, otherwise collapse the drawer. */
+  setTerminalOpen: (open: boolean) => void;
+  /** Toggle the terminal tab open/closed. */
+  toggleTerminal: () => void;
 }
 
 const persist = debounce((layout: Partial<LayoutState>) => {
@@ -42,6 +54,7 @@ const persist = debounce((layout: Partial<LayoutState>) => {
       rightWidth: layout.rightWidth,
       activeTab: layout.activeTab,
       sessionsCollapsed: layout.sessionsCollapsed,
+      terminalWidth: layout.terminalWidth,
     },
   });
 }, 300);
@@ -52,6 +65,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   activeTab: 'files',
   lastTab: 'files',
   sessionsCollapsed: false,
+  terminalWidth: LAYOUT_LIMITS.terminal.default,
 
   seed: (layout) =>
     set({
@@ -60,6 +74,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       activeTab: layout.activeTab,
       lastTab: layout.activeTab ?? 'files',
       sessionsCollapsed: layout.sessionsCollapsed ?? false,
+      terminalWidth: clamp(
+        layout.terminalWidth ?? LAYOUT_LIMITS.terminal.default,
+        LAYOUT_LIMITS.terminal.min,
+        LAYOUT_LIMITS.terminal.max,
+      ),
     }),
 
   setLeftWidth: (width) => {
@@ -92,7 +111,24 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   },
 
   setSessionsCollapsed: (collapsed) => {
-    set({ sessionsCollapsed: collapsed });
+    // A manual sidebar toggle clears the "collapsed by terminal" memory.
+    set({ sessionsCollapsed: collapsed, sidebarCollapsedByTerminal: false });
     persist(get());
+  },
+
+  setTerminalWidth: (width) => {
+    const terminalWidth = clamp(width, LAYOUT_LIMITS.terminal.min, LAYOUT_LIMITS.terminal.max);
+    set({ terminalWidth });
+    persist(get());
+  },
+
+  // The terminal is now a right-drawer tab; opening/closing it just drives the
+  // active tab so it behaves like Files/Changes/Tasks/Console.
+  setTerminalOpen: (open) => {
+    get().setActiveTab(open ? 'terminal' : null);
+  },
+
+  toggleTerminal: () => {
+    get().toggleTab('terminal');
   },
 }));

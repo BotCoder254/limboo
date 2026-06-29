@@ -20,6 +20,7 @@ import { WorkspaceManager } from './managers/WorkspaceManager';
 import { SessionManager } from './managers/SessionManager';
 import { AgentManager } from './managers/AgentManager';
 import { FileSystemManager } from './managers/FileSystemManager';
+import { TerminalManager } from './managers/TerminalManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -64,6 +65,7 @@ function bootstrap(): void {
   let sessions: SessionManager;
   let agent: AgentManager;
   let fileSystem: FileSystemManager;
+  let terminal: TerminalManager;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
   const tray = new TrayManager();
@@ -86,9 +88,24 @@ function bootstrap(): void {
     sessions = new SessionManager();
     agent = new AgentManager(workspace, settings, notifications);
     fileSystem = new FileSystemManager(workspace);
+    terminal = new TerminalManager(workspace, settings);
+    // The agent mirrors its shell commands into the integrated terminal.
+    agent.setTerminalManager(terminal);
+    // The agent auto-titles untitled sessions from their first prompt.
+    agent.setSessionManager(sessions);
+    // The File System Layer pushes live git status (branch + diff) into sessions.
+    fileSystem.setSessionManager(sessions);
 
     hardenSession();
-    registerAllIpc({ settings, notifications, workspace, session: sessions, agent, fs: fileSystem });
+    registerAllIpc({
+      settings,
+      notifications,
+      workspace,
+      session: sessions,
+      agent,
+      fs: fileSystem,
+      terminal,
+    });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();
 
@@ -121,6 +138,7 @@ function bootstrap(): void {
   app.on('before-quit', () => {
     agent?.cleanup();
     void fileSystem?.dispose();
+    terminal?.dispose();
     tray.destroy();
     closeDb();
   });

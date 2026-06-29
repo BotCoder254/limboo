@@ -19,7 +19,16 @@ export default defineConfig({
       // `@anthropic-ai/claude-agent-sdk` is ESM-only and spawns the Claude Code
       // runtime; it must stay external and be loaded via native dynamic import
       // (see AgentManager) rather than bundled into the CJS main entry.
-      external: ['better-sqlite3', 'bindings', '@anthropic-ai/claude-agent-sdk'],
+      //
+      // `node-pty` is a native module: it `require()`s its compiled `pty.node`
+      // binary, so it must stay external (kept as a runtime `require`, resolved
+      // from node_modules, unpacked from the asar by AutoUnpackNatives).
+      external: [
+        'better-sqlite3',
+        'bindings',
+        '@anthropic-ai/claude-agent-sdk',
+        'node-pty',
+      ],
     },
   },
   resolve: {

@@ -52,7 +52,7 @@ export function ShortcutsPanel() {
             {bound(section).map((cmd) => (
               <div
                 key={cmd.id}
-                className="flex items-center justify-between gap-4 rounded-lg px-2 py-1.5"
+                className="flex items-center justify-between gap-4 rounded-md px-2 py-1.5"
               >
                 <span className="text-[13px] text-fg">{cmd.title}</span>
                 <span className="flex items-center gap-1">

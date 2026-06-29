@@ -19,7 +19,7 @@ export function WorkspacePanel() {
   if (!workspace) {
     return (
       <Section title="Workspace" hint="Settings here apply to the active workspace only.">
-        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-line px-4 py-10 text-center">
+        <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-line px-4 py-10 text-center">
           <FolderGit2 size={26} className="text-faint" />
           <p className="text-[13px] text-muted">No workspace is open.</p>
           <p className="max-w-xs text-[11px] leading-relaxed text-faint">

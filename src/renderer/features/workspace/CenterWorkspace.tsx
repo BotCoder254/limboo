@@ -8,8 +8,8 @@
  * into the scroll region.
  */
 import { useEffect } from 'react';
-import { CircleDot, Plus, Sparkles } from 'lucide-react';
-import { DiffStat, EmptyState, Spinner } from '@/renderer/components/ui';
+import { CircleDot, Plus, Sparkles, TerminalSquare } from 'lucide-react';
+import { DiffStat, EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Composer } from './Composer';
@@ -18,6 +18,7 @@ import { WorkspaceLauncher } from './WorkspaceLauncher';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
+import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 
 export function CenterWorkspace() {
   const session = useSessionStore((s) =>
@@ -90,6 +91,10 @@ export function CenterWorkspace() {
           </div>
         </div>
 
+        {/* Fade scrim: messages dissolve into the background as they scroll toward
+            the composer, so nothing is ever visible behind the (opaque) card. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-base via-base/85 to-transparent" />
+
         <div className="absolute inset-x-0 bottom-0">
           <Composer disabled={!session} />
         </div>
@@ -115,6 +120,8 @@ function SessionHeader({
 }) {
   const running = useIsSessionRunning(sessionId);
   const planStatus = useAgentStore((s) => s.bySession[sessionId]?.plan?.status);
+  const terminalOpen = useLayoutStore((s) => s.activeTab === 'terminal');
+  const toggleTerminal = useLayoutStore((s) => s.toggleTerminal);
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4">
       {running ? <Spinner size={12} /> : <CircleDot size={12} className="text-success" />}
@@ -127,6 +134,15 @@ function SessionHeader({
           Plan ready
         </span>
       )}
+      <IconButton
+        label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
+        size="sm"
+        className="ml-auto"
+        active={terminalOpen}
+        onClick={toggleTerminal}
+      >
+        <TerminalSquare size={14} />
+      </IconButton>
     </div>
   );
 }

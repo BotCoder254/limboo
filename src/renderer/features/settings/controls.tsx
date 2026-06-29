@@ -61,7 +61,7 @@ export function Field({
       ref={ref}
       data-field-id={id}
       className={cn(
-        'flex items-center justify-between gap-4 rounded-lg px-2 py-2 transition-colors',
+        'flex items-center justify-between gap-4 rounded-md px-2 py-2 transition-colors',
         active ? 'bg-surface-2 ring-1 ring-accent' : 'ring-1 ring-transparent',
       )}
     >
@@ -101,7 +101,7 @@ export function StackedField({
       ref={ref}
       data-field-id={id}
       className={cn(
-        'flex flex-col gap-1.5 rounded-lg px-2 py-2 transition-colors',
+        'flex flex-col gap-1.5 rounded-md px-2 py-2 transition-colors',
         active ? 'bg-surface-2 ring-1 ring-accent' : 'ring-1 ring-transparent',
       )}
     >
@@ -166,7 +166,7 @@ export function SegmentedControl<T extends string>({
           type="button"
           onClick={() => onChange(option.value)}
           className={cn(
-            'rounded px-2.5 py-1 text-[12px] transition-colors',
+            'rounded-md px-2.5 py-1 text-[12px] transition-colors',
             value === option.value ? 'bg-elevated text-fg' : 'text-muted hover:text-fg',
           )}
         >

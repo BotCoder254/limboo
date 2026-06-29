@@ -6,8 +6,9 @@
  *   [SessionsSidebar][handle][CenterWorkspace][handle][ActivityDrawer] ActivityRail
  *
  * The left sidebar and right drawer run full height; the Composer lives only
- * inside the center column. Panel widths + the open drawer tab come from the
- * layout store (persisted to settings).
+ * inside the center column. The integrated terminal is one of the right-drawer
+ * tabs (it uses its own wider remembered width). Panel widths + the open drawer
+ * tab come from the layout store (persisted to settings).
  */
 import { TitleBar } from '@/renderer/components/layout/TitleBar';
 import { ResizeHandle } from '@/renderer/components/ui';
@@ -21,10 +22,15 @@ import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 export function AppShell() {
   const leftWidth = useLayoutStore((s) => s.leftWidth);
   const rightWidth = useLayoutStore((s) => s.rightWidth);
+  const terminalWidth = useLayoutStore((s) => s.terminalWidth);
   const activeTab = useLayoutStore((s) => s.activeTab);
   const sessionsCollapsed = useLayoutStore((s) => s.sessionsCollapsed);
   const setLeftWidth = useLayoutStore((s) => s.setLeftWidth);
-  const setRightWidth = useLayoutStore((s) => s.setRightWidth);
+
+  // The terminal tab uses its own (wider) remembered width; every other tab uses
+  // the shared right-drawer width.
+  const drawerIsTerminal = activeTab === 'terminal';
+  const drawerWidth = drawerIsTerminal ? terminalWidth : rightWidth;
 
   const left = useResizable({
     edge: 'left',
@@ -33,8 +39,15 @@ export function AppShell() {
   });
   const right = useResizable({
     edge: 'right',
-    getWidth: () => useLayoutStore.getState().rightWidth,
-    setWidth: setRightWidth,
+    getWidth: () => {
+      const s = useLayoutStore.getState();
+      return s.activeTab === 'terminal' ? s.terminalWidth : s.rightWidth;
+    },
+    setWidth: (w) => {
+      const s = useLayoutStore.getState();
+      if (s.activeTab === 'terminal') s.setTerminalWidth(w);
+      else s.setRightWidth(w);
+    },
   });
 
   return (
@@ -61,7 +74,7 @@ export function AppShell() {
         {activeTab && (
           <>
             <ResizeHandle onMouseDown={right.startDrag} />
-            <div style={{ width: rightWidth }} className="shrink-0">
+            <div style={{ width: drawerWidth }} className="shrink-0">
               <ActivityDrawer tab={activeTab} />
             </div>
           </>

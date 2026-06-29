@@ -30,6 +30,11 @@ import type {
   Session,
   SessionPlan,
   SessionUpdate,
+  TerminalChunk,
+  TerminalCommandRecord,
+  TerminalCreateOptions,
+  TerminalExit,
+  TerminalSession,
   Workspace,
   WorkspaceConfig,
   WorkspaceStats,
@@ -176,10 +181,52 @@ const fsApi = {
   /** Most-recent-first File History for a workspace. */
   getHistory: (workspaceId: string): Promise<FileHistoryEntry[]> =>
     ipcRenderer.invoke(IpcChannels.fsGetHistory, workspaceId),
+  /** Reveal the workspace root (no relPath) or a path in the OS file manager. */
+  reveal: (workspaceId: string, relPath?: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.fsReveal, workspaceId, relPath),
   onIndexProgress: (cb: (progress: IndexProgress) => void): (() => void) =>
     subscribe<IndexProgress>(IpcEvents.fsIndexProgress, cb),
   onTreeChanged: (cb: (tree: FileTree) => void): (() => void) =>
     subscribe<FileTree>(IpcEvents.fsTreeChanged, cb),
+};
+
+const terminalApi = {
+  /** Spawn a new PTY for a workspace. Returns its metadata. */
+  create: (workspaceId: string, opts?: TerminalCreateOptions): Promise<TerminalSession> =>
+    ipcRenderer.invoke(IpcChannels.terminalCreate, workspaceId, opts),
+  /** Terminals for a workspace plus each one's buffered scrollback for replay. */
+  list: (
+    workspaceId: string,
+  ): Promise<{ terminals: TerminalSession[]; scrollback: Record<string, string> }> =>
+    ipcRenderer.invoke(IpcChannels.terminalList, workspaceId),
+  /** Feed keystrokes / paste into a terminal. */
+  write: (terminalId: string, data: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.terminalWrite, terminalId, data),
+  /** Resize a terminal's PTY grid. */
+  resize: (terminalId: string, cols: number, rows: number): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.terminalResize, terminalId, cols, rows),
+  /** Kill a terminal and drop it. */
+  kill: (terminalId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.terminalKill, terminalId),
+  /** Rename a terminal's label. */
+  rename: (terminalId: string, title: string): Promise<TerminalSession | null> =>
+    ipcRenderer.invoke(IpcChannels.terminalRename, terminalId, title),
+  /** Clear a terminal's buffered scrollback. */
+  clear: (terminalId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.terminalClear, terminalId),
+  onData: (cb: (chunk: TerminalChunk) => void): (() => void) =>
+    subscribe<TerminalChunk>(IpcEvents.terminalData, cb),
+  onExit: (cb: (exit: TerminalExit) => void): (() => void) =>
+    subscribe<TerminalExit>(IpcEvents.terminalExit, cb),
+  onUpdated: (
+    cb: (payload: { workspaceId: string; terminals: TerminalSession[] }) => void,
+  ): (() => void) =>
+    subscribe<{ workspaceId: string; terminals: TerminalSession[] }>(
+      IpcEvents.terminalsUpdated,
+      cb,
+    ),
+  onCommand: (cb: (record: TerminalCommandRecord) => void): (() => void) =>
+    subscribe<TerminalCommandRecord>(IpcEvents.terminalCommand, cb),
 };
 
 const limbooApi = {
@@ -192,6 +239,7 @@ const limbooApi = {
   session: sessionApi,
   agent: agentApi,
   fs: fsApi,
+  terminal: terminalApi,
 };
 
 contextBridge.exposeInMainWorld('limboo', limbooApi);

@@ -171,7 +171,7 @@ function PlanView({
 
       {/* Planning placeholder */}
       {planning && (
-        <div className="flex items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-[12px] text-muted">
+        <div className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2.5 text-[12px] text-muted">
           <Spinner size={12} />
           Analyzing the repository — reading files and dependencies (read-only)…
         </div>
@@ -179,7 +179,7 @@ function PlanView({
 
       {/* Plan body (markdown) */}
       {!planning && plan.markdown && settings.showReasoning && (
-        <div className="rounded-lg border border-line bg-surface-2/50">
+        <div className="rounded-md border border-line bg-surface-2/50">
           <button
             type="button"
             onClick={() => setBodyOpen((v) => !v)}
@@ -203,7 +203,7 @@ function PlanView({
 
       {/* Approval controls */}
       {ready && (
-        <div className="flex flex-col gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2.5">
+        <div className="flex flex-col gap-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2.5">
           <p className="text-[12px] text-muted">
             Review the plan above. Approving unlocks file changes and begins implementation against this
             checklist.

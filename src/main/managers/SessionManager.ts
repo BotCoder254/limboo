@@ -267,6 +267,43 @@ export class SessionManager {
     return session;
   }
 
+  /**
+   * Apply the workspace's live git status (current branch + working-tree diff) to
+   * every live session in that workspace. Does NOT bump `updated_at` (git changes
+   * must not reorder the recency-sorted list), and only broadcasts when a value
+   * actually changed so the watcher can fire freely without UI churn.
+   */
+  applyGitStatus(
+    workspaceId: string,
+    status: { branch?: string; adds: number; dels: number },
+  ): void {
+    const branch = status.branch ?? SESSION_DEFAULTS.branch;
+    const info = this.db
+      .prepare(
+        `UPDATE sessions SET branch = ?, adds = ?, dels = ?
+          WHERE workspace_id = ? AND deleted_at IS NULL
+            AND (branch != ? OR adds != ? OR dels != ?)`,
+      )
+      .run(branch, status.adds, status.dels, workspaceId, branch, status.adds, status.dels);
+    if (info.changes > 0) this.broadcast();
+  }
+
+  /**
+   * Derive a session's title from its first message — but only while the title is
+   * still the untouched default, so a user rename is never clobbered.
+   */
+  autoTitle(sessionId: string, text: string): void {
+    const title = deriveTitle(text);
+    if (!title) return;
+    const info = this.db
+      .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND title = ?')
+      .run(title, Date.now(), sessionId, SESSION_DEFAULTS.title);
+    if (info.changes > 0) {
+      logger.info(`Session auto-titled: ${sessionId} -> ${title}`);
+      this.broadcast();
+    }
+  }
+
   /* -------------------------------------------------------- internals */
 
   private byId(id: string): Session | null {
@@ -304,6 +341,18 @@ export class SessionManager {
       win.webContents.send(IpcEvents.sessionActiveChanged, active);
     }
   }
+}
+
+/** First non-empty line of a prompt, whitespace-collapsed and capped for a title. */
+function deriveTitle(text: string): string {
+  const firstLine =
+    text
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? '';
+  const collapsed = firstLine.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return '';
+  return collapsed.length > 50 ? `${collapsed.slice(0, 50).trimEnd()}…` : collapsed;
 }
 
 function rowToSession(row: SessionRow): Session {

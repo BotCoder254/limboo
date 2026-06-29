@@ -13,6 +13,7 @@ import {
   Bot,
   Keyboard,
   Info,
+  TerminalSquare,
   type LucideIcon,
 } from 'lucide-react';
 import { GeneralPanel } from './panels/GeneralPanel';
@@ -20,6 +21,7 @@ import { AppearancePanel } from './panels/AppearancePanel';
 import { WorkspacePanel } from './panels/WorkspacePanel';
 import { BehaviorPanel } from './panels/BehaviorPanel';
 import { AgentPanel } from './panels/AgentPanel';
+import { TerminalPanel } from './panels/TerminalPanel';
 import { ShortcutsPanel } from './panels/ShortcutsPanel';
 import { AboutPanel } from './panels/AboutPanel';
 
@@ -107,6 +109,24 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
       { id: 'logVerbosity', label: 'Log verbosity', keywords: ['diagnostics', 'console', 'debug', 'log'] },
     ],
     Panel: AgentPanel,
+  },
+  {
+    id: 'terminal',
+    label: 'Terminal',
+    icon: TerminalSquare,
+    keywords: ['terminal', 'shell', 'pty', 'console', 'command', 'bash', 'zsh', 'xterm'],
+    fields: [
+      { id: 'terminalShell', label: 'Default shell', keywords: ['bash', 'zsh', 'fish', 'shell'] },
+      { id: 'terminalFontFamily', label: 'Font family', keywords: ['font', 'mono', 'typeface'] },
+      { id: 'terminalFontSize', label: 'Font size', keywords: ['font', 'size', 'text'] },
+      { id: 'terminalCursorStyle', label: 'Cursor style', keywords: ['cursor', 'block', 'bar'] },
+      { id: 'terminalCursorBlink', label: 'Blink cursor', keywords: ['cursor', 'blink'] },
+      { id: 'terminalScrollback', label: 'Scrollback', keywords: ['history', 'lines', 'buffer'] },
+      { id: 'terminalCopyOnSelect', label: 'Copy on select', keywords: ['clipboard', 'copy'] },
+      { id: 'terminalConfirmKill', label: 'Confirm before closing', keywords: ['close', 'kill', 'confirm'] },
+      { id: 'terminalMirrorAgent', label: 'Mirror agent commands', keywords: ['agent', 'mirror', 'command'] },
+    ],
+    Panel: TerminalPanel,
   },
   {
     id: 'shortcuts',

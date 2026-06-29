@@ -13,6 +13,7 @@ import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
+import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
 
 /** Set the composer's default execution mode (Plan-first vs direct Implement). */
 function setDefaultMode(defaultMode: AgentMode): void {
@@ -165,6 +166,29 @@ export const COMMANDS: Command[] = [
     keys: ['Mod', 'B'],
     inPalette: true,
     run: () => useLayoutStore.getState().toggleDrawer(),
+  },
+  {
+    id: 'terminal.toggle',
+    title: 'Toggle terminal',
+    section: 'View',
+    keys: ['Mod', '`'],
+    inPalette: true,
+    run: () => useLayoutStore.getState().toggleTerminal(),
+  },
+  {
+    id: 'terminal.new',
+    title: 'New terminal',
+    section: 'View',
+    inPalette: true,
+    run: () => {
+      const id = useWorkspaceStore.getState().activeId;
+      if (!id) {
+        useUIStore.getState().addToast({ title: 'No active workspace', tone: 'warning' });
+        return;
+      }
+      useLayoutStore.getState().setTerminalOpen(true);
+      void useTerminalStore.getState().create(id);
+    },
   },
   {
     id: 'drawer.toggleFiles',

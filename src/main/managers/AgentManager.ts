@@ -49,6 +49,7 @@ import type {
   SessionPlan,
   TaskItem,
   TaskStatus,
+  TerminalCommandRecord,
   ToolRisk,
 } from '@shared/types';
 import { AGENT_LIMITS } from '@shared/constants';
@@ -58,6 +59,8 @@ import { logger } from '../logger';
 import type { SettingsManager } from './SettingsManager';
 import type { WorkspaceManager } from './WorkspaceManager';
 import type { NotificationManager } from './NotificationManager';
+import type { TerminalManager } from './TerminalManager';
+import type { SessionManager } from './SessionManager';
 
 /* ------------------------------------------------------------------ */
 /* ESM loader — the SDK is ESM-only; main is a CJS bundle. Load it with */
@@ -265,6 +268,25 @@ export class AgentManager {
     private readonly settings: SettingsManager,
     private readonly notifications: NotificationManager,
   ) {}
+
+  /** The integrated terminal, wired after construction (avoids a ctor cycle). */
+  private terminal: TerminalManager | null = null;
+
+  /** Maps an in-flight command tool-call id → the terminal it is mirrored into. */
+  private readonly mirroredCommands = new Map<string, { terminalId: string; command: string; startedAt: number }>();
+
+  /** Inject the Terminal Manager used to mirror agent-run shell commands. */
+  setTerminalManager(terminal: TerminalManager): void {
+    this.terminal = terminal;
+  }
+
+  /** Sessions manager, wired after construction (used to auto-title from the first prompt). */
+  private sessions: SessionManager | null = null;
+
+  /** Inject the Session Manager so the first prompt can name an untitled session. */
+  setSessionManager(sessions: SessionManager): void {
+    this.sessions = sessions;
+  }
 
   /* ---------------------------------------------------------------- */
   /* Public API (reached via IPC)                                     */
@@ -510,6 +532,8 @@ export class AgentManager {
     this.persistMessage(userMsg);
     this.pushEvent({ kind: 'message-done', sessionId, message: userMsg });
     this.pushActivity(sessionId, 'prompt', 'You', prompt.slice(0, 120), 'info');
+    // Name an untitled session after its first prompt (a no-op once renamed).
+    this.sessions?.autoTitle(sessionId, prompt);
 
     // Plan run: open a fresh planning artifact so the panel switches into its
     // "analyzing repository" state immediately while the agent reads.
@@ -778,7 +802,7 @@ export class AgentManager {
           if (block.type === 'tool_result') {
             const id = String(block.tool_use_id ?? '');
             const status = block.is_error ? 'error' : 'done';
-            this.onToolResult(sessionId, id, status);
+            this.onToolResult(sessionId, id, status, toolResultText(block.content));
           }
         }
         break;
@@ -852,6 +876,11 @@ export class AgentManager {
     this.pushActivity(sessionId, 'tool', call.summary, call.target, 'info');
     this.diag('tool', 'info', call.summary, call.target ?? call.detail, sessionId);
 
+    // Mirror agent-run shell commands into the integrated terminal so the user
+    // sees exactly what the agent executes. The Agent SDK does not stream tool
+    // stdout, so this is a record (command now, output on result) — not a live PTY.
+    if (name === 'Bash') this.mirrorCommandStart(sessionId, id, input);
+
     if (risk === 'write') {
       const change = changeFromInput(name, input);
       if (change) {
@@ -862,7 +891,15 @@ export class AgentManager {
     }
   }
 
-  private onToolResult(sessionId: string, toolUseId: string, status: 'done' | 'error'): void {
+  private onToolResult(
+    sessionId: string,
+    toolUseId: string,
+    status: 'done' | 'error',
+    output?: string,
+  ): void {
+    // Complete any mirrored command record first (independent of toolCalls state).
+    this.mirrorCommandEnd(sessionId, toolUseId, status, output);
+
     const rt = this.runtimes.get(sessionId);
     if (!rt) return;
     const call = rt.toolCalls.find((c) => c.id === toolUseId);
@@ -870,6 +907,63 @@ export class AgentManager {
     call.status = status;
     call.endedAt = Date.now();
     this.pushEvent({ kind: 'tool-end', sessionId, callId: toolUseId, status });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Terminal mirroring (agent shell commands → integrated terminal)  */
+  /* ---------------------------------------------------------------- */
+
+  /** Echo an agent Bash command into the integrated terminal (status running). */
+  private mirrorCommandStart(
+    sessionId: string,
+    callId: string,
+    input: Record<string, unknown>,
+  ): void {
+    if (!this.terminal) return;
+    if (!this.settings.getAll().agent.terminal.mirrorAgentCommands) return;
+    const workspaceId = this.workspace.getActive()?.id;
+    if (!workspaceId) return;
+    const command = typeof input.command === 'string' ? input.command : '';
+    if (!command) return;
+
+    const terminalId = this.terminal.ensureAgentTerminal(workspaceId);
+    if (!terminalId) return;
+
+    const startedAt = Date.now();
+    this.mirroredCommands.set(callId, { terminalId, command, startedAt });
+    const record: TerminalCommandRecord = {
+      terminalId,
+      sessionId,
+      callId,
+      command,
+      status: 'running',
+      startedAt,
+    };
+    this.terminal.mirrorAgentCommand(record);
+  }
+
+  /** Complete a mirrored command record with its output + exit status. */
+  private mirrorCommandEnd(
+    sessionId: string,
+    callId: string,
+    status: 'done' | 'error',
+    output?: string,
+  ): void {
+    const pending = this.mirroredCommands.get(callId);
+    if (!pending || !this.terminal) return;
+    this.mirroredCommands.delete(callId);
+    const record: TerminalCommandRecord = {
+      terminalId: pending.terminalId,
+      sessionId,
+      callId,
+      command: pending.command,
+      output: output ? output.slice(0, 100_000) : undefined,
+      status: status === 'error' ? 'error' : 'done',
+      exitCode: status === 'error' ? 1 : 0,
+      startedAt: pending.startedAt,
+      endedAt: Date.now(),
+    };
+    this.terminal.mirrorAgentCommand(record);
   }
 
   /** Map a TodoWrite call into the live task checklist + broadcast it. */
@@ -1528,6 +1622,23 @@ function estimateRisk(taskCount?: number): PlanMeta['risk'] {
   if (taskCount <= 3) return 'low';
   if (taskCount <= 8) return 'medium';
   return 'high';
+}
+
+/**
+ * Extract plain text from a tool_result block's `content`, which the SDK delivers
+ * either as a string or as an array of `{ type: 'text', text }` parts.
+ */
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => {
+        const part = b as Record<string, unknown>;
+        return part.type === 'text' && typeof part.text === 'string' ? part.text : '';
+      })
+      .join('');
+  }
+  return '';
 }
 
 /** True when `target` resolves to a path inside `root` (symlink-aware). */

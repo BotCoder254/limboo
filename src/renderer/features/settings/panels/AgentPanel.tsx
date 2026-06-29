@@ -36,7 +36,7 @@ export function AgentPanel() {
         title="Coding agent"
         hint="Limboo orchestrates the local Claude Code process and reuses its existing authentication — your API keys never pass through this app."
       >
-        <div className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-3 py-3">
+        <div className="flex items-center gap-3 rounded-md border border-line bg-surface-2 px-3 py-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-elevated text-muted">
             <Bot size={18} />
           </span>
