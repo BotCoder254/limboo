@@ -62,6 +62,9 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
   const pending = useAgentStore((s) => s.pending);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  // Id of the last user message we pinned to — lets us force-follow the user's own
+  // prompt into view even if they had scrolled up reading the previous reply.
+  const lastUserId = useRef<string | null>(null);
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
@@ -87,8 +90,17 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
   }, []);
 
   useEffect(() => {
+    // When the user has just sent a new prompt, always pull it above the composer —
+    // regardless of prior scroll position. Otherwise honor the sticky threshold so we
+    // don't yank the view while the user is reading a streaming reply scrolled-up.
+    const lastUser = [...snapshot.messages].reverse().find((m) => m.role === 'user');
+    const sentNew = !!lastUser && lastUser.id !== lastUserId.current;
+    if (sentNew) {
+      lastUserId.current = lastUser.id;
+      stick.current = true;
+    }
     if (stick.current) bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [timeline, pending]);
+  }, [timeline, pending, snapshot.messages]);
 
   const approval = pending && pending.sessionId === sessionId ? pending : null;
 
