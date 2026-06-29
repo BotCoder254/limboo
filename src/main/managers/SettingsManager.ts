@@ -12,6 +12,7 @@ import {
   AGENT_LIMITS,
   DEFAULT_SETTINGS,
   FONT_SCALE_LIMITS,
+  GIT_LIMITS,
   LAYOUT_LIMITS,
   SETTINGS_VERSION,
   clamp,
@@ -116,6 +117,13 @@ export class SettingsManager {
       clamp(c.heartbeatFailureThreshold, L.heartbeatFailureThreshold.min, L.heartbeatFailureThreshold.max),
     );
     c.idleTimeout = clamp(c.idleTimeout, L.idleTimeout.min, L.idleTimeout.max);
+
+    merged.git.maxCheckpoints = Math.round(
+      clamp(merged.git.maxCheckpoints, GIT_LIMITS.maxCheckpoints.min, GIT_LIMITS.maxCheckpoints.max),
+    );
+    if (!['destructive', 'all', 'none'].includes(merged.git.commandApproval)) {
+      merged.git.commandApproval = 'destructive';
+    }
 
     return merged;
   }

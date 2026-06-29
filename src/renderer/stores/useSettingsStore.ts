@@ -60,14 +60,28 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   update: async (patch) => {
     const api = window.limboo?.settings;
-    if (!api) {
-      // Optimistic local update in preview mode.
-      set((s) => ({ settings: deepMergeLocal(s.settings, patch) }));
-      applyAppearance(get().settings.appearance);
-      return;
+
+    // Optimistically apply the patch locally so the control flips instantly —
+    // toggles/segments reflect the new state on the same frame as the click,
+    // independent of the IPC round-trip.
+    const previous = get().settings;
+    const optimistic = deepMergeLocal(previous, patch);
+    set({ settings: optimistic });
+    applyAppearance(optimistic.appearance);
+
+    if (!api) return;
+
+    try {
+      // Reconcile with the main process truth (clamped / migrated / normalized).
+      const next = await api.set(patch);
+      set({ settings: next });
+      applyAppearance(next.appearance);
+    } catch (err) {
+      // Roll back to the pre-patch state on failure.
+      set({ settings: previous });
+      applyAppearance(previous.appearance);
+      throw err;
     }
-    const next = await api.set(patch);
-    set({ settings: next });
   },
 
   reset: async () => {
@@ -84,18 +98,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 }));
 
-/** Shallow-ish local merge used only for browser-preview mode. */
-function deepMergeLocal(base: AppSettings, patch: DeepPartial<AppSettings>): AppSettings {
-  return {
-    ...base,
-    ...patch,
-    appearance: { ...base.appearance, ...patch.appearance },
-    layout: { ...base.layout, ...patch.layout },
-    behavior: { ...base.behavior, ...patch.behavior },
-    agent: {
-      ...base.agent,
-      ...patch.agent,
-      connection: { ...base.agent.connection, ...patch.agent?.connection },
-    },
-  } as AppSettings;
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Recursive deep merge used for the optimistic local update (and browser-preview
+ * mode). Mirrors the main-process `deepMerge` semantics: nested objects merge,
+ * scalars/arrays replace. Mutation never escapes the new object.
+ */
+function deepMergeLocal<T>(base: T, patch: DeepPartial<T>): T {
+  if (!isPlainObject(base) || !isPlainObject(patch)) return (patch as T) ?? base;
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (value === undefined) continue;
+    const current = out[key];
+    out[key] =
+      isPlainObject(current) && isPlainObject(value)
+        ? deepMergeLocal(current, value as DeepPartial<typeof current>)
+        : value;
+  }
+  return out as T;
 }

@@ -24,6 +24,12 @@ interface LayoutState {
    * own remembered width (clamped to the terminal bounds).
    */
   terminalWidth: number;
+  /**
+   * Width (px) used for the right drawer when the Git tab is active. The Git
+   * workspace (diffs/history) benefits from a wider drawer, so — like the
+   * terminal — it keeps its own remembered width (clamped to the git bounds).
+   */
+  gitWidth: number;
 
   seed: (layout: {
     leftWidth: number;
@@ -31,9 +37,11 @@ interface LayoutState {
     activeTab: ActivityTab | null;
     sessionsCollapsed?: boolean;
     terminalWidth?: number;
+    gitWidth?: number;
   }) => void;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
+  setGitWidth: (width: number) => void;
   setActiveTab: (tab: ActivityTab | null) => void;
   toggleTab: (tab: ActivityTab) => void;
   /** Collapse the drawer if open, otherwise reopen the last-used tab. */
@@ -55,6 +63,7 @@ const persist = debounce((layout: Partial<LayoutState>) => {
       activeTab: layout.activeTab,
       sessionsCollapsed: layout.sessionsCollapsed,
       terminalWidth: layout.terminalWidth,
+      gitWidth: layout.gitWidth,
     },
   });
 }, 300);
@@ -66,6 +75,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   lastTab: 'files',
   sessionsCollapsed: false,
   terminalWidth: LAYOUT_LIMITS.terminal.default,
+  gitWidth: LAYOUT_LIMITS.git.default,
 
   seed: (layout) =>
     set({
@@ -78,6 +88,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
         layout.terminalWidth ?? LAYOUT_LIMITS.terminal.default,
         LAYOUT_LIMITS.terminal.min,
         LAYOUT_LIMITS.terminal.max,
+      ),
+      gitWidth: clamp(
+        layout.gitWidth ?? LAYOUT_LIMITS.git.default,
+        LAYOUT_LIMITS.git.min,
+        LAYOUT_LIMITS.git.max,
       ),
     }),
 
@@ -118,6 +133,12 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   setTerminalWidth: (width) => {
     const terminalWidth = clamp(width, LAYOUT_LIMITS.terminal.min, LAYOUT_LIMITS.terminal.max);
     set({ terminalWidth });
+    persist(get());
+  },
+
+  setGitWidth: (width) => {
+    const gitWidth = clamp(width, LAYOUT_LIMITS.git.min, LAYOUT_LIMITS.git.max);
+    set({ gitWidth });
     persist(get());
   },
 

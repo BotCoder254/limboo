@@ -33,7 +33,14 @@ export type UiDensity = 'comfortable' | 'compact';
 /**
  * The right activity drawer tabs. Mirrors the rail in the UI.
  */
-export type ActivityTab = 'files' | 'changes' | 'tasks' | 'activity' | 'console' | 'terminal';
+export type ActivityTab =
+  | 'files'
+  | 'changes'
+  | 'git'
+  | 'tasks'
+  | 'activity'
+  | 'console'
+  | 'terminal';
 
 /**
  * Persistent, user-facing preferences. NOTE: there is intentionally NO light
@@ -63,6 +70,8 @@ export interface AppSettings {
     terminalOpen: boolean;
     /** Integrated terminal panel width in px. */
     terminalWidth: number;
+    /** Git workspace drawer width in px (wider default than other tabs). */
+    gitWidth: number;
   };
   behavior: {
     /** Keep running in the tray when the last window closes. */
@@ -170,6 +179,28 @@ export interface AppSettings {
       mirrorAgentCommands: boolean;
     };
   };
+  /**
+   * Git integration preferences. Local-only — no network, no tokens. Commit
+   * identity falls back to the global git config when left blank.
+   */
+  git: {
+    /** Commit author name (blank = inherit global git config). */
+    userName: string;
+    /** Commit author email (blank = inherit global git config). */
+    userEmail: string;
+    /** Default commit message template / prefix. */
+    commitMessageTemplate: string;
+    /** Offer a suggested commit message derived from the conversation. */
+    suggestCommitFromConversation: boolean;
+    /** Automatically create a checkpoint before high-impact agent operations. */
+    autoCheckpoint: boolean;
+    /** Max checkpoints to keep per session (older ones are pruned). */
+    maxCheckpoints: number;
+    /** Confirm before switching branches when the working tree is dirty. */
+    confirmBranchSwitchWithChanges: boolean;
+    /** Which git operations require explicit confirmation in the UI. */
+    commandApproval: 'destructive' | 'all' | 'none';
+  };
 }
 
 /** A dotted-path key into {@link AppSettings} (kept loose for ergonomics). */
@@ -264,6 +295,142 @@ export interface ActivityItem {
   label: string;
   /** Epoch ms; formatted relatively in the UI. */
   at: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Git (deep integration)                                              */
+/* ------------------------------------------------------------------ */
+
+/** Per-file working-tree status, normalized from git porcelain XY codes. */
+export type GitFileStatus =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'untracked'
+  | 'conflicted';
+
+/** A single changed path in the working tree (index and/or worktree side). */
+export interface GitFileChange {
+  path: string;
+  /** Previous path for renames/copies. */
+  oldPath?: string;
+  /** Overall display status. */
+  status: GitFileStatus;
+  /** Has staged (index) changes. */
+  staged: boolean;
+  /** Has unstaged (worktree) changes. */
+  unstaged: boolean;
+  /** Line additions / deletions (working tree + index), 0 for untracked/binary. */
+  adds: number;
+  dels: number;
+}
+
+/** Live repository status — the dashboard the Git workspace renders. */
+export interface GitStatus {
+  isRepo: boolean;
+  branch?: string;
+  /** Configured upstream ref (e.g. origin/main), if any. */
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  hasRemote: boolean;
+  detached: boolean;
+  files: GitFileChange[];
+  clean: boolean;
+}
+
+export type GitDiffLineKind = 'context' | 'add' | 'del' | 'hunk' | 'meta';
+
+export interface GitDiffLine {
+  kind: GitDiffLineKind;
+  text: string;
+  /** 1-based line numbers in the old / new file (absent for hunk/meta rows). */
+  oldLine?: number;
+  newLine?: number;
+}
+
+export interface GitDiffHunk {
+  header: string;
+  lines: GitDiffLine[];
+}
+
+/** A parsed unified diff for one file. */
+export interface GitFileDiff {
+  path: string;
+  oldPath?: string;
+  binary: boolean;
+  /** True when the file is staged-side (the diff was computed with --cached). */
+  staged: boolean;
+  hunks: GitDiffHunk[];
+  /** Detected language hint for syntax highlighting (file extension based). */
+  language?: string;
+  /** Set when the real diff exceeded the size cap and was elided. */
+  truncated?: boolean;
+}
+
+export interface GitCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  body?: string;
+  author: string;
+  email: string;
+  /** Author date, epoch ms. */
+  at: number;
+  /** Decorations (branch/tag refs) pointing at this commit. */
+  refs: string[];
+}
+
+export interface GitCommitDetail {
+  commit: GitCommit;
+  files: GitFileChange[];
+}
+
+export interface GitBranch {
+  name: string;
+  current: boolean;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitTag {
+  name: string;
+  hash: string;
+  subject?: string;
+}
+
+export interface GitBlameLine {
+  line: number;
+  hash: string;
+  shortHash: string;
+  author: string;
+  at: number;
+  summary: string;
+}
+
+/** A lightweight, session-scoped recovery point stored as a dedicated git ref. */
+export interface GitCheckpoint {
+  id: string;
+  sessionId: string;
+  workspaceId: string;
+  ref: string;
+  commit: string;
+  label: string;
+  auto: boolean;
+  messageId?: string;
+  files: string[];
+  createdAt: number;
+}
+
+/** Result of a guarded branch checkout — surfaces dirty-tree pre-flight info. */
+export interface GitCheckoutResult {
+  ok: boolean;
+  /** Set when the checkout was refused because the working tree is dirty. */
+  blockedByDirty?: boolean;
+  changedFiles?: number;
+  error?: string;
 }
 
 /* ------------------------------------------------------------------ */

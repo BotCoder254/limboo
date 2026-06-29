@@ -33,6 +33,7 @@ import { readWorkspaceFile } from './fs/reader';
 import { FileHistory } from './fs/history';
 import { WorkspaceWatcher } from './fs/watcher';
 import { gitStatus } from './git/status';
+import type { GitManager } from './GitManager';
 import { isInsideRoot } from './workspace/validate';
 
 export class FileSystemManager {
@@ -47,6 +48,8 @@ export class FileSystemManager {
 
   /** Sessions sink for live git status; wired after construction. */
   private sessions: SessionManager | null = null;
+  /** Git Manager to notify (git workspace refresh) on working-tree changes. */
+  private git: GitManager | null = null;
   /** Last broadcast git key per workspace, so unchanged status is a no-op. */
   private readonly lastGitKey = new Map<string, string>();
 
@@ -55,6 +58,11 @@ export class FileSystemManager {
   /** Inject the Session Manager that mirrors live git status into session rows. */
   setSessionManager(sessions: SessionManager): void {
     this.sessions = sessions;
+  }
+
+  /** Inject the Git Manager so the watcher can refresh the Git workspace live. */
+  setGitManager(git: GitManager): void {
+    this.git = git;
   }
 
   /* ----------------------------------------------------------- reads */
@@ -196,6 +204,8 @@ export class FileSystemManager {
     // Recompute live git status (branch may have switched; diff counts moved).
     const ws = this.workspace.getById(workspaceId);
     if (ws) this.refreshGitStatus(ws);
+    // Refresh the Git workspace (status/diff lists) live as the tree changes.
+    this.git?.notifyChanged(workspaceId);
   }
 
   /**

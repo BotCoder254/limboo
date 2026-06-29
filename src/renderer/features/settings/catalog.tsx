@@ -11,6 +11,7 @@ import {
   FolderGit2,
   Bell,
   Bot,
+  GitBranch,
   Keyboard,
   Info,
   TerminalSquare,
@@ -22,6 +23,7 @@ import { WorkspacePanel } from './panels/WorkspacePanel';
 import { BehaviorPanel } from './panels/BehaviorPanel';
 import { AgentPanel } from './panels/AgentPanel';
 import { TerminalPanel } from './panels/TerminalPanel';
+import { GitPanel } from './panels/GitPanel';
 import { ShortcutsPanel } from './panels/ShortcutsPanel';
 import { AboutPanel } from './panels/AboutPanel';
 
@@ -127,6 +129,23 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
       { id: 'terminalMirrorAgent', label: 'Mirror agent commands', keywords: ['agent', 'mirror', 'command'] },
     ],
     Panel: TerminalPanel,
+  },
+  {
+    id: 'git',
+    label: 'Git',
+    icon: GitBranch,
+    keywords: ['git', 'commit', 'branch', 'checkpoint', 'version control', 'diff', 'stage', 'author', 'identity'],
+    fields: [
+      { id: 'gitUserName', label: 'Author name', keywords: ['user.name', 'identity', 'commit'] },
+      { id: 'gitUserEmail', label: 'Author email', keywords: ['user.email', 'identity', 'commit'] },
+      { id: 'gitCommitTemplate', label: 'Commit message template', keywords: ['message', 'prefix'] },
+      { id: 'gitSuggestCommit', label: 'Suggest message from conversation', keywords: ['ai', 'message'] },
+      { id: 'gitAutoCheckpoint', label: 'Auto-checkpoint before agent edits', keywords: ['snapshot', 'recovery', 'safety'] },
+      { id: 'gitMaxCheckpoints', label: 'Max checkpoints per session', keywords: ['prune', 'snapshot'] },
+      { id: 'gitConfirmBranchSwitch', label: 'Confirm branch switch with changes', keywords: ['checkout', 'dirty', 'safety'] },
+      { id: 'gitCommandApproval', label: 'Require approval for git operations', keywords: ['safety', 'confirm', 'destructive'] },
+    ],
+    Panel: GitPanel,
   },
   {
     id: 'shortcuts',

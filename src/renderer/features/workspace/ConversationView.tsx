@@ -14,6 +14,7 @@ import {
   Eye,
   FilePen,
   FilePlus,
+  GitBranch,
   Globe,
   Search,
   Terminal,
@@ -26,6 +27,7 @@ import { Spinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
+import { useGitStore } from '@/renderer/stores/useGitStore';
 import { Markdown } from './Markdown';
 import { InlineApproval } from './InlineApproval';
 
@@ -156,6 +158,12 @@ function ThinkingDots() {
   );
 }
 
+/** Open the Git workspace focused on the changes view (activity-card jump). */
+function openGit(path?: string): void {
+  useGitStore.getState().setFocus({ view: 'status', path });
+  useLayoutStore.getState().setActiveTab('git');
+}
+
 function ToolCard({ call }: { call: AgentToolCall }) {
   const Icon = toolIcon(call);
   const isWeb = call.name === 'WebSearch' || call.name === 'WebFetch';
@@ -205,6 +213,27 @@ function ToolCard({ call }: { call: AgentToolCall }) {
             >
               <Terminal size={11} />
               Terminal
+            </span>
+          )}
+          {call.risk === 'write' && (
+            <span
+              role="button"
+              tabIndex={0}
+              title="Review change in Git"
+              onClick={(e) => {
+                e.stopPropagation();
+                openGit(call.target);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.stopPropagation();
+                  openGit(call.target);
+                }
+              }}
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-fg"
+            >
+              <GitBranch size={11} />
+              Git
             </span>
           )}
           <ToolStatus status={call.status} />

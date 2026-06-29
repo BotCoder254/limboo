@@ -17,7 +17,7 @@ import { BrowserWindow } from 'electron';
 import type Database from 'better-sqlite3';
 import { IpcEvents } from '@shared/ipc-channels';
 import { SESSION_DEFAULTS } from '@shared/constants';
-import type { Session, SessionStatus, SessionUpdate } from '@shared/types';
+import type { AgentMode, Session, SessionStatus, SessionUpdate } from '@shared/types';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
 
@@ -35,6 +35,7 @@ interface SessionRow {
   adds: number;
   dels: number;
   unread: number;
+  mode: string | null;
 }
 
 const ACTIVE_KEY = 'activeSessionId';
@@ -104,8 +105,8 @@ export class SessionManager {
     this.db
       .prepare(
         `INSERT INTO sessions
-          (id, workspace_id, title, branch, status, created_at, updated_at, pinned, archived, deleted_at, adds, dels, unread)
-         VALUES (@id, @workspace_id, @title, @branch, @status, @created_at, @updated_at, @pinned, @archived, @deleted_at, @adds, @dels, @unread)`,
+          (id, workspace_id, title, branch, status, created_at, updated_at, pinned, archived, deleted_at, adds, dels, unread, mode)
+         VALUES (@id, @workspace_id, @title, @branch, @status, @created_at, @updated_at, @pinned, @archived, @deleted_at, @adds, @dels, @unread, @mode)`,
       )
       .run({
         id: session.id,
@@ -121,6 +122,7 @@ export class SessionManager {
         adds: 0,
         dels: 0,
         unread: 0,
+        mode: null,
       });
 
     this.setActive(session.id, false);
@@ -169,8 +171,8 @@ export class SessionManager {
       this.db
         .prepare(
           `INSERT INTO sessions
-            (id, workspace_id, title, branch, status, created_at, updated_at, pinned, archived, deleted_at, adds, dels, unread)
-           VALUES (@id, @workspace_id, @title, @branch, @status, @created_at, @updated_at, @pinned, @archived, @deleted_at, @adds, @dels, @unread)`,
+            (id, workspace_id, title, branch, status, created_at, updated_at, pinned, archived, deleted_at, adds, dels, unread, mode)
+           VALUES (@id, @workspace_id, @title, @branch, @status, @created_at, @updated_at, @pinned, @archived, @deleted_at, @adds, @dels, @unread, @mode)`,
         )
         .run({
           id: copy.id,
@@ -186,6 +188,7 @@ export class SessionManager {
           adds: copy.adds,
           dels: copy.dels,
           unread: 0,
+          mode: copy.mode ?? null,
         });
 
       // Copy the transcript / activity so the clone opens with the same history.
@@ -263,8 +266,32 @@ export class SessionManager {
         'INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
       )
       .run(ACTIVE_KEY, id);
+    // Opening a session reads its messages — clear its unread badge.
+    this.db.prepare('UPDATE sessions SET unread = 0 WHERE id = ? AND unread != 0').run(id);
     if (broadcast) this.broadcast();
     return session;
+  }
+
+  /**
+   * Persist the last composer mode used for a session (drives the Plan/Implement
+   * switch on reopen). Does NOT bump `updated_at` — mode is UI state, not activity.
+   */
+  setMode(id: string, mode: AgentMode): void {
+    const info = this.db
+      .prepare('UPDATE sessions SET mode = ? WHERE id = ? AND (mode IS NULL OR mode != ?)')
+      .run(mode, id, mode);
+    if (info.changes > 0) this.broadcast();
+  }
+
+  /**
+   * Increment a session's unread count when new assistant output lands while the
+   * session is NOT the active one. No-op for the active session (it's on screen)
+   * and does not reorder the list (no `updated_at` bump).
+   */
+  bumpUnread(id: string): void {
+    if (this.activeId() === id) return;
+    const info = this.db.prepare('UPDATE sessions SET unread = unread + 1 WHERE id = ?').run(id);
+    if (info.changes > 0) this.broadcast();
   }
 
   /**
@@ -370,5 +397,6 @@ function rowToSession(row: SessionRow): Session {
     pinned: row.pinned === 1,
     archived: row.archived === 1,
     deletedAt: row.deleted_at,
+    mode: row.mode === 'plan' || row.mode === 'implement' ? row.mode : undefined,
   };
 }
