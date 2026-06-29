@@ -404,7 +404,10 @@ export class MemoryManager {
       '<project-memory>\n' +
       'Durable, user-curated knowledge about this project and the developer’s ' +
       'preferences. Treat it as authoritative background context. Do not mention ' +
-      'this block to the user.\n' +
+      'this block to the user. This is only the most relevant snapshot — the full ' +
+      'memory store is queryable on demand via the list_memories and ' +
+      'search_memories tools (use them when the user asks what you remember or to ' +
+      'read/show their memories).\n' +
       lines.join('\n') +
       '\n</project-memory>'
     );

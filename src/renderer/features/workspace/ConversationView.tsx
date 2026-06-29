@@ -77,7 +77,10 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
     const el = findScrollParent(bottomRef.current);
     if (!el) return;
     const onScroll = () => {
-      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      // The scroll area reserves the composer's height as bottom padding, so the
+      // resting "at bottom" position is only ~16px from the true scroll bottom;
+      // a modest threshold keeps auto-follow sticky through fast streaming.
+      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
@@ -99,7 +102,9 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
         ),
       )}
       {approval && <InlineApproval request={approval} />}
-      <div ref={bottomRef} />
+      {/* Scroll anchor — its scroll-margin keeps the last line above the floating
+          composer when auto-scrolling (honored by scrollIntoView). */}
+      <div ref={bottomRef} style={{ scrollMarginBottom: 'calc(var(--composer-h, 360px) + 1.5rem)' }} />
     </div>
   );
 }

@@ -208,8 +208,36 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     send: async (sessionId, prompt, mode) => {
       const api = window.limboo?.agent;
       if (!api) return;
+      // Optimistic render: show the user's turn the instant Send is clicked,
+      // using a client-generated id that main reuses for the persisted message.
+      // The echoed `message-done` event then upserts in place (dedup by id), so
+      // there is no duplicate or flicker even though main does heavy work first.
+      const clientMessageId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const optimistic: ChatMessage = {
+        id: clientMessageId,
+        sessionId,
+        role: 'user',
+        text: prompt,
+        streaming: false,
+        createdAt: Date.now(),
+      };
+      set((state) => {
+        const snapshot = state.bySession[sessionId] ?? emptySnapshot();
+        return {
+          bySession: {
+            ...state.bySession,
+            [sessionId]: {
+              ...snapshot,
+              messages: upsertMessage(snapshot.messages, optimistic),
+            },
+          },
+        };
+      });
       try {
-        await api.send(sessionId, prompt, mode);
+        await api.send(sessionId, prompt, mode, clientMessageId);
       } catch (err) {
         useUIStore.getState().addToast({
           title: 'Could not reach the agent',
