@@ -23,7 +23,7 @@ Report privately by one of:
 
 - GitHub's private vulnerability reporting ("Report a vulnerability" under the
   repository **Security** tab), or
-- email to **teumteum776@gmail.com** with the subject line `SECURITY: <summary>`.
+- email to **security@example.com** with the subject line `SECURITY: <summary>`.
 
 Please include:
 
