@@ -16,6 +16,8 @@ import type {
   GitCommitDetail,
   GitFileChange,
   GitFileDiff,
+  GitPullResult,
+  GitPushResult,
   GitStatus,
   GitTag,
 } from '@shared/types';
@@ -25,6 +27,25 @@ import type { GitManager } from '../managers/GitManager';
 function assertId(id: unknown, label = 'id'): asserts id is string {
   if (typeof id !== 'string' || id.length === 0 || id.length > 128) {
     throw new Error(`git: invalid ${label}`);
+  }
+}
+
+/**
+ * Validate a renderer-supplied options object: every value must be a boolean and
+ * every key must be in the allow-list. Rejecting unknown keys / non-primitive
+ * values is defense in depth against prototype pollution and argument smuggling.
+ */
+function assertBoolOpts(opts: unknown, allowed: string[], label: string): void {
+  if (opts === undefined) return;
+  if (typeof opts !== 'object' || opts === null || Array.isArray(opts)) {
+    throw new Error(`git: invalid ${label}`);
+  }
+  for (const key of Object.keys(opts)) {
+    if (!allowed.includes(key)) throw new Error(`git: unexpected ${label} key: ${key}`);
+    const v = (opts as Record<string, unknown>)[key];
+    if (v !== undefined && typeof v !== 'boolean') {
+      throw new Error(`git: ${label}.${key} must be a boolean`);
+    }
   }
 }
 
@@ -142,6 +163,24 @@ export function registerGitHandlers(git: GitManager): void {
     assertId(wsId, 'workspaceId');
     return git.fetch(wsId);
   });
+
+  handle<[string, { setUpstream?: boolean; force?: boolean }?], GitPushResult>(
+    IpcChannels.gitPush,
+    (_e, wsId, opts) => {
+      assertId(wsId, 'workspaceId');
+      assertBoolOpts(opts, ['setUpstream', 'force'], 'push options');
+      return git.push(wsId, opts ?? {});
+    },
+  );
+
+  handle<[string, { rebase?: boolean }?], GitPullResult>(
+    IpcChannels.gitPull,
+    (_e, wsId, opts) => {
+      assertId(wsId, 'workspaceId');
+      assertBoolOpts(opts, ['rebase'], 'pull options');
+      return git.pull(wsId, opts ?? {});
+    },
+  );
 
   handle<[string], boolean>(IpcChannels.gitInit, (_e, wsId) => {
     assertId(wsId, 'workspaceId');

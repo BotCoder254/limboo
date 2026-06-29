@@ -9,6 +9,7 @@ import type { AgentManager } from '../managers/AgentManager';
 import type { FileSystemManager } from '../managers/FileSystemManager';
 import type { TerminalManager } from '../managers/TerminalManager';
 import type { GitManager } from '../managers/GitManager';
+import type { MemoryManager } from '../managers/memory/MemoryManager';
 import { registerWindowHandlers } from './windowHandlers';
 import { registerSettingsHandlers } from './settingsHandlers';
 import { registerSystemHandlers } from './systemHandlers';
@@ -18,6 +19,7 @@ import { registerAgentHandlers } from './agentHandlers';
 import { registerFsHandlers } from './fsHandlers';
 import { registerTerminalHandlers } from './terminalHandlers';
 import { registerGitHandlers } from './gitHandlers';
+import { registerMemoryHandlers } from './memoryHandlers';
 
 export interface IpcDeps {
   settings: SettingsManager;
@@ -28,6 +30,7 @@ export interface IpcDeps {
   fs: FileSystemManager;
   terminal: TerminalManager;
   git: GitManager;
+  memory: MemoryManager;
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -40,4 +43,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerFsHandlers(deps.fs);
   registerTerminalHandlers(deps.terminal);
   registerGitHandlers(deps.git);
+  registerMemoryHandlers(deps.memory);
 }

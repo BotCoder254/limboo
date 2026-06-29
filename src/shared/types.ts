@@ -37,6 +37,7 @@ export type ActivityTab =
   | 'files'
   | 'changes'
   | 'git'
+  | 'memory'
   | 'tasks'
   | 'activity'
   | 'console'
@@ -200,6 +201,51 @@ export interface AppSettings {
     confirmBranchSwitchWithChanges: boolean;
     /** Which git operations require explicit confirmation in the UI. */
     commandApproval: 'destructive' | 'all' | 'none';
+    /**
+     * Push preferences. Limboo never stores remote credentials — push relies on
+     * the user's existing git credential helper / SSH agent, so a missing
+     * credential fails fast with a clear message rather than hanging.
+     */
+    push: {
+      /** First push of a branch publishes it with `-u origin <branch>`. */
+      autoSetUpstream: boolean;
+      /** Require an explicit confirmation before a force push (--force-with-lease). */
+      confirmForcePush: boolean;
+    };
+    /** Pull strategy. `ff-only` avoids silent merge commits; `rebase` replays. */
+    pull: {
+      strategy: 'ff-only' | 'rebase';
+    };
+  };
+  /**
+   * Local Memory System — a provider-independent platform service that preserves
+   * project knowledge (decisions, conventions, preferences, solutions, notes) in
+   * the on-device database and injects the most relevant entries into the agent
+   * prompt before it reaches the harness. Fully local: no network, no embeddings
+   * API. Retrieval is SQLite FTS5/BM25 fused with recency / confidence / usage.
+   */
+  memory: {
+    /** Master switch for the memory subsystem (capture + retrieval + UI). */
+    enabled: boolean;
+    /** Inject ranked, relevant memories into the agent's system context. */
+    injectIntoPrompt: boolean;
+    /** Max memories injected into a single prompt (ranked, budget-capped). */
+    maxInjected: number;
+    /**
+     * How new memories are created from activity (commits, conversations):
+     * - `propose`: surface as pending proposals the user accepts/dismisses.
+     * - `auto`:    silently store high-confidence candidates.
+     * - `off`:     only manually-authored notes are stored.
+     */
+    autoCapture: 'propose' | 'auto' | 'off';
+    /** In `propose` mode, candidates at/above this confidence auto-accept (0 disables). */
+    autoAcceptConfidence: number;
+    /** Decay + archive stale memories over time. */
+    expiry: {
+      enabled: boolean;
+      /** Days of disuse after which an unpinned memory is flagged stale. */
+      staleDays: number;
+    };
   };
 }
 
@@ -431,6 +477,143 @@ export interface GitCheckoutResult {
   blockedByDirty?: boolean;
   changedFiles?: number;
   error?: string;
+}
+
+/**
+ * Result of `git push`. Known git stderr signatures are decoded into flags so
+ * the UI can guide the user (publish a branch, pull first, configure creds)
+ * instead of surfacing a raw error. Limboo stores no credentials.
+ */
+export interface GitPushResult {
+  ok: boolean;
+  /** The branch was published with `-u origin <branch>` (first push). */
+  setUpstream?: boolean;
+  /** Push rejected because the remote has commits we don't (non-fast-forward). */
+  rejected?: boolean;
+  /** A pull/fetch is needed before pushing. */
+  needsPull?: boolean;
+  /** The branch has no upstream and auto-set-upstream is off. */
+  noUpstream?: boolean;
+  /** The repository has no remote configured. */
+  noRemote?: boolean;
+  /** Push failed because no credentials are configured for the remote. */
+  authFailed?: boolean;
+  /** Commits pushed (ahead count consumed), best-effort. */
+  pushed?: number;
+  error?: string;
+}
+
+/** Result of `git pull` — decodes fast-forward / conflict / divergence cases. */
+export interface GitPullResult {
+  ok: boolean;
+  /** Remote work was integrated (fast-forward or rebase succeeded). */
+  updated?: boolean;
+  /** Already up to date — nothing to integrate. */
+  upToDate?: boolean;
+  /** The pull could not fast-forward and the strategy forbade a merge. */
+  notFastForward?: boolean;
+  /** The pull/rebase stopped on conflicts that need manual resolution. */
+  conflicts?: boolean;
+  /** Files left in a conflicted state, if known. */
+  files?: string[];
+  /** No remote / no upstream to pull from. */
+  noUpstream?: boolean;
+  error?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Local Memory System                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Memory tiers, shortest-lived to most durable. Higher tiers outrank lower ones
+ * during retrieval so architectural knowledge surfaces before transient detail.
+ */
+export type MemoryTier =
+  | 'session' // transient, current-session context
+  | 'workspace' // repository characteristics shared across sessions
+  | 'project' // durable product knowledge (rules, domain, requirements)
+  | 'preference' // how the developer prefers to work
+  | 'convention' // recurring coding standards / patterns
+  | 'decision' // architecture decisions (first-class, with rationale)
+  | 'solution' // reusable implementation knowledge
+  | 'note'; // manually-authored note
+
+/** Where a memory came from. Manual notes are trusted highest. */
+export type MemorySource =
+  | 'manual'
+  | 'auto'
+  | 'commit'
+  | 'conversation'
+  | 'review'
+  | 'terminal'
+  | 'import';
+
+/** Lifecycle of a memory. Only `active` rows are ever injected into a prompt. */
+export type MemoryStatus = 'active' | 'archived' | 'proposed' | 'rejected';
+
+/** A single unit of durable project knowledge. */
+export interface Memory {
+  id: string;
+  /** Owning workspace, or null for global/user-scope (preferences). */
+  workspaceId: string | null;
+  tier: MemoryTier;
+  title: string;
+  body: string;
+  source: MemorySource;
+  /** 0..1 confidence the entry is intentional, durable knowledge. */
+  confidence: number;
+  pinned: boolean;
+  status: MemoryStatus;
+  /** How many times this memory has been retrieved into a prompt. */
+  useCount: number;
+  lastUsedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  /** Epoch ms after which the memory is considered stale (null = never). */
+  expiresAt: number | null;
+  /** Originating session, commit, or file (for "navigate back to source"). */
+  sessionId: string | null;
+  commitHash: string | null;
+  filePath: string | null;
+}
+
+/** A memory plus an FTS snippet + score, returned from search/retrieval. */
+export interface MemoryHit extends Memory {
+  /** Highlighted snippet around the match (search) — plain body otherwise. */
+  snippet?: string;
+  /** Composite rank score (debug / ordering only). */
+  score?: number;
+}
+
+/** Renderer-supplied fields when creating a memory. */
+export interface MemoryCreateInput {
+  workspaceId: string | null;
+  tier: MemoryTier;
+  title: string;
+  body: string;
+  source?: MemorySource;
+  confidence?: number;
+  pinned?: boolean;
+  sessionId?: string | null;
+}
+
+/** Renderer-supplied patch when editing a memory (all optional). */
+export interface MemoryUpdateInput {
+  title?: string;
+  body?: string;
+  tier?: MemoryTier;
+  pinned?: boolean;
+  confidence?: number;
+}
+
+/** Filters for listing memories in the Memory panel. */
+export interface MemoryListFilter {
+  workspaceId: string | null;
+  tiers?: MemoryTier[];
+  /** Include archived rows (default false). */
+  includeArchived?: boolean;
+  limit?: number;
 }
 
 /* ------------------------------------------------------------------ */

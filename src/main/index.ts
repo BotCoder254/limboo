@@ -22,6 +22,7 @@ import { AgentManager } from './managers/AgentManager';
 import { FileSystemManager } from './managers/FileSystemManager';
 import { TerminalManager } from './managers/TerminalManager';
 import { GitManager } from './managers/GitManager';
+import { MemoryManager } from './managers/memory/MemoryManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -68,6 +69,8 @@ function bootstrap(): void {
   let fileSystem: FileSystemManager;
   let terminal: TerminalManager;
   let git: GitManager;
+  let memory: MemoryManager;
+  let memorySweepTimer: ReturnType<typeof setInterval> | undefined;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
   const tray = new TrayManager();
@@ -92,12 +95,21 @@ function bootstrap(): void {
     fileSystem = new FileSystemManager(workspace);
     terminal = new TerminalManager(workspace, settings);
     git = new GitManager(workspace, settings);
+    // The Local Memory System — a platform service owned by the app, not the
+    // agent. Seeds default memories on first run and injects relevant knowledge
+    // into prompts before they reach the harness.
+    memory = new MemoryManager(settings);
+    memory.seedDefaults(null); // global / user-scope starters
     // The agent mirrors its shell commands into the integrated terminal.
     agent.setTerminalManager(terminal);
     // The agent auto-titles untitled sessions from their first prompt.
     agent.setSessionManager(sessions);
     // The agent drives checkpoints + live git refresh through the Git Manager.
     agent.setGitManager(git);
+    // The agent retrieves + injects relevant memories; the git engine proposes
+    // new memories from commits. Both treat memory as an optional collaborator.
+    agent.setMemoryManager(memory);
+    git.setMemoryManager(memory);
     // The File System Layer pushes live git status (branch + diff) into sessions
     // and notifies the Git workspace whenever the working tree changes.
     fileSystem.setSessionManager(sessions);
@@ -113,14 +125,26 @@ function bootstrap(): void {
       fs: fileSystem,
       terminal,
       git,
+      memory,
     });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();
 
     // File System Layer: watch + index the active workspace, and follow every
-    // subsequent active-workspace change (open / switch / clear).
-    workspace.onActiveChanged((ws) => fileSystem.setActiveWorkspace(ws));
-    fileSystem.setActiveWorkspace(workspace.getActive());
+    // subsequent active-workspace change (open / switch / clear). Each newly
+    // active workspace also seeds its starter memories (idempotent).
+    workspace.onActiveChanged((ws) => {
+      fileSystem.setActiveWorkspace(ws);
+      if (ws) memory.seedDefaults(ws.id);
+    });
+    const initialWs = workspace.getActive();
+    fileSystem.setActiveWorkspace(initialWs);
+    if (initialWs) memory.seedDefaults(initialWs.id);
+
+    // Low-frequency memory maintenance (decay/flag stale entries). Off the hot
+    // path; runs hourly and once shortly after boot.
+    memory.sweep();
+    memorySweepTimer = setInterval(() => memory.sweep(), 60 * 60 * 1000);
 
     appMenu.install();
     const win = createMainWindow(windowState);
@@ -147,6 +171,7 @@ function bootstrap(): void {
     agent?.cleanup();
     void fileSystem?.dispose();
     terminal?.dispose();
+    if (memorySweepTimer) clearInterval(memorySweepTimer);
     tray.destroy();
     closeDb();
   });

@@ -104,12 +104,27 @@ export const IpcChannels = {
   gitCreateTag: 'git:createTag',
   gitBlame: 'git:blame',
   gitFetch: 'git:fetch',
+  gitPush: 'git:push',
+  gitPull: 'git:pull',
   gitInit: 'git:init',
   gitCheckpointCreate: 'git:checkpointCreate',
   gitCheckpointList: 'git:checkpointList',
   gitCheckpointDiff: 'git:checkpointDiff',
   gitCheckpointRestore: 'git:checkpointRestore',
   gitCheckpointDelete: 'git:checkpointDelete',
+
+  // Local Memory System — provider-independent project knowledge, all local.
+  memoryList: 'memory:list',
+  memoryGet: 'memory:get',
+  memorySearch: 'memory:search',
+  memoryCreate: 'memory:create',
+  memoryUpdate: 'memory:update',
+  memoryDelete: 'memory:delete',
+  memoryArchive: 'memory:archive',
+  memoryPin: 'memory:pin',
+  memoryListProposals: 'memory:listProposals',
+  memoryAcceptProposal: 'memory:acceptProposal',
+  memoryRejectProposal: 'memory:rejectProposal',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
@@ -153,6 +168,8 @@ export const IpcEvents = {
   gitChanged: 'git:changed',
   /** A session's git checkpoints changed (created / restored / pruned). */
   gitCheckpointsChanged: 'git:checkpoints-changed',
+  /** The memory store changed (created / updated / proposed / accepted / pruned). */
+  memoryChanged: 'memory:changed',
 } as const;
 
 export type IpcEvent = (typeof IpcEvents)[keyof typeof IpcEvents];

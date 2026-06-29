@@ -32,9 +32,17 @@ import type {
   GitCommitDetail,
   GitFileChange,
   GitFileDiff,
+  GitPullResult,
+  GitPushResult,
   GitStatus,
   GitTag,
   IndexProgress,
+  Memory,
+  MemoryCreateInput,
+  MemoryHit,
+  MemoryListFilter,
+  MemoryTier,
+  MemoryUpdateInput,
   PermissionDecision,
   PermissionRequest,
   Session,
@@ -285,6 +293,12 @@ const gitApi = {
     ipcRenderer.invoke(IpcChannels.gitBlame, workspaceId, path),
   fetch: (workspaceId: string): Promise<boolean> =>
     ipcRenderer.invoke(IpcChannels.gitFetch, workspaceId),
+  push: (
+    workspaceId: string,
+    opts?: { setUpstream?: boolean; force?: boolean },
+  ): Promise<GitPushResult> => ipcRenderer.invoke(IpcChannels.gitPush, workspaceId, opts),
+  pull: (workspaceId: string, opts?: { rebase?: boolean }): Promise<GitPullResult> =>
+    ipcRenderer.invoke(IpcChannels.gitPull, workspaceId, opts),
   init: (workspaceId: string): Promise<boolean> =>
     ipcRenderer.invoke(IpcChannels.gitInit, workspaceId),
   checkpointCreate: (
@@ -308,6 +322,32 @@ const gitApi = {
     subscribe<{ sessionId: string }>(IpcEvents.gitCheckpointsChanged, cb),
 };
 
+const memoryApi = {
+  list: (filter: MemoryListFilter): Promise<Memory[]> =>
+    ipcRenderer.invoke(IpcChannels.memoryList, filter),
+  get: (id: string): Promise<Memory | null> => ipcRenderer.invoke(IpcChannels.memoryGet, id),
+  search: (
+    query: string,
+    opts: { workspaceId: string | null; tiers?: MemoryTier[]; limit?: number },
+  ): Promise<MemoryHit[]> => ipcRenderer.invoke(IpcChannels.memorySearch, query, opts),
+  create: (input: MemoryCreateInput): Promise<Memory> =>
+    ipcRenderer.invoke(IpcChannels.memoryCreate, input),
+  update: (id: string, patch: MemoryUpdateInput): Promise<Memory | null> =>
+    ipcRenderer.invoke(IpcChannels.memoryUpdate, id, patch),
+  remove: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.memoryDelete, id),
+  archive: (id: string, archived: boolean): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.memoryArchive, id, archived),
+  pin: (id: string, pinned: boolean): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.memoryPin, id, pinned),
+  listProposals: (workspaceId: string | null): Promise<Memory[]> =>
+    ipcRenderer.invoke(IpcChannels.memoryListProposals, workspaceId),
+  acceptProposal: (id: string): Promise<Memory | null> =>
+    ipcRenderer.invoke(IpcChannels.memoryAcceptProposal, id),
+  rejectProposal: (id: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.memoryRejectProposal, id),
+  onChanged: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.memoryChanged, cb),
+};
+
 const limbooApi = {
   window: windowApi,
   settings: settingsApi,
@@ -320,6 +360,7 @@ const limbooApi = {
   fs: fsApi,
   terminal: terminalApi,
   git: gitApi,
+  memory: memoryApi,
 };
 
 contextBridge.exposeInMainWorld('limboo', limbooApi);

@@ -11,6 +11,7 @@ import {
   FolderGit2,
   Bell,
   Bot,
+  Brain,
   GitBranch,
   Keyboard,
   Info,
@@ -24,6 +25,7 @@ import { BehaviorPanel } from './panels/BehaviorPanel';
 import { AgentPanel } from './panels/AgentPanel';
 import { TerminalPanel } from './panels/TerminalPanel';
 import { GitPanel } from './panels/GitPanel';
+import { MemoryPanel } from './panels/MemoryPanel';
 import { ShortcutsPanel } from './panels/ShortcutsPanel';
 import { AboutPanel } from './panels/AboutPanel';
 
@@ -134,18 +136,37 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
     id: 'git',
     label: 'Git',
     icon: GitBranch,
-    keywords: ['git', 'commit', 'branch', 'checkpoint', 'version control', 'diff', 'stage', 'author', 'identity'],
+    keywords: ['git', 'commit', 'branch', 'checkpoint', 'version control', 'diff', 'stage', 'author', 'identity', 'push', 'pull', 'remote', 'upstream', 'sync'],
     fields: [
       { id: 'gitUserName', label: 'Author name', keywords: ['user.name', 'identity', 'commit'] },
       { id: 'gitUserEmail', label: 'Author email', keywords: ['user.email', 'identity', 'commit'] },
       { id: 'gitCommitTemplate', label: 'Commit message template', keywords: ['message', 'prefix'] },
       { id: 'gitSuggestCommit', label: 'Suggest message from conversation', keywords: ['ai', 'message'] },
+      { id: 'gitAutoSetUpstream', label: 'Publish new branches on first push', keywords: ['push', 'upstream', 'track', 'remote', 'publish'] },
+      { id: 'gitConfirmForcePush', label: 'Confirm before force push', keywords: ['push', 'force', 'lease', 'safety'] },
+      { id: 'gitPullStrategy', label: 'Pull strategy', keywords: ['pull', 'rebase', 'fast-forward', 'merge', 'sync'] },
       { id: 'gitAutoCheckpoint', label: 'Auto-checkpoint before agent edits', keywords: ['snapshot', 'recovery', 'safety'] },
       { id: 'gitMaxCheckpoints', label: 'Max checkpoints per session', keywords: ['prune', 'snapshot'] },
       { id: 'gitConfirmBranchSwitch', label: 'Confirm branch switch with changes', keywords: ['checkout', 'dirty', 'safety'] },
       { id: 'gitCommandApproval', label: 'Require approval for git operations', keywords: ['safety', 'confirm', 'destructive'] },
     ],
     Panel: GitPanel,
+  },
+  {
+    id: 'memory',
+    label: 'Memory',
+    icon: Brain,
+    keywords: ['memory', 'knowledge', 'context', 'recall', 'retention', 'notes', 'decisions', 'conventions', 'inject', 'capture'],
+    fields: [
+      { id: 'memoryEnabled', label: 'Enable memory', keywords: ['on', 'off', 'toggle'] },
+      { id: 'memoryInject', label: 'Inject into agent prompts', keywords: ['context', 'prompt', 'agent'] },
+      { id: 'memoryMaxInjected', label: 'Max memories per prompt', keywords: ['budget', 'limit', 'count'] },
+      { id: 'memoryAutoCapture', label: 'Capture mode', keywords: ['propose', 'auto', 'confirm', 'commit'] },
+      { id: 'memoryAutoAccept', label: 'Auto-keep above confidence', keywords: ['confidence', 'threshold'] },
+      { id: 'memoryExpiryEnabled', label: 'Flag stale memories', keywords: ['expire', 'decay', 'cleanup'] },
+      { id: 'memoryStaleDays', label: 'Stale after', keywords: ['days', 'expire', 'old'] },
+    ],
+    Panel: MemoryPanel,
   },
   {
     id: 'shortcuts',

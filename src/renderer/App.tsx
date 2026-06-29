@@ -17,6 +17,7 @@ import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
+import { useMemoryStore } from '@/renderer/stores/useMemoryStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -39,6 +40,8 @@ export function App() {
     useTerminalStore.getState().hydrate();
     // Subscribe to live git status + checkpoint pushes for the Git workspace.
     useGitStore.getState().hydrate();
+    // Subscribe to memory changes (proposals drive the rail badge) + follow ws.
+    useMemoryStore.getState().hydrate();
   }, []);
 
   return (

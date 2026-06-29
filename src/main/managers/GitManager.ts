@@ -31,6 +31,8 @@ import type {
   GitCommitDetail,
   GitFileChange,
   GitFileDiff,
+  GitPullResult,
+  GitPushResult,
   GitStatus,
   GitTag,
 } from '@shared/types';
@@ -38,6 +40,7 @@ import { getDb } from '../db/database';
 import { logger } from '../logger';
 import type { WorkspaceManager } from './WorkspaceManager';
 import type { SettingsManager } from './SettingsManager';
+import type { MemoryManager } from './memory/MemoryManager';
 import { assertInsideRepo, gitText, runGit } from './git/exec';
 import {
   LOG_FORMAT,
@@ -65,11 +68,18 @@ interface CheckpointRow {
 export class GitManager {
   /** Cache of workspaceId -> repo root (rev-parse --show-toplevel). */
   private readonly rootCache = new Map<string, string | null>();
+  /** Optional Local Memory System — commits become proposed memories. */
+  private memory?: MemoryManager;
 
   constructor(
     private readonly workspace: WorkspaceManager,
     private readonly settings: SettingsManager,
   ) {}
+
+  /** Wire the Memory Manager so finalized commits can propose new memories. */
+  setMemoryManager(memory: MemoryManager): void {
+    this.memory = memory;
+  }
 
   private get db(): Database.Database {
     return getDb();
@@ -239,7 +249,17 @@ export class GitManager {
     if (!res.ok) throw new Error(res.stderr || 'git commit failed');
     this.notifyChanged(workspaceId);
     const log = await this.log(workspaceId, { limit: 1 });
-    return log[0] ?? null;
+    const commit = log[0] ?? null;
+    // Offer the commit to the Local Memory System as a knowledge candidate
+    // (fire-and-forget; respects the user's auto-capture policy).
+    if (commit) {
+      this.memory?.proposeFromCommit(workspaceId, {
+        hash: commit.hash,
+        subject: commit.subject,
+        body: commit.body,
+      });
+    }
+    return commit;
   }
 
   /** `-c user.name/email` overrides from settings (blank = inherit git config). */
@@ -388,6 +408,78 @@ export class GitManager {
     const res = await runGit(root, ['fetch', '--all', '--prune'], { timeout: 60_000 });
     this.notifyChanged(workspaceId);
     return res.ok;
+  }
+
+  /* ------------------------------------------------------------- push/pull */
+
+  /**
+   * Push the current branch to its remote. Never stores credentials — relies on
+   * the user's git credential helper / SSH agent (env keeps the askpass stubbed,
+   * so a missing credential fails fast instead of hanging). Decodes the common
+   * git failures into structured flags so the UI can guide the next step.
+   */
+  async push(
+    workspaceId: string,
+    opts: { setUpstream?: boolean; force?: boolean } = {},
+  ): Promise<GitPushResult> {
+    const root = await this.requireRoot(workspaceId);
+    const status = await this.status(workspaceId);
+
+    if (!status.hasRemote) return { ok: false, noRemote: true };
+    if (!status.branch || status.detached) {
+      return { ok: false, error: 'Cannot push a detached HEAD — checkout a branch first.' };
+    }
+
+    const ahead = status.ahead;
+    const gitCfg = this.settings.getAll().git;
+    const hasUpstream = !!status.upstream;
+    const wantUpstream = opts.setUpstream || (!hasUpstream && gitCfg.push.autoSetUpstream);
+
+    if (!hasUpstream && !wantUpstream) {
+      return { ok: false, noUpstream: true };
+    }
+
+    const branch = sanitizeRef(status.branch);
+    const args = ['push'];
+    if (opts.force) args.push('--force-with-lease');
+    if (wantUpstream) args.push('-u', 'origin', branch);
+
+    const res = await runGit(root, args, { timeout: GIT_LIMITS.networkTimeoutMs });
+    this.notifyChanged(workspaceId);
+    if (res.ok) {
+      return { ok: true, setUpstream: wantUpstream || undefined, pushed: ahead || undefined };
+    }
+    return { ok: false, ...classifyPushError(res.stderr) };
+  }
+
+  /**
+   * Integrate remote work into the current branch. `ff-only` (default) refuses a
+   * non-fast-forward so history stays linear; `rebase` replays local commits on
+   * top. Conflicts/divergence are returned as flags rather than thrown.
+   */
+  async pull(
+    workspaceId: string,
+    opts: { rebase?: boolean } = {},
+  ): Promise<GitPullResult> {
+    const root = await this.requireRoot(workspaceId);
+    const status = await this.status(workspaceId);
+    if (!status.hasRemote || !status.upstream) {
+      return { ok: false, noUpstream: true };
+    }
+
+    const strategy = opts.rebase ? 'rebase' : this.settings.getAll().git.pull.strategy;
+    const args =
+      strategy === 'rebase'
+        ? ['pull', '--rebase', ...this.identityArgs()]
+        : ['pull', '--ff-only'];
+
+    const res = await runGit(root, args, { timeout: GIT_LIMITS.networkTimeoutMs });
+    this.notifyChanged(workspaceId);
+    if (res.ok) {
+      const upToDate = /already up to date/i.test(res.stdout) || /already up to date/i.test(res.stderr);
+      return { ok: true, upToDate: upToDate || undefined, updated: !upToDate || undefined };
+    }
+    return { ok: false, ...classifyPullError(res.stderr || res.stdout) };
   }
 
   async init(workspaceId: string): Promise<boolean> {
@@ -608,6 +700,53 @@ function sanitizeRef(ref: string): string {
     throw new Error('git: unsafe ref');
   }
   return ref;
+}
+
+/**
+ * Decode `git push` stderr into structured flags. Credentials are never stored
+ * by Limboo, so an auth failure is surfaced as guidance to configure the system
+ * credential helper / SSH agent rather than a raw error.
+ */
+function classifyPushError(stderr: string): Partial<GitPushResult> {
+  const t = (stderr || '').toLowerCase();
+  if (
+    /could not read username/.test(t) ||
+    /authentication failed/.test(t) ||
+    /permission denied/.test(t) ||
+    /no such identity/.test(t) ||
+    /terminal prompts disabled/.test(t)
+  ) {
+    return { authFailed: true, error: redactRemote(stderr) };
+  }
+  if (/\(non-fast-forward\)/.test(t) || /\[rejected\]/.test(t) || /fetch first/.test(t) || /updates were rejected/.test(t)) {
+    return { rejected: true, needsPull: true, error: redactRemote(stderr) };
+  }
+  return { error: redactRemote(stderr) || 'git push failed' };
+}
+
+/** Decode `git pull` stderr/stdout into structured flags. */
+function classifyPullError(out: string): Partial<GitPullResult> {
+  const t = (out || '').toLowerCase();
+  if (
+    /could not read username/.test(t) ||
+    /authentication failed/.test(t) ||
+    /permission denied/.test(t)
+  ) {
+    return { error: redactRemote(out) };
+  }
+  if (/not possible to fast-forward/.test(t) || /need to specify how to reconcile/.test(t) || /diverging/.test(t)) {
+    return { notFastForward: true, error: redactRemote(out) };
+  }
+  if (/conflict/.test(t) || /merge conflict/.test(t) || /could not apply/.test(t)) {
+    return { conflicts: true, error: redactRemote(out) };
+  }
+  return { error: redactRemote(out) || 'git pull failed' };
+}
+
+/** Strip any embedded credentials from a remote URL before it reaches the UI/log. */
+function redactRemote(text: string): string {
+  if (typeof text !== 'string') return '';
+  return text.replace(/(https?:\/\/)[^/@\s]+@/gi, '$1');
 }
 
 /** Map a file extension to a highlight.js / shiki language id for the diff view. */

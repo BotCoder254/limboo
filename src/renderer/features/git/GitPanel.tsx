@@ -8,6 +8,8 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Check,
   DownloadCloud,
   FolderGit2,
@@ -16,6 +18,7 @@ import {
   ListChecks,
   RefreshCw,
   Save,
+  UploadCloud,
   X,
 } from 'lucide-react';
 import type { GitFileChange } from '@shared/types';
@@ -52,13 +55,17 @@ export function GitPanel() {
   const loading = useGitStore((s) => s.loading);
   const refresh = useGitStore((s) => s.refresh);
   const fetch = useGitStore((s) => s.fetch);
+  const push = useGitStore((s) => s.push);
+  const pull = useGitStore((s) => s.pull);
   const focus = useGitStore((s) => s.focus);
   const setFocus = useGitStore((s) => s.setFocus);
   const init = useGitStore((s) => s.init);
   const createCheckpoint = useGitStore((s) => s.createCheckpoint);
   const setActiveTab = useLayoutStore((s) => s.setActiveTab);
+  const confirmForcePush = useSettingsStore((s) => s.settings.git.push.confirmForcePush);
   const addToast = useUIStore((s) => s.addToast);
   const [tab, setTab] = useState<SubTab>('changes');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void refresh();
@@ -75,6 +82,37 @@ export function GitPanel() {
   const doFetch = async () => {
     const ok = await fetch();
     addToast({ title: ok ? 'Fetched from remotes' : 'Fetch failed', tone: ok ? 'info' : 'danger' });
+  };
+
+  const hasUpstream = !!status?.upstream;
+  const ahead = status?.ahead ?? 0;
+  const behind = status?.behind ?? 0;
+
+  const doPush = async (force = false) => {
+    if (busy) return;
+    if (force && confirmForcePush) {
+      const ok = window.confirm(
+        'Force push with lease? This overwrites the remote branch with your local history. ' +
+          'It is rejected if someone else has pushed in the meantime.',
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    try {
+      await push({ force: force || undefined, setUpstream: !hasUpstream || undefined });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doPull = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await pull();
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (status && !status.isRepo) {
@@ -104,9 +142,15 @@ export function GitPanel() {
       tab={tab}
       onTab={setTab}
       status={status}
-      loading={loading}
+      loading={loading || busy}
       onRefresh={() => void refresh()}
       onFetch={status?.hasRemote ? () => void doFetch() : undefined}
+      onPush={status?.hasRemote ? (force) => void doPush(force) : undefined}
+      onPull={status?.hasRemote && hasUpstream ? () => void doPull() : undefined}
+      ahead={ahead}
+      behind={behind}
+      hasUpstream={hasUpstream}
+      busy={busy}
       onCheckpoint={() => void createCheckpoint('Manual checkpoint')}
       onClose={() => setActiveTab(null)}
     >
@@ -126,6 +170,12 @@ function Shell({
   loading,
   onRefresh,
   onFetch,
+  onPush,
+  onPull,
+  ahead = 0,
+  behind = 0,
+  hasUpstream = false,
+  busy = false,
   onCheckpoint,
   onClose,
   children,
@@ -137,25 +187,68 @@ function Shell({
   loading?: boolean;
   onRefresh?: () => void;
   onFetch?: () => void;
+  onPush?: (force: boolean) => void;
+  onPull?: () => void;
+  ahead?: number;
+  behind?: number;
+  hasUpstream?: boolean;
+  busy?: boolean;
   onCheckpoint?: () => void;
   onClose: () => void;
   children: React.ReactNode;
 }) {
   const isRepo = status?.isRepo ?? true;
+  const canPush = ahead > 0 || !hasUpstream;
+  const diverged = ahead > 0 && behind > 0;
   return (
     <section className="flex h-full min-h-0 flex-col border-l border-line bg-surface">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line pl-2 pr-1.5">
         <GitBranch size={13} className="shrink-0 text-muted" />
-        <span className="max-w-[140px] truncate text-[12px] font-medium text-fg" title={branch}>
+        <span className="max-w-[120px] truncate text-[12px] font-medium text-fg" title={branch}>
           {branch ?? 'git'}
         </span>
-        {status && (status.ahead > 0 || status.behind > 0) && (
-          <span className="font-mono text-[10px] text-faint">
-            {status.ahead > 0 && `↑${status.ahead}`} {status.behind > 0 && `↓${status.behind}`}
+        {(ahead > 0 || behind > 0) && (
+          <span
+            className={cn(
+              'rounded-full px-1.5 font-mono text-[10px]',
+              ahead > 0 ? 'bg-accent/15 text-accent' : 'text-faint',
+            )}
+            title={`${ahead} ahead, ${behind} behind`}
+          >
+            {ahead > 0 && `↑${ahead}`}
+            {ahead > 0 && behind > 0 && ' '}
+            {behind > 0 && `↓${behind}`}
           </span>
         )}
         {loading && <Spinner size={11} />}
         <div className="ml-auto flex items-center">
+          {onPull && (
+            <IconButton label={behind > 0 ? `Pull ${behind} commit${behind === 1 ? '' : 's'}` : 'Pull'} size="sm" disabled={busy} onClick={onPull}>
+              <ArrowDownToLine size={14} className={cn(behind > 0 && 'text-accent')} />
+            </IconButton>
+          )}
+          {onPush && (
+            <IconButton
+              label={
+                !hasUpstream
+                  ? 'Publish branch'
+                  : diverged
+                    ? 'Diverged — pull before pushing (Shift-click to force)'
+                    : ahead > 0
+                      ? `Push ${ahead} commit${ahead === 1 ? '' : 's'} (Shift-click to force)`
+                      : 'Nothing to push'
+              }
+              size="sm"
+              disabled={busy || !canPush}
+              onClick={(e) => onPush((e as React.MouseEvent).shiftKey)}
+            >
+              {!hasUpstream ? (
+                <UploadCloud size={14} className="text-accent" />
+              ) : (
+                <ArrowUpFromLine size={14} className={cn(ahead > 0 && 'text-accent')} />
+              )}
+            </IconButton>
+          )}
           {onCheckpoint && (
             <IconButton label="Create checkpoint" size="sm" onClick={onCheckpoint}>
               <Save size={14} />

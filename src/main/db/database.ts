@@ -179,6 +179,65 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session
       ON git_checkpoints (session_id, created_at DESC);
+
+    -- Local Memory System — durable, provider-independent project knowledge.
+    -- workspace_id is NULL for global/user-scope memories (e.g. preferences).
+    -- Only rows with status='active' are ever injected into an agent prompt;
+    -- 'proposed' rows await user confirmation. All values are bound, never
+    -- string-interpolated. meta is a JSON blob (validated before write).
+    CREATE TABLE IF NOT EXISTS memories (
+      id            TEXT PRIMARY KEY,
+      workspace_id  TEXT,
+      tier          TEXT NOT NULL,
+      title         TEXT NOT NULL,
+      body          TEXT NOT NULL,
+      source        TEXT NOT NULL,
+      confidence    REAL NOT NULL DEFAULT 0.5,
+      pinned        INTEGER NOT NULL DEFAULT 0,
+      status        TEXT NOT NULL DEFAULT 'active',
+      use_count     INTEGER NOT NULL DEFAULT 0,
+      last_used_at  INTEGER,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL,
+      expires_at    INTEGER,
+      session_id    TEXT,
+      commit_hash   TEXT,
+      file_path     TEXT,
+      meta          TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_memories_workspace
+      ON memories (workspace_id, status, tier);
+    CREATE INDEX IF NOT EXISTS idx_memories_status
+      ON memories (status, updated_at DESC);
+
+    -- Full-text index over title+body for BM25 keyword retrieval (offline). It
+    -- shadows the memories table via content='memories' and is kept in sync by
+    -- the triggers below.
+    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+      title, body, content='memories', content_rowid='rowid'
+    );
+    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO memories_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, title, body)
+        VALUES ('delete', old.rowid, old.title, old.body);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, title, body)
+        VALUES ('delete', old.rowid, old.title, old.body);
+      INSERT INTO memories_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+    END;
+
+    -- Back-links from a memory to the conversation / commit / file / memory it
+    -- originated from, so the UI can navigate to the source.
+    CREATE TABLE IF NOT EXISTS memory_links (
+      memory_id TEXT NOT NULL,
+      kind      TEXT NOT NULL,
+      ref       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_links_memory
+      ON memory_links (memory_id);
   `);
 
   // Idempotent column additions for databases created before a column existed.

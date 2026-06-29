@@ -18,6 +18,7 @@ import type {
 } from '@shared/types';
 import { useWorkspaceStore } from './useWorkspaceStore';
 import { useSessionStore } from './useSessionStore';
+import { useUIStore } from './useUIStore';
 
 /** Which Git workspace sub-view is focused (also the activity-card jump target). */
 export type GitView = 'status' | 'diff' | 'commit' | 'history' | 'checkpoints' | 'branches';
@@ -60,6 +61,8 @@ interface GitState {
   checkout: (branch: string, force?: boolean) => Promise<import('@shared/types').GitCheckoutResult>;
   createBranch: (name: string) => Promise<void>;
   fetch: () => Promise<boolean>;
+  push: (opts?: { setUpstream?: boolean; force?: boolean }) => Promise<boolean>;
+  pull: (opts?: { rebase?: boolean }) => Promise<boolean>;
   init: () => Promise<void>;
   setFocus: (focus: GitFocus | null) => void;
 }
@@ -242,6 +245,73 @@ export const useGitStore = create<GitState>((set, get) => ({
     const ok = await api.fetch(wsId);
     await get().refresh();
     return ok;
+  },
+
+  push: async (opts) => {
+    const api = gitApi();
+    const wsId = activeWs();
+    const toast = useUIStore.getState().addToast;
+    if (!api || !wsId) return false;
+    try {
+      const r = await api.push(wsId, opts);
+      await get().refresh();
+      if (r.ok) {
+        toast({
+          title: r.setUpstream ? 'Published branch' : 'Pushed to remote',
+          description: r.pushed ? `${r.pushed} commit${r.pushed === 1 ? '' : 's'} pushed.` : undefined,
+          tone: 'success',
+        });
+        return true;
+      }
+      if (r.noRemote) {
+        toast({ title: 'No remote configured', description: 'Add a git remote to push.', tone: 'warning' });
+      } else if (r.noUpstream) {
+        toast({ title: 'Branch not published', description: 'Use Publish branch to set its upstream.', tone: 'warning' });
+      } else if (r.authFailed) {
+        toast({ title: 'No credentials for this remote', description: 'Configure your git credential helper or SSH key, then retry.', tone: 'danger' });
+      } else if (r.rejected || r.needsPull) {
+        toast({ title: 'Push rejected — pull first', description: 'The remote has new commits. Pull, then push again.', tone: 'danger' });
+      } else {
+        toast({ title: 'Push failed', description: r.error, tone: 'danger' });
+      }
+      return false;
+    } catch (err) {
+      toast({ title: 'Push failed', description: err instanceof Error ? err.message : String(err), tone: 'danger' });
+      return false;
+    }
+  },
+
+  pull: async (opts) => {
+    const api = gitApi();
+    const wsId = activeWs();
+    const toast = useUIStore.getState().addToast;
+    if (!api || !wsId) return false;
+    try {
+      const r = await api.pull(wsId, opts);
+      set({ diffs: {} });
+      await get().refresh();
+      await get().loadHistory();
+      if (r.ok) {
+        toast({
+          title: r.upToDate ? 'Already up to date' : 'Pulled from remote',
+          tone: r.upToDate ? 'info' : 'success',
+        });
+        return true;
+      }
+      if (r.noUpstream) {
+        toast({ title: 'Nothing to pull', description: 'This branch has no upstream.', tone: 'warning' });
+      } else if (r.notFastForward) {
+        toast({ title: 'Cannot fast-forward', description: 'Local and remote have diverged. Try a rebase pull.', tone: 'danger' });
+      } else if (r.conflicts) {
+        toast({ title: 'Pull stopped on conflicts', description: 'Resolve the conflicts in the changes list, then commit.', tone: 'danger' });
+      } else {
+        toast({ title: 'Pull failed', description: r.error, tone: 'danger' });
+      }
+      return false;
+    } catch (err) {
+      toast({ title: 'Pull failed', description: err instanceof Error ? err.message : String(err), tone: 'danger' });
+      return false;
+    }
   },
   init: async () => {
     const api = gitApi();
