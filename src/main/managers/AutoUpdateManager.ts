@@ -131,6 +131,10 @@ export class AutoUpdateManager {
     });
     autoUpdater.on('update-available', (info: UpdateInfo) => {
       this.emit({ stage: 'available', version: info.version, notes: releaseNotes(info) });
+      this.notifications.notify({
+        title: 'Update available',
+        body: `Limboo ${info.version} is available to download.`,
+      });
     });
     autoUpdater.on('update-not-available', () => {
       this.emit({ stage: 'not-available' });
