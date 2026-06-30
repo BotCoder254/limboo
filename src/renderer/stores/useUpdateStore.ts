@@ -15,12 +15,19 @@ interface UpdateState {
   hydrated: boolean;
   /** True while a user-initiated check/download is in flight (for button state). */
   busy: boolean;
+  /**
+   * Whether the user has dismissed the bottom strip for the current stage. Kept
+   * separate from {@link UpdateStatus.stage} so dismissing the strip does NOT
+   * discard the update (the Settings-icon badge stays lit). Auto-reset whenever
+   * the stage advances, so e.g. download progress re-surfaces the strip.
+   */
+  dismissed: boolean;
 
   hydrate: () => void;
   check: () => Promise<void>;
   download: () => Promise<void>;
   install: () => Promise<void>;
-  /** Dismiss the banner for the current offered version (renderer-only). */
+  /** Hide the bottom strip for the current stage (renderer-only). */
   dismiss: () => void;
 }
 
@@ -30,6 +37,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   status: INITIAL,
   hydrated: false,
   busy: false,
+  dismissed: false,
 
   hydrate: () => {
     if (get().hydrated) return;
@@ -40,7 +48,14 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       return;
     }
     void api.getState().then((status) => set({ status }));
-    api.onStatus((status) => set({ status, busy: false }));
+    api.onStatus((status) =>
+      set((prev) => ({
+        status,
+        busy: false,
+        // A new stage is a fresh thing to surface — clear any prior dismissal.
+        dismissed: status.stage === prev.status.stage ? prev.dismissed : false,
+      })),
+    );
   },
 
   check: async () => {
@@ -65,5 +80,5 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     await window.limboo?.updates?.install();
   },
 
-  dismiss: () => set({ status: { ...get().status, stage: 'idle' } }),
+  dismiss: () => set({ dismissed: true }),
 }));
