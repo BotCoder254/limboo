@@ -1,0 +1,146 @@
+# Limboo — GitLab CI/CD
+#
+# Implements the SAME logical pipeline as .github/workflows and .circleci/config.yml
+# (see ci/pipeline.yml): validate -> build -> test -> package -> secure -> release,
+# in the same order, producing the same artifacts via the same ci/scripts/*.mjs.
+#
+# Secrets MUST be provided as masked + protected CI/CD variables (never in this
+# file): APPLE_*/CSC_LINK (macOS signing), WINDOWS_CERTIFICATE (Windows signing),
+# GITLAB_TOKEN for releases. See docs/ci/gitlab-ci.md.
+
+stages: [validate, build, test, package, secure, release]
+
+default:
+  image: node:20-bookworm
+  cache:
+    key:
+      files: [package-lock.json]
+    paths: [.npm/]
+  before_script:
+    - npm ci --cache .npm --prefer-offline
+
+variables:
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  GIT_DEPTH: "0"   # full history for release-note diffs
+
+# ----------------------------------------------------------------- validate
+lint:
+  stage: validate
+  before_script:
+    - apt-get update && apt-get install -y build-essential python3
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - npm run lint
+
+compliance:
+  stage: validate
+  before_script:
+    - apt-get update && apt-get install -y build-essential python3
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - node ci/scripts/check-licenses.mjs
+    - node ci/scripts/check-electron-security.mjs
+    - node ci/scripts/check-manifest.mjs
+
+audit:
+  stage: validate
+  allow_failure: true   # advisories warn; they do not block ordinary commits
+  before_script:
+    - apt-get update && apt-get install -y build-essential python3
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - npm audit --audit-level=high
+
+secret-scan:
+  stage: validate
+  image: zricethezav/gitleaks:latest
+  before_script: []
+  cache: {}
+  script:
+    - gitleaks detect --source . --redact --verbose
+
+# -------------------------------------------------------------------- build
+build:
+  stage: build
+  before_script:
+    - apt-get update && apt-get install -y build-essential python3
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - npx vite build --config vite.renderer.config.mts
+    - npm run package
+  artifacts:
+    paths: [.vite/]
+    expire_in: 1 day
+
+# --------------------------------------------------------------------- test
+test:linux:
+  stage: test
+  before_script:
+    - apt-get update && apt-get install -y build-essential python3 xvfb libnss3 libgbm1 libasound2
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - xvfb-run -a node ci/scripts/smoke-test.mjs
+
+# ------------------------------------------------------------------ package
+# GitLab's shared runners are Linux; this packages the Linux installers. For
+# macOS/Windows installers, register platform runners and add matching jobs with
+# `tags:` selecting them (documented in docs/ci/gitlab-ci.md).
+package:linux:
+  stage: package
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web"   # manual dry-run from the UI
+  before_script:
+    - apt-get update && apt-get install -y build-essential python3 rpm fakeroot dpkg
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - npm run make
+  artifacts:
+    paths: [out/make/]
+    expire_in: 1 week
+
+# -------------------------------------------------------------------- secure
+secure:
+  stage: secure
+  needs: ["package:linux"]
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web"
+  before_script:
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - npx --yes @cyclonedx/cyclonedx-npm --output-file out/make/limboo-sbom.cdx.json || echo "SBOM generation skipped"
+    - node ci/scripts/make-checksums.mjs out/make out/make/SHA256SUMS
+    - node ci/scripts/verify-signing.mjs out/make
+  artifacts:
+    paths: [out/make/]
+    expire_in: 1 month
+
+# ------------------------------------------------------------------- release
+release-notes:
+  stage: release
+  needs: ["secure"]
+  rules:
+    - if: $CI_COMMIT_TAG
+  before_script: []
+  cache: {}
+  script:
+    - node ci/scripts/generate-release-notes.mjs "$CI_COMMIT_TAG" RELEASE_NOTES.md
+  artifacts:
+    paths: [RELEASE_NOTES.md, out/make/]
+    expire_in: 1 month
+
+release:
+  stage: release
+  needs: ["release-notes"]
+  rules:
+    - if: $CI_COMMIT_TAG
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  before_script: []
+  cache: {}
+  script:
+    - echo "Publishing GitLab Release for $CI_COMMIT_TAG"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Limboo $CI_COMMIT_TAG"
+    description: "./RELEASE_NOTES.md"

@@ -19,6 +19,8 @@ import type {
   AgentState,
   AppInfo,
   AppSettings,
+  ClarificationDecision,
+  ClarificationRequest,
   CommandId,
   DeepPartial,
   FileHistoryEntry,
@@ -183,12 +185,16 @@ const agentApi = {
   retryAuth: (): Promise<AgentInstall> => ipcRenderer.invoke(IpcChannels.agentRetryAuth),
   respondPermission: (decision: PermissionDecision): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentPermissionRespond, decision),
+  respondClarification: (decision: ClarificationDecision): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentClarificationRespond, decision),
   onStateChanged: (cb: (state: AgentState) => void): (() => void) =>
     subscribe<AgentState>(IpcEvents.agentStateChanged, cb),
   onEvent: (cb: (event: AgentEvent) => void): (() => void) =>
     subscribe<AgentEvent>(IpcEvents.agentEvent, cb),
   onPermissionRequest: (cb: (request: PermissionRequest) => void): (() => void) =>
     subscribe<PermissionRequest>(IpcEvents.agentPermissionRequest, cb),
+  onClarificationRequest: (cb: (request: ClarificationRequest) => void): (() => void) =>
+    subscribe<ClarificationRequest>(IpcEvents.agentClarificationRequest, cb),
 };
 
 const fsApi = {

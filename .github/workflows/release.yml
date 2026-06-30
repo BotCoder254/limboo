@@ -1,0 +1,65 @@
+name: Release
+
+# Release orchestration — runs ONLY for an approved version tag. Reuses the CD
+# packaging workflow (with attestations enabled), generates categorized release
+# notes, and publishes a GitHub Release with installers + SHA256SUMS + SBOM.
+# Failures here never touch CI or CD for ordinary commits.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package + attest
+    uses: ./.github/workflows/_package.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      ref: ${{ github.ref }}
+      attest: true
+
+  publish:
+    name: Publish GitHub Release
+    needs: [package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so release notes can diff from the prev tag
+
+      - name: Download all packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Consolidate checksums
+        # Each OS produced its own SHA256SUMS; combine into one top-level manifest.
+        run: node ci/scripts/make-checksums.mjs dist SHA256SUMS
+
+      - name: Generate release notes
+        run: node ci/scripts/generate-release-notes.mjs "${GITHUB_REF_NAME}" RELEASE_NOTES.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Limboo ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.zip
+            dist/**/*.exe
+            dist/**/*.nupkg
+            dist/**/*.cdx.json
+            SHA256SUMS

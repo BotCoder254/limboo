@@ -1,0 +1,28 @@
+name: CD
+
+# Continuous Delivery — packages platform installers, SBOM, checksums and signing
+# verification WITHOUT publishing anything. Use this to dry-run the full delivery
+# pipeline on demand (e.g. before cutting a tag). Publishing is release.yml's job.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to package (branch, tag or SHA)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package
+    uses: ./.github/workflows/_package.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      ref: ${{ inputs.ref || github.ref }}
+      attest: false   # dry-run delivery doesn't mint attestations

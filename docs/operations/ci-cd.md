@@ -1,25 +1,43 @@
 # CI/CD
 
-This page documents the repository automation under
-[`.github/`](../../.github). CI is intentionally lightweight: it runs the project's
-prescribed verification, not a heavy multi-OS build matrix.
+This page is the operations-level overview of the repository automation under
+[`.github/`](../../.github). Limboo now runs a **provider-agnostic CI/CD platform** —
+one logical pipeline implemented identically for GitHub Actions, GitLab CI and
+CircleCI. The full, provider-specific documentation lives in
+[`docs/ci/`](../ci/README.md); the canonical pipeline contract is
+[`ci/pipeline.yml`](../../ci/pipeline.yml). The pipeline is layered:
+**CI** (validate -> build -> test on every push/PR) ->
+**CD** (package + SBOM + checksums + signing) ->
+**Release** (tag-triggered notes + GitHub Release with provenance attestations).
 
 ## Workflows
 
 ### CI (`.github/workflows/ci.yml`)
 
-Runs on pushes and pull requests to `main`. It installs the system build
-dependencies (a C/C++ toolchain for the native modules), runs `npm ci`, then:
+Runs on pushes and pull requests to `main` as three fail-fast jobs:
 
-```bash
-npm run lint
-npx vite build --config vite.renderer.config.mts
-```
+- **validate** — `npm run lint`, license compliance, Electron security invariants,
+  manifest/docs integrity, dependency audit.
+- **build** — renderer build + `npm run package` (compiles main + preload).
+- **test** — Electron smoke launch across Ubuntu, macOS and Windows.
 
-This mirrors the local verification path (see
-[testing and verification](../contributing/testing-and-verification.md)). It does
-**not** run `tsc`, by design. Node 20, Ubuntu, with npm caching and in-progress
-cancellation per ref.
+It does **not** run `tsc`, by design (TypeScript is ~4.5; the renderer is
+esbuild-bundled). The reusable logic lives in [`ci/scripts/`](../../ci/scripts) so all
+three providers run identical behavior. Node 20, npm caching, in-progress cancellation
+per ref. See [docs/ci/local-testing.md](../ci/local-testing.md) to reproduce locally.
+
+### Security (`.github/workflows/security.yml`)
+
+Secret scanning (gitleaks), dependency review on PRs, `npm audit`, and a CycloneDX SBOM
+artifact — on push/PR plus a weekly schedule. See [docs/ci/security.md](../ci/security.md).
+
+### CD and Release (`cd.yml`, `release.yml`, `_package.yml`)
+
+`_package.yml` is the reusable build (matrix make, SBOM, checksums, signing
+verification, provenance/SBOM attestations). `cd.yml` invokes it as a manual dry-run;
+`release.yml` invokes it on a `v*` tag and then publishes a GitHub Release with all
+installers, `SHA256SUMS` and the SBOM. See
+[docs/ci/release-process.md](../ci/release-process.md).
 
 ### CodeQL (`.github/workflows/codeql.yml`)
 

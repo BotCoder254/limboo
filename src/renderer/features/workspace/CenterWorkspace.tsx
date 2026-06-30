@@ -17,6 +17,7 @@ import { DiffStat, EmptyState, IconButton, Spinner } from '@/renderer/components
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Composer } from './Composer';
+import { ClarificationCard } from './ClarificationCard';
 import { ConversationView } from './ConversationView';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
@@ -31,6 +32,10 @@ export function CenterWorkspace() {
   const loadSession = useAgentStore((s) => s.loadSession);
   const messageCount = useAgentStore((s) =>
     session ? (s.bySession[session.id]?.messages.length ?? 0) : 0,
+  );
+  // A paused AskUserQuestion for THIS session — the run resumes only once answered.
+  const clarification = useAgentStore((s) =>
+    session && s.pendingClarification?.sessionId === session.id ? s.pendingClarification : null,
   );
 
   // Restore the transcript whenever the selected session changes.
@@ -83,10 +88,13 @@ export function CenterWorkspace() {
       </div>
 
       {/* Composer docked in normal flow — a soft top fade gives a clean scroll
-          edge without floating over (and hiding) the conversation. */}
+          edge without floating over (and hiding) the conversation. When the agent
+          is waiting on an AskUserQuestion, the clarification card takes the focus
+          directly above the composer (which is disabled until it's answered). */}
       <div className="shrink-0">
         <div className="pointer-events-none h-3 bg-gradient-to-t from-base to-transparent" />
-        <Composer disabled={!session} />
+        {clarification && <ClarificationCard key={clarification.id} request={clarification} />}
+        <Composer disabled={!session || !!clarification} />
       </div>
     </main>
   );

@@ -13,6 +13,7 @@ import type {
   AgentMode,
   AgentSessionSnapshot,
   AgentState,
+  ClarificationDecision,
   PermissionDecision,
   SessionPlan,
 } from '@shared/types';
@@ -142,4 +143,45 @@ export function registerAgentHandlers(agent: AgentManager): void {
       message: typeof decision.message === 'string' ? decision.message.slice(0, 500) : undefined,
     });
   });
+
+  handle<[ClarificationDecision], void>(
+    IpcChannels.agentClarificationRespond,
+    (_event, decision) => {
+      if (!decision || typeof decision !== 'object') {
+        throw new Error('Expected a clarification decision object');
+      }
+      assertNoPollutingKeys(decision as unknown as Record<string, unknown>);
+      if (typeof decision.id !== 'string' || decision.id.length === 0) {
+        throw new Error('Clarification decision requires an id');
+      }
+      if (!decision.answers || typeof decision.answers !== 'object' || Array.isArray(decision.answers)) {
+        throw new Error('Clarification answers must be an object');
+      }
+      // The answers object is used as a key map and forwarded to the SDK — screen
+      // every key for prototype pollution and cap sizes (CLAUDE.md §6).
+      assertNoPollutingKeys(decision.answers as Record<string, unknown>);
+      const keys = Object.keys(decision.answers);
+      if (keys.length > 4) {
+        throw new Error('Too many clarification answers');
+      }
+      const answers: Record<string, string | string[]> = {};
+      for (const key of keys) {
+        if (key.length > 1000) throw new Error('Clarification question key is too long');
+        const value = (decision.answers as Record<string, unknown>)[key];
+        if (typeof value === 'string') {
+          answers[key] = value.slice(0, 2000);
+        } else if (Array.isArray(value)) {
+          answers[key] = value
+            .filter((v): v is string => typeof v === 'string')
+            .slice(0, 8)
+            .map((v) => v.slice(0, 2000));
+        } else {
+          throw new Error('Clarification answer must be a string or string array');
+        }
+      }
+      const response =
+        typeof decision.response === 'string' ? decision.response.slice(0, 2000) : undefined;
+      agent.respondClarification({ id: decision.id, answers, response });
+    },
+  );
 }

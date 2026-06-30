@@ -1,0 +1,137 @@
+version: 2.1
+
+# Limboo — CircleCI
+#
+# Implements the SAME logical pipeline as .github/workflows and .gitlab-ci.yml
+# (see ci/pipeline.yml): validate -> build -> test -> package -> secure -> release,
+# in the same order, via the same ci/scripts/*.mjs. Reusable jobs + workflows keep
+# every provider in lockstep.
+#
+# Secrets MUST live in CircleCI Contexts or Project Environment Variables (never in
+# this file): a fine-grained GitHub PAT / GitHub App for releases, and any signing
+# certificates. See docs/ci/circleci.md.
+
+executors:
+  node-linux:
+    docker:
+      - image: cimg/node:20.18
+    resource_class: medium
+
+commands:
+  install_native_deps:
+    description: System toolchain for native modules (better-sqlite3, node-pty)
+    steps:
+      - run:
+          name: Install build dependencies
+          command: sudo apt-get update && sudo apt-get install -y build-essential python3
+  npm_ci:
+    steps:
+      - restore_cache:
+          keys:
+            - npm-v1-{{ checksum "package-lock.json" }}
+      - run: npm ci
+      - save_cache:
+          key: npm-v1-{{ checksum "package-lock.json" }}
+          paths: [~/.npm]
+
+jobs:
+  validate:
+    executor: node-linux
+    steps:
+      - checkout
+      - install_native_deps
+      - npm_ci
+      - run: npm run lint
+      - run: node ci/scripts/check-licenses.mjs
+      - run: node ci/scripts/check-electron-security.mjs
+      - run: node ci/scripts/check-manifest.mjs
+      - run:
+          name: Dependency audit (high+, non-blocking)
+          command: npm audit --audit-level=high || echo "audit advisories reported"
+
+  build:
+    executor: node-linux
+    steps:
+      - checkout
+      - install_native_deps
+      - npm_ci
+      - run: npx vite build --config vite.renderer.config.mts
+      - run: npm run package
+
+  test:
+    executor: node-linux
+    steps:
+      - checkout
+      - run:
+          name: Install test runtime deps
+          command: sudo apt-get update && sudo apt-get install -y build-essential python3 xvfb libnss3 libgbm1 libasound2
+      - npm_ci
+      - run: xvfb-run -a node ci/scripts/smoke-test.mjs
+
+  package:
+    executor: node-linux
+    steps:
+      - checkout
+      - run:
+          name: Install packaging deps
+          command: sudo apt-get update && sudo apt-get install -y build-essential python3 rpm fakeroot dpkg
+      - npm_ci
+      - run: npm run make
+      - run: node ci/scripts/make-checksums.mjs out/make out/make/SHA256SUMS
+      - run: node ci/scripts/verify-signing.mjs out/make
+      - store_artifacts:
+          path: out/make
+          destination: installers
+      - persist_to_workspace:
+          root: .
+          paths: [out/make]
+
+  release:
+    executor: node-linux
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Generate release notes
+          command: node ci/scripts/generate-release-notes.mjs "$CIRCLE_TAG" RELEASE_NOTES.md
+      - run:
+          name: Publish GitHub Release
+          # GITHUB_TOKEN is supplied by a CircleCI Context — never committed here.
+          command: |
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list
+            sudo apt-get update && sudo apt-get install -y gh
+            gh release create "$CIRCLE_TAG" \
+              --title "Limboo $CIRCLE_TAG" \
+              --notes-file RELEASE_NOTES.md \
+              $(find out/make -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' \))
+
+workflows:
+  ci:
+    jobs:
+      - validate
+      - build:
+          requires: [validate]
+      - test:
+          requires: [build]
+
+  release:
+    jobs:
+      - validate:
+          filters: &tag-only
+            tags: { only: /^v.*/ }
+            branches: { ignore: /.*/ }
+      - build:
+          requires: [validate]
+          filters: *tag-only
+      - test:
+          requires: [build]
+          filters: *tag-only
+      - package:
+          requires: [test]
+          filters: *tag-only
+      - release:
+          requires: [package]
+          context: limboo-release   # holds GITHUB_TOKEN + signing secrets
+          filters: *tag-only
