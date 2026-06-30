@@ -10,6 +10,7 @@ import type { FileSystemManager } from '../managers/FileSystemManager';
 import type { TerminalManager } from '../managers/TerminalManager';
 import type { GitManager } from '../managers/GitManager';
 import type { MemoryManager } from '../managers/memory/MemoryManager';
+import type { AutoUpdateManager } from '../managers/AutoUpdateManager';
 import { registerWindowHandlers } from './windowHandlers';
 import { registerSettingsHandlers } from './settingsHandlers';
 import { registerSystemHandlers } from './systemHandlers';
@@ -20,6 +21,7 @@ import { registerFsHandlers } from './fsHandlers';
 import { registerTerminalHandlers } from './terminalHandlers';
 import { registerGitHandlers } from './gitHandlers';
 import { registerMemoryHandlers } from './memoryHandlers';
+import { registerUpdateHandlers } from './updateHandlers';
 
 export interface IpcDeps {
   settings: SettingsManager;
@@ -31,6 +33,7 @@ export interface IpcDeps {
   terminal: TerminalManager;
   git: GitManager;
   memory: MemoryManager;
+  updates: AutoUpdateManager;
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -44,4 +47,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerTerminalHandlers(deps.terminal);
   registerGitHandlers(deps.git);
   registerMemoryHandlers(deps.memory);
+  registerUpdateHandlers(deps.updates);
 }

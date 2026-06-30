@@ -114,6 +114,12 @@ export const IpcChannels = {
   gitCheckpointRestore: 'git:checkpointRestore',
   gitCheckpointDelete: 'git:checkpointDelete',
 
+  // Auto-update — electron-updater driven, GitHub releases feed (packaged only).
+  updateGetState: 'update:getState',
+  updateCheck: 'update:check',
+  updateDownload: 'update:download',
+  updateInstall: 'update:install',
+
   // Local Memory System — provider-independent project knowledge, all local.
   memoryList: 'memory:list',
   memoryGet: 'memory:get',
@@ -173,6 +179,8 @@ export const IpcEvents = {
   gitCheckpointsChanged: 'git:checkpoints-changed',
   /** The memory store changed (created / updated / proposed / accepted / pruned). */
   memoryChanged: 'memory:changed',
+  /** The auto-update lifecycle advanced (checking / available / progress / ready). */
+  updateStatus: 'update:status',
 } as const;
 
 export type IpcEvent = (typeof IpcEvents)[keyof typeof IpcEvents];

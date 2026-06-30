@@ -14,7 +14,10 @@ version: 2.1
 executors:
   node-linux:
     docker:
-      - image: cimg/node:20.18
+      # Electron 42 requires Node >= 22.12 (see package.json `engines`). Running an
+      # older Node here makes `electron`'s install.js fail with ERR_REQUIRE_ESM when
+      # it require()s the now-ESM `@electron/get` -> `got` chain.
+      - image: cimg/node:22.12
     resource_class: medium
 
 commands:
@@ -76,15 +79,19 @@ jobs:
           name: Install packaging deps
           command: sudo apt-get update && sudo apt-get install -y build-essential python3 rpm fakeroot dpkg
       - npm_ci
-      - run: npm run make
-      - run: node ci/scripts/make-checksums.mjs out/make out/make/SHA256SUMS
-      - run: node ci/scripts/verify-signing.mjs out/make
+      # Forge packages the app (Vite + fuses + asar); electron-builder then wraps it
+      # into branded installers + latest*.yml auto-update metadata. `--publish never`
+      # keeps build side-effect-free — the release job publishes. (Linux artifacts
+      # here; the GitHub Actions matrix produces the full Win/mac/Linux set.)
+      - run: npm run dist -- --publish never
+      - run: node ci/scripts/make-checksums.mjs dist dist/SHA256SUMS
+      - run: node ci/scripts/verify-signing.mjs dist
       - store_artifacts:
-          path: out/make
+          path: dist
           destination: installers
       - persist_to_workspace:
           root: .
-          paths: [out/make]
+          paths: [dist]
 
   release:
     executor: node-linux
@@ -95,9 +102,21 @@ jobs:
       - run:
           name: Generate release notes
           command: node ci/scripts/generate-release-notes.mjs "$CIRCLE_TAG" RELEASE_NOTES.md
+      # Deploy markers: log this release in the CircleCI Deploys UI and let it drive
+      # the rollback/deploy pipelines. Auto-generated markers were sunset (2025-06),
+      # so they are created explicitly here. The deploy name ties plan -> status.
+      - run:
+          name: Plan deploy marker
+          command: |
+            circleci run release plan "limboo-$CIRCLE_TAG" \
+              --environment-name="production" \
+              --component-name="limboo-desktop" \
+              --target-version="$CIRCLE_TAG" \
+              --namespace="default"
+            circleci run release update "limboo-$CIRCLE_TAG" --status=running
       - run:
           name: Publish GitHub Release
-          # GITHUB_TOKEN is supplied by a CircleCI Context — never committed here.
+          # GITHUB_TOKEN / GH_TOKEN is supplied by the `limboo-release` Context.
           command: |
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
             echo "deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list
@@ -105,7 +124,14 @@ jobs:
             gh release create "$CIRCLE_TAG" \
               --title "Limboo $CIRCLE_TAG" \
               --notes-file RELEASE_NOTES.md \
-              $(find out/make -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.zip' -o -name '*.exe' -o -name '*.nupkg' \))
+              $(find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.yml' -o -name '*.blockmap' \))
+      - run:
+          name: Mark deploy succeeded
+          command: circleci run release update "limboo-$CIRCLE_TAG" --status=SUCCESS
+      - run:
+          name: Mark deploy failed
+          when: on_fail
+          command: circleci run release update "limboo-$CIRCLE_TAG" --status=FAILED --failure-reason="release job failed"
 
 workflows:
   ci:

@@ -44,55 +44,62 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - name: Install Linux packaging dependencies
         if: runner.os == 'Linux'
-        # rpm/dpkg makers + native module toolchain; xvfb is only needed for tests.
+        # rpm/dpkg + native module toolchain; electron-builder builds deb/rpm/AppImage.
         run: sudo apt-get update && sudo apt-get install -y build-essential python3 rpm fakeroot dpkg
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Make installers
-        run: npm run make
+      - name: Build branded installers (Forge package + electron-builder)
+        # Forge packages the app (Vite build + security fuses + asar layout); then
+        # electron-builder wraps that prepackaged dir into the branded NSIS / dmg /
+        # AppImage targets and emits the latest*.yml auto-update metadata. `--publish
+        # never` keeps this reusable build side-effect-free; release.yml publishes.
+        run: npm run dist -- --publish never
 
       - name: Generate SBOM (CycloneDX)
         uses: anchore/sbom-action@v0
         with:
           path: .
           format: cyclonedx-json
-          output-file: out/make/limboo-sbom.cdx.json
+          output-file: dist/limboo-sbom.cdx.json
 
       - name: Compute checksums
-        run: node ci/scripts/make-checksums.mjs out/make out/make/SHA256SUMS
+        run: node ci/scripts/make-checksums.mjs dist dist/SHA256SUMS
 
       - name: Verify code signing (skips when unsigned)
-        run: node ci/scripts/verify-signing.mjs out/make
+        run: node ci/scripts/verify-signing.mjs dist
 
       - name: Attest build provenance
         if: ${{ inputs.attest }}
         uses: actions/attest-build-provenance@v1
         with:
           subject-path: |
-            out/make/**/*.deb
-            out/make/**/*.rpm
-            out/make/**/*.zip
-            out/make/**/*.exe
-            out/make/**/*.nupkg
+            dist/**/*.exe
+            dist/**/*.dmg
+            dist/**/*.AppImage
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.zip
 
       - name: Attest SBOM
         if: ${{ inputs.attest }}
         uses: actions/attest-sbom@v1
         with:
-          subject-path: out/make/SHA256SUMS
-          sbom-path: out/make/limboo-sbom.cdx.json
+          subject-path: dist/SHA256SUMS
+          sbom-path: dist/limboo-sbom.cdx.json
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: limboo-${{ runner.os }}
-          path: out/make/**/*
+          # Includes the installers AND the latest*.yml update metadata + .blockmap
+          # files electron-updater needs — they must reach the GitHub Release.
+          path: dist/**/*
           if-no-files-found: error
           retention-days: 14

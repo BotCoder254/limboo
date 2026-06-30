@@ -11,7 +11,9 @@
 stages: [validate, build, test, package, secure, release]
 
 default:
-  image: node:20-bookworm
+  # Electron 42 requires Node >= 22.12; older Node breaks `electron` install
+  # (ERR_REQUIRE_ESM from the now-ESM @electron/get -> got chain).
+  image: node:22-bookworm
   cache:
     key:
       files: [package-lock.json]
@@ -94,9 +96,11 @@ package:linux:
     - apt-get update && apt-get install -y build-essential python3 rpm fakeroot dpkg
     - npm ci --cache .npm --prefer-offline
   script:
-    - npm run make
+    # Forge packages the app (Vite + fuses + asar); electron-builder wraps it into
+    # branded installers + latest*.yml auto-update metadata. No publish here.
+    - npm run dist -- --publish never
   artifacts:
-    paths: [out/make/]
+    paths: [dist/]
     expire_in: 1 week
 
 # -------------------------------------------------------------------- secure
@@ -109,11 +113,11 @@ secure:
   before_script:
     - npm ci --cache .npm --prefer-offline
   script:
-    - npx --yes @cyclonedx/cyclonedx-npm --output-file out/make/limboo-sbom.cdx.json || echo "SBOM generation skipped"
-    - node ci/scripts/make-checksums.mjs out/make out/make/SHA256SUMS
-    - node ci/scripts/verify-signing.mjs out/make
+    - npx --yes @cyclonedx/cyclonedx-npm --output-file dist/limboo-sbom.cdx.json || echo "SBOM generation skipped"
+    - node ci/scripts/make-checksums.mjs dist dist/SHA256SUMS
+    - node ci/scripts/verify-signing.mjs dist
   artifacts:
-    paths: [out/make/]
+    paths: [dist/]
     expire_in: 1 month
 
 # ------------------------------------------------------------------- release
@@ -127,7 +131,7 @@ release-notes:
   script:
     - node ci/scripts/generate-release-notes.mjs "$CI_COMMIT_TAG" RELEASE_NOTES.md
   artifacts:
-    paths: [RELEASE_NOTES.md, out/make/]
+    paths: [RELEASE_NOTES.md, dist/]
     expire_in: 1 month
 
 release:

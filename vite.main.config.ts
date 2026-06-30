@@ -23,11 +23,16 @@ export default defineConfig({
       // `node-pty` is a native module: it `require()`s its compiled `pty.node`
       // binary, so it must stay external (kept as a runtime `require`, resolved
       // from node_modules, unpacked from the asar by AutoUnpackNatives).
+      // `electron-updater` does runtime `require()`s (its lazy provider loading +
+      // native-ish behavior) that Rollup cannot trace, and it must resolve from
+      // node_modules at runtime. Keep it external (plain runtime `require`) like
+      // the native modules below.
       external: [
         'better-sqlite3',
         'bindings',
         '@anthropic-ai/claude-agent-sdk',
         'node-pty',
+        'electron-updater',
       ],
     },
   },

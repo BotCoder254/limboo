@@ -90,6 +90,7 @@ For maintainers:
 [versioning](operations/versioning.md),
 [CI/CD](operations/ci-cd.md),
 [packaging and signing](operations/packaging-and-signing.md),
+[installer and updates](operations/installer-and-updates.md),
 [dependency updates](operations/dependency-updates.md),
 [debugging](operations/debugging.md),
 [security audits](operations/security-audits.md).

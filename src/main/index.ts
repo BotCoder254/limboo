@@ -23,6 +23,7 @@ import { FileSystemManager } from './managers/FileSystemManager';
 import { TerminalManager } from './managers/TerminalManager';
 import { GitManager } from './managers/GitManager';
 import { MemoryManager } from './managers/memory/MemoryManager';
+import { AutoUpdateManager } from './managers/AutoUpdateManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -34,6 +35,10 @@ declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 if (started) {
   app.quit();
 }
+
+// One stable Windows identity for the taskbar, notifications, and the installer
+// (must match electron-builder.yml `appId`). Harmless on other platforms.
+app.setAppUserModelId('dev.limboo.app');
 
 installGlobalErrorHandlers();
 
@@ -70,6 +75,7 @@ function bootstrap(): void {
   let terminal: TerminalManager;
   let git: GitManager;
   let memory: MemoryManager;
+  let updates: AutoUpdateManager;
   let memorySweepTimer: ReturnType<typeof setInterval> | undefined;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
@@ -100,6 +106,8 @@ function bootstrap(): void {
     // into prompts before they reach the harness.
     memory = new MemoryManager(settings);
     memory.seedDefaults(null); // global / user-scope starters
+    // In-app updater (electron-updater + GitHub releases). No-op in dev / non-AppImage.
+    updates = new AutoUpdateManager(settings, notifications);
     // The agent mirrors its shell commands into the integrated terminal.
     agent.setTerminalManager(terminal);
     // The agent auto-titles untitled sessions from their first prompt.
@@ -126,9 +134,12 @@ function bootstrap(): void {
       terminal,
       git,
       memory,
+      updates,
     });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();
+    // Begin the auto-update check + hourly poll (packaged builds only).
+    updates.start();
 
     // File System Layer: watch + index the active workspace, and follow every
     // subsequent active-workspace change (open / switch / clear). Each newly
@@ -171,6 +182,7 @@ function bootstrap(): void {
     agent?.cleanup();
     void fileSystem?.dispose();
     terminal?.dispose();
+    updates?.dispose();
     if (memorySweepTimer) clearInterval(memorySweepTimer);
     tray.destroy();
     closeDb();

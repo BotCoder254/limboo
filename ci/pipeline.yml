@@ -13,13 +13,13 @@
 meta:
   project: limboo
   package_manager: npm            # package-lock.json is authoritative
-  node_version: "20"              # LTS; Electron 42 / Forge 7 compatible
+  node_version: "22"              # Electron 42 requires Node >= 22.12 (ERR_REQUIRE_ESM otherwise)
   native_modules: [better-sqlite3, node-pty]  # need a C/C++ toolchain + python3 to install
   platforms: [linux, macos, windows]
-  makers:                         # from forge.config.ts
-    windows: squirrel
-    macos: zip
-    linux: [deb, rpm]
+  installers:                     # produced by electron-builder (electron-builder.yml)
+    windows: nsis                 # branded multi-page wizard + auto-update
+    macos: [dmg, zip]             # zip required for electron-updater
+    linux: [AppImage, deb, rpm]   # AppImage required for electron-updater
 
 # Layered responsibilities. Each layer has ONE job; failures isolate to their
 # lifecycle instead of interrupting unrelated work.
@@ -69,9 +69,11 @@ stages:
     matrix: [linux, macos, windows]
     when: tag OR manual dispatch
     steps:
-      - electron-forge make  ->  per-OS installers (deb/rpm on linux, zip on macOS,
-        squirrel on windows).
-      - Collect artifacts under out/make.
+      - npm run dist  ->  electron-forge package (Vite + fuses + asar) then
+        electron-builder --prepackaged -> branded per-OS installers (NSIS on
+        windows, dmg/zip on macOS, AppImage/deb/rpm on linux) + latest*.yml
+        auto-update metadata.
+      - Collect artifacts under dist.
 
   - id: secure
     layer: cd
