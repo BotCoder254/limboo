@@ -1,10 +1,20 @@
 # Limboo — canonical pipeline specification
 #
 # This file is the SINGLE SOURCE OF TRUTH for the logical CI/CD pipeline. It is
-# provider-agnostic: GitHub Actions (.github/workflows), GitLab CI (.gitlab-ci.yml)
-# and CircleCI (.circleci/config.yml) each implement these exact stages, in this
-# exact order, producing identical artifacts. When you change the pipeline, change
-# THIS file first, then update all three provider implementations to match.
+# provider-agnostic by design: GitHub Actions (.github/workflows), GitLab CI
+# (.gitlab-ci.yml) and CircleCI (.circleci/deploy.yml) all implement the `validate ->
+# build -> test` (ci) layer identically, in this exact order, via the same
+# ci/scripts/*.mjs, so any provider can be adopted for ordinary commit validation.
+#
+# The `package`/`secure`/`release` (cd + release) layers are currently wired up only
+# in GitHub Actions, which is the sole, canonical release publisher for this repo (it
+# builds all 3 OSes via _package.yml's matrix and needs no manually-managed token —
+# see docs/ci/github-actions.md). GitLab CI documents an equivalent package/release
+# path but isn't credentialed; CircleCI is intentionally CI-only here (see
+# docs/ci/circleci.md for why, and how to add release parity if ever needed). When
+# you change the pipeline, change THIS file first, then update the GitHub Actions
+# implementation (and any other provider you've wired up release credentials for) to
+# match.
 #
 # It is documentation, not an executable config — no provider reads it directly.
 # The reusable logic lives in ci/scripts/*.mjs so every provider runs byte-for-byte

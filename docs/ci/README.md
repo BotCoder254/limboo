@@ -15,6 +15,13 @@ provider-neutral scripts under [`ci/scripts/`](../../ci/scripts) rather than in 
 | **CD** | manual / pre-release | package, SBOM, checksums, signing | no |
 | **Release** | `v*` tag | notes, GitHub Release (+ optional GitLab) | yes |
 
+In this repo's current implementation, **GitHub Actions runs all three layers** and is
+the sole release publisher (it needs no manually-managed token — see
+[github-actions.md](github-actions.md)). **CircleCI and GitLab CI run CI-only**
+(`validate -> build -> test`) here; their `package`/`release` stages are documented
+but not wired to a credential, so don't expect a release from either without first
+following the "if you want parity" steps in their respective guides.
+
 ## Stage order (every provider, fail-fast)
 
 `validate` -> `build` -> `test` -> `package` -> `secure` -> `release`

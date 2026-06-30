@@ -2,14 +2,12 @@ version: 2.1
 
 # Limboo — CircleCI
 #
-# Implements the SAME logical pipeline as .github/workflows and .gitlab-ci.yml
-# (see ci/pipeline.yml): validate -> build -> test -> package -> secure -> release,
-# in the same order, via the same ci/scripts/*.mjs. Reusable jobs + workflows keep
-# every provider in lockstep.
-#
-# Secrets MUST live in CircleCI Contexts or Project Environment Variables (never in
-# this file): a fine-grained GitHub PAT / GitHub App for releases, and any signing
-# certificates. See docs/ci/circleci.md.
+# CI-only: validate -> build -> test, on every push, the same logical stages as
+# ci/pipeline.yml's `ci` layer, via the same ci/scripts/*.mjs. CircleCI does not
+# package, sign, or publish releases in this repo — GitHub Actions' release.yml is
+# the sole release publisher (it builds all 3 OSes and needs zero manual token
+# setup via the workflow's built-in GITHUB_TOKEN). See docs/ci/circleci.md and
+# docs/ci/release-process.md.
 
 executors:
   node-linux:
@@ -80,68 +78,6 @@ jobs:
       - npm_ci
       - run: xvfb-run -a node ci/scripts/smoke-test.mjs
 
-  package:
-    executor: node-linux
-    steps:
-      - checkout
-      - run:
-          name: Install packaging deps
-          command: sudo apt-get update && sudo apt-get install -y build-essential python3 rpm fakeroot dpkg
-      - npm_ci
-      # Forge packages the app (Vite + fuses + asar); electron-builder then wraps it
-      # into branded installers + latest*.yml auto-update metadata. `--publish never`
-      # keeps build side-effect-free — the release job publishes. (Linux artifacts
-      # here; the GitHub Actions matrix produces the full Win/mac/Linux set.)
-      - run: npm run dist -- --publish never
-      - run: node ci/scripts/make-checksums.mjs dist dist/SHA256SUMS
-      - run: node ci/scripts/verify-signing.mjs dist
-      - store_artifacts:
-          path: dist
-          destination: installers
-      - persist_to_workspace:
-          root: .
-          paths: [dist]
-
-  release:
-    executor: node-linux
-    steps:
-      - checkout
-      - attach_workspace:
-          at: .
-      - run:
-          name: Generate release notes
-          command: node ci/scripts/generate-release-notes.mjs "$CIRCLE_TAG" RELEASE_NOTES.md
-      # Deploy markers: log this release in the CircleCI Deploys UI and let it drive
-      # the rollback/deploy pipelines. Auto-generated markers were sunset (2025-06),
-      # so they are created explicitly here. The deploy name ties plan -> status.
-      - run:
-          name: Plan deploy marker
-          command: |
-            circleci run release plan "limboo-$CIRCLE_TAG" \
-              --environment-name="production" \
-              --component-name="limboo-desktop" \
-              --target-version="$CIRCLE_TAG" \
-              --namespace="default"
-            circleci run release update "limboo-$CIRCLE_TAG" --status=running
-      - run:
-          name: Publish GitHub Release
-          # GITHUB_TOKEN / GH_TOKEN is supplied by the `limboo-release` Context.
-          command: |
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-            echo "deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list
-            sudo apt-get update && sudo apt-get install -y gh
-            gh release create "$CIRCLE_TAG" \
-              --title "Limboo $CIRCLE_TAG" \
-              --notes-file RELEASE_NOTES.md \
-              $(find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.yml' -o -name '*.blockmap' \))
-      - run:
-          name: Mark deploy succeeded
-          command: circleci run release update "limboo-$CIRCLE_TAG" --status=SUCCESS
-      - run:
-          name: Mark deploy failed
-          when: on_fail
-          command: circleci run release update "limboo-$CIRCLE_TAG" --status=FAILED --failure-reason="release job failed"
-
 workflows:
   ci:
     jobs:
@@ -150,23 +86,3 @@ workflows:
           requires: [validate]
       - test:
           requires: [build]
-
-  release:
-    jobs:
-      - validate:
-          filters: &tag-only
-            tags: { only: /^v.*/ }
-            branches: { ignore: /.*/ }
-      - build:
-          requires: [validate]
-          filters: *tag-only
-      - test:
-          requires: [build]
-          filters: *tag-only
-      - package:
-          requires: [test]
-          filters: *tag-only
-      - release:
-          requires: [package]
-          context: limboo-release   # holds GITHUB_TOKEN + signing secrets
-          filters: *tag-only
