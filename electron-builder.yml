@@ -1,0 +1,96 @@
+# electron-builder — branded installer + auto-update target builder.
+#
+# IMPORTANT: electron-builder is NOT the primary build tool here. Electron Forge
+# still owns dev (`npm start`) and app packaging (`electron-forge package`), which
+# applies the Vite build, the security fuses, and the asar / asar-unpack layout.
+# This config is consumed only via `--prepackaged` (see scripts/dist.mjs), so
+# electron-builder wraps the already-packaged app into installers WITHOUT
+# re-packing it — the fuses + asar-integrity Forge baked in are preserved. For
+# that reason there is deliberately no `electronFuses`, `files`, or `asar*` block
+# here: the app directory is taken as-is.
+#
+# Regenerate the branded art with: bash scripts/gen-installer-assets.sh
+
+appId: dev.limboo.app
+productName: Limboo
+copyright: Copyright © 2026 BotCoder254
+
+# Branded NSIS art + custom include live here (not the electron-builder default
+# `build/`), keeping all installer assets under assets/.
+directories:
+  output: dist
+  buildResources: assets/installer
+
+# Publish provider for releases AND the auto-update feed electron-updater reads
+# (it fetches latest*.yml from this repo's GitHub Releases).
+publish:
+  provider: github
+  owner: BotCoder254
+  repo: limboo
+
+# ---------------------------------------------------------------------------
+# Windows — the branded, multi-page NSIS wizard (the "first screen of the app").
+# ---------------------------------------------------------------------------
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: assets/installer/icon.ico
+  # Match the running app's identity so taskbar / notifications / installer agree.
+  legalTrademarks: Limboo
+
+nsis:
+  oneClick: false                         # full assisted multi-page wizard
+  perMachine: false                       # per-user install (no UAC friction)
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  installerIcon: assets/installer/icon.ico
+  uninstallerIcon: assets/installer/icon.ico
+  installerHeaderIcon: assets/installer/icon.ico
+  installerSidebar: assets/installer/installerSidebar.bmp
+  uninstallerSidebar: assets/installer/uninstallerSidebar.bmp
+  installerHeader: assets/installer/installerHeader.bmp
+  license: LICENSE
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Limboo
+  menuCategory: true
+  runAfterFinish: true
+  # Preserve the user's workspaces / limboo.db / memories / logs / terminal
+  # history on uninstall — never wipe userData automatically.
+  deleteAppDataOnUninstall: false
+  # Detect previous installs and upgrade cleanly without data loss.
+  differentialPackage: false
+  include: assets/installer/installer.nsh
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+
+# ---------------------------------------------------------------------------
+# macOS — dmg + zip (zip is required for electron-updater to self-update).
+# electron-builder converts the 512px PNG to .icns automatically on the runner.
+# ---------------------------------------------------------------------------
+mac:
+  category: public.app-category.developer-tools
+  icon: assets/icon.png
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+dmg:
+  title: Limboo ${version}
+  # Signing + notarization run on the macOS runner when the maintainer supplies
+  # CSC_LINK / CSC_KEY_PASSWORD + APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD secrets.
+
+# ---------------------------------------------------------------------------
+# Linux — AppImage (required for electron-updater self-update) + deb + rpm.
+# ---------------------------------------------------------------------------
+linux:
+  category: Development
+  icon: assets/icon.png
+  synopsis: The operating system for AI software development
+  target:
+    - AppImage
+    - deb
+    - rpm

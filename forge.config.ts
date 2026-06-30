@@ -1,8 +1,4 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
-import { MakerSquirrel } from '@electron-forge/maker-squirrel';
-import { MakerZIP } from '@electron-forge/maker-zip';
-import { MakerDeb } from '@electron-forge/maker-deb';
-import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
@@ -20,12 +16,11 @@ const config: ForgeConfig = {
     icon: 'assets/icon',
   },
   rebuildConfig: {},
-  makers: [
-    new MakerSquirrel({}),
-    new MakerZIP({}, ['darwin']),
-    new MakerRpm({}),
-    new MakerDeb({}),
-  ],
+  // No Forge makers: distributables are produced by electron-builder over the
+  // Forge-packaged app dir (`npm run dist` -> scripts/dist.mjs), which is the only
+  // path that supports the branded NSIS wizard + auto-update metadata + publishing.
+  // Forge still owns dev (`npm start`) and app packaging (`electron-forge package`).
+  makers: [],
   plugins: [
     // Unpack native modules (better-sqlite3) out of the asar so they can load.
     new AutoUnpackNativesPlugin({}),

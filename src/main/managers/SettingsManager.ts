@@ -145,6 +145,9 @@ export class SettingsManager {
       clamp(mem.expiry.staleDays, MEMORY_LIMITS.staleDays.min, MEMORY_LIMITS.staleDays.max),
     );
 
+    merged.updates.autoCheck = !!merged.updates.autoCheck;
+    merged.updates.autoDownload = !!merged.updates.autoDownload;
+
     return merged;
   }
 }

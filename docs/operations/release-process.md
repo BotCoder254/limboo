@@ -20,11 +20,16 @@ Forge; releases are driven from the `main` branch.
 4. **Build artifacts.**
    ```bash
    npm run package   # runnable bundle (no installers)
-   npm run make      # platform installers (deb / rpm / zip / squirrel)
+   npm run dist      # branded installers + auto-update metadata into dist/
    ```
-   See [packaging and signing](packaging-and-signing.md).
-5. **Publish.** `npm run publish` is configured via `forge.config.ts`. Attach the
-   built artifacts to the GitHub release for the tag.
+   `npm run dist` runs `electron-forge package` then electron-builder
+   (`--prepackaged`) to produce the branded NSIS / dmg / AppImage installers and the
+   `latest*.yml` auto-update metadata. See
+   [installer and updates](installer-and-updates.md) and
+   [packaging and signing](packaging-and-signing.md).
+5. **Publish.** CI publishes automatically on a `v*` tag. For a manual release use
+   `npm run dist:publish` (with `GH_TOKEN` set) or attach `dist/*` — installers,
+   `latest*.yml`, and `*.blockmap` — to the GitHub release with the `gh` CLI.
 6. **Verify the release.** Download an artifact and confirm it launches.
 
 ## Release checklist
@@ -33,7 +38,7 @@ Forge; releases are driven from the `main` branch.
 - [ ] `package.json` version bumped.
 - [ ] `CHANGELOG.md` updated with date and compare links.
 - [ ] Tag `vX.Y.Z` created.
-- [ ] Artifacts built (`npm run make`) and smoke-tested.
+- [ ] Artifacts built (`npm run dist`) and smoke-tested.
 - [ ] GitHub release published with notes and artifacts.
 
 ## Notes

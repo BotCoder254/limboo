@@ -55,11 +55,17 @@ jobs:
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # The *.yml + *.blockmap files are electron-builder's auto-update metadata
+          # — electron-updater reads latest.yml / latest-mac.yml / latest-linux.yml
+          # from the Release to detect and verify new versions. They MUST be attached.
           files: |
+            dist/**/*.exe
+            dist/**/*.dmg
+            dist/**/*.AppImage
             dist/**/*.deb
             dist/**/*.rpm
             dist/**/*.zip
-            dist/**/*.exe
-            dist/**/*.nupkg
+            dist/**/*.yml
+            dist/**/*.blockmap
             dist/**/*.cdx.json
             SHA256SUMS

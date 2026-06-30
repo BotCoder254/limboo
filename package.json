@@ -10,7 +10,12 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
+    "dist": "electron-forge package && node scripts/dist.mjs",
+    "dist:publish": "electron-forge package && node scripts/dist.mjs --publish always",
     "lint": "eslint --ext .ts,.tsx ."
+  },
+  "engines": {
+    "node": ">=22.12.0"
   },
   "keywords": [],
   "author": {
@@ -36,6 +41,7 @@
     "@typescript-eslint/parser": "^5.62.0",
     "@vitejs/plugin-react": "^4.7.0",
     "electron": "42.5.0",
+    "electron-builder": "^25.1.8",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
     "tailwindcss": "^4.3.1",
@@ -49,6 +55,7 @@
     "better-sqlite3": "^12.11.1",
     "chokidar": "^3.6.0",
     "electron-squirrel-startup": "^1.0.1",
+    "electron-updater": "^6.8.9",
     "ignore": "^5.3.2",
     "lucide-react": "^1.21.0",
     "node-pty": "^1.1.0",

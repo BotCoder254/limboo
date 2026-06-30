@@ -247,10 +247,53 @@ export interface AppSettings {
       staleDays: number;
     };
   };
+  /**
+   * In-app auto-update (electron-updater + GitHub releases). Only ever active in
+   * a packaged build; a no-op in dev. Limboo downloads updates over HTTPS from
+   * its own GitHub Releases and verifies the signed installer before applying.
+   */
+  updates: {
+    /** Check GitHub for a newer release shortly after launch (and hourly). */
+    autoCheck: boolean;
+    /** Download an available update automatically (else wait for the user). */
+    autoDownload: boolean;
+  };
 }
 
 /** A dotted-path key into {@link AppSettings} (kept loose for ergonomics). */
 export type SettingsKey = string;
+
+/* ------------------------------------------------------------------ */
+/* Auto-update (electron-updater)                                      */
+/* ------------------------------------------------------------------ */
+
+/** Lifecycle stage of the in-app updater, mirrored into the renderer. */
+export type UpdateStage =
+  | 'idle'
+  | 'disabled'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error';
+
+/** The full updater status pushed to the renderer on every transition. */
+export interface UpdateStatus {
+  stage: UpdateStage;
+  /** The currently running app version. */
+  currentVersion: string;
+  /** The newer version offered (available / downloading / downloaded). */
+  version?: string;
+  /** Release notes for the offered version (plain text, truncated). */
+  notes?: string;
+  /** Download progress, 0–100 (downloading stage only). */
+  percent?: number;
+  /** Last error message (error stage only). */
+  error?: string;
+  /** Epoch ms of the last check. */
+  checkedAt?: number;
+}
 
 /* ------------------------------------------------------------------ */
 /* App info                                                            */

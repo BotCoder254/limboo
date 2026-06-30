@@ -16,6 +16,7 @@ import {
   Keyboard,
   Info,
   TerminalSquare,
+  ArrowUpCircle,
   type LucideIcon,
 } from 'lucide-react';
 import { GeneralPanel } from './panels/GeneralPanel';
@@ -27,6 +28,7 @@ import { TerminalPanel } from './panels/TerminalPanel';
 import { GitPanel } from './panels/GitPanel';
 import { MemoryPanel } from './panels/MemoryPanel';
 import { ShortcutsPanel } from './panels/ShortcutsPanel';
+import { UpdatesPanel } from './panels/UpdatesPanel';
 import { AboutPanel } from './panels/AboutPanel';
 
 export interface SettingsField {
@@ -167,6 +169,19 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
       { id: 'memoryStaleDays', label: 'Stale after', keywords: ['days', 'expire', 'old'] },
     ],
     Panel: MemoryPanel,
+  },
+  {
+    id: 'updates',
+    label: 'Updates',
+    icon: ArrowUpCircle,
+    keywords: ['update', 'auto-update', 'upgrade', 'version', 'release', 'download', 'install', 'patch'],
+    fields: [
+      { id: 'updateStatus', label: 'Update status', keywords: ['version', 'available', 'ready'] },
+      { id: 'updateCheck', label: 'Check for updates', keywords: ['check', 'now', 'refresh'] },
+      { id: 'updateAutoCheck', label: 'Check automatically', keywords: ['auto', 'background', 'startup'] },
+      { id: 'updateAutoDownload', label: 'Download automatically', keywords: ['auto', 'download', 'background'] },
+    ],
+    Panel: UpdatesPanel,
   },
   {
     id: 'shortcuts',

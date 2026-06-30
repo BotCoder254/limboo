@@ -23,12 +23,15 @@ The tag (`v*`) triggers `release.yml`.
 
 ## 3. What the pipeline does
 
-1. `_package.yml` runs on Linux, macOS, Windows: `npm run make`, SBOM (CycloneDX),
-   `SHA256SUMS`, signing verification, and **build-provenance + SBOM attestations**
-   (`attest: true`).
+1. `_package.yml` runs on Linux, macOS, Windows: `npm run dist` (Forge package +
+   electron-builder branded installers + `latest*.yml` auto-update metadata), SBOM
+   (CycloneDX), `SHA256SUMS`, signing verification, and **build-provenance + SBOM
+   attestations** (`attest: true`). See
+   [installer and updates](../operations/installer-and-updates.md).
 2. `publish` downloads every platform's artifacts, consolidates a top-level
    `SHA256SUMS`, generates `RELEASE_NOTES.md` from commits/PRs since the previous tag,
-   and creates the GitHub Release with all installers, the SBOM, and checksums attached.
+   and creates the GitHub Release with all installers, the `latest*.yml` + `*.blockmap`
+   auto-update metadata, the SBOM, and checksums attached.
 3. Tags containing a hyphen (e.g. `v1.2.0-rc.1`) are published as **pre-releases**.
 
 ## 4. Release notes

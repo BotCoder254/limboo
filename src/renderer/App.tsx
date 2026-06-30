@@ -8,6 +8,7 @@ import { AppShell } from '@/renderer/app/AppShell';
 import { WorkspaceSelection } from '@/renderer/features/workspace/WorkspaceSelection';
 import { CommandPalette } from '@/renderer/features/command-palette/CommandPalette';
 import { SettingsModal } from '@/renderer/features/settings/SettingsModal';
+import { UpdateBanner } from '@/renderer/features/updates/UpdateBanner';
 import { Toaster } from '@/renderer/components/feedback/Toaster';
 import { useKeyboardShortcuts } from '@/renderer/hooks/useKeyboardShortcuts';
 import { useCommandBridge } from '@/renderer/hooks/useCommandBridge';
@@ -19,6 +20,7 @@ import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
 import { useMemoryStore } from '@/renderer/stores/useMemoryStore';
+import { useUpdateStore } from '@/renderer/stores/useUpdateStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -50,6 +52,8 @@ export function App() {
     useGitStore.getState().hydrate();
     // Subscribe to memory changes (proposals drive the rail badge) + follow ws.
     useMemoryStore.getState().hydrate();
+    // Subscribe to the in-app updater's lifecycle (drives the UpdateBanner).
+    useUpdateStore.getState().hydrate();
   }, []);
 
   return (
@@ -57,6 +61,7 @@ export function App() {
       {!hydrated ? null : hasWorkspace ? <AppShell /> : <WorkspaceSelection />}
       <CommandPalette />
       <SettingsModal />
+      <UpdateBanner />
       <Toaster />
     </>
   );

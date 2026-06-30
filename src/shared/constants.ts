@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 7;
+export const SETTINGS_VERSION = 8;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -204,6 +204,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
       enabled: true,
       staleDays: MEMORY_LIMITS.staleDays.default,
     },
+  },
+  updates: {
+    autoCheck: true,
+    autoDownload: true,
   },
 };
 

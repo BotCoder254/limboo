@@ -55,6 +55,7 @@ import type {
   TerminalCreateOptions,
   TerminalExit,
   TerminalSession,
+  UpdateStatus,
   Workspace,
   WorkspaceConfig,
   WorkspaceStats,
@@ -359,6 +360,19 @@ const memoryApi = {
   onChanged: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.memoryChanged, cb),
 };
 
+const updatesApi = {
+  /** The current updater status (for hydration on mount). */
+  getState: (): Promise<UpdateStatus> => ipcRenderer.invoke(IpcChannels.updateGetState),
+  /** Ask the updater to check GitHub for a newer release now. */
+  check: (): Promise<UpdateStatus> => ipcRenderer.invoke(IpcChannels.updateCheck),
+  /** Start downloading an available update (when autoDownload is off). */
+  download: (): Promise<void> => ipcRenderer.invoke(IpcChannels.updateDownload),
+  /** Quit and install a downloaded update. */
+  install: (): Promise<void> => ipcRenderer.invoke(IpcChannels.updateInstall),
+  onStatus: (cb: (status: UpdateStatus) => void): (() => void) =>
+    subscribe<UpdateStatus>(IpcEvents.updateStatus, cb),
+};
+
 const limbooApi = {
   window: windowApi,
   settings: settingsApi,
@@ -372,6 +386,7 @@ const limbooApi = {
   terminal: terminalApi,
   git: gitApi,
   memory: memoryApi,
+  updates: updatesApi,
 };
 
 contextBridge.exposeInMainWorld('limboo', limbooApi);
