@@ -14,6 +14,52 @@ const config: ForgeConfig = {
     },
     name: 'Limboo',
     icon: 'assets/icon',
+    // @electron-forge/plugin-vite installs a default `packagerConfig.ignore` that
+    // keeps ONLY the `.vite` build output and excludes everything else —
+    // including `node_modules` and `assets/`. That assumes the entire app is
+    // bundled by Vite, which isn't true here: vite.main.config.ts intentionally
+    // keeps native/runtime-only deps (better-sqlite3, bindings, node-pty,
+    // electron-updater, @anthropic-ai/claude-agent-sdk) external as plain
+    // `require()` calls that must resolve from `node_modules` at runtime, and
+    // `assetPath()` (src/main/paths.ts) reads icons from `assets/` at runtime via
+    // `app.getAppPath()`. Without this override, the packaged app has no
+    // node_modules at all and crashes on the first externalized `require()`
+    // before any logging happens.
+    //
+    // Supplying our own `ignore` function here makes the Vite plugin skip its
+    // default (it only warns that the app may be larger than expected — expected,
+    // since we now intentionally keep node_modules). Production dependencies are
+    // still pruned down from the full node_modules by the packager's default
+    // `prune: true` behavior, which walks the real dependency graph and drops
+    // devDependencies (so transitive deps like `bindings` are kept automatically
+    // without needing to be listed here).
+    ignore: (file) => {
+      if (!file) return false;
+      // `file` always starts with `/`. Replicate electron-packager's
+      // DEFAULT_IGNORES (lockfiles, .git, node_modules/.bin, native build
+      // artifacts) — these are skipped entirely once a custom `ignore` function
+      // is supplied.
+      if (
+        /\/package-lock\.json$/.test(file) ||
+        /\/yarn\.lock$/.test(file) ||
+        /\/pnpm-lock\.yaml$/.test(file) ||
+        /\/\.git($|\/)/.test(file) ||
+        /\/node_modules\/\.bin($|\/)/.test(file) ||
+        /\.o(bj)?$/.test(file) ||
+        /\/node_gyp_bins($|\/)/.test(file)
+      ) {
+        return true;
+      }
+      // Keep: Vite's build output, the root package.json (required by the Vite
+      // plugin), bundled static assets, and node_modules (pruned to production
+      // deps above). Ignore everything else (source, configs, dev-only files).
+      const keep =
+        file.startsWith('/.vite') ||
+        file === '/package.json' ||
+        file.startsWith('/assets') ||
+        file.startsWith('/node_modules');
+      return !keep;
+    },
   },
   rebuildConfig: {},
   // No Forge makers: distributables are produced by electron-builder over the
