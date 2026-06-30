@@ -67,7 +67,16 @@ jobs:
       - checkout
       - run:
           name: Install test runtime deps
-          command: sudo apt-get update && sudo apt-get install -y build-essential python3 xvfb libnss3 libgbm1 libasound2
+          # Electron needs the full GTK/ATK/CUPS/ALSA stack to launch (the smoke test
+          # boots a real Electron process), not just nss/gbm — otherwise it fails with
+          # "libatk-1.0.so.0: cannot open shared object file". Names differ across the
+          # Ubuntu 24.04 t64 transition, so fall back to the t64 variants if needed.
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y build-essential python3 xvfb \
+              libnss3 libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libpango-1.0-0 libcairo2
+            sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libgtk-3-0 libasound2 \
+              || sudo apt-get install -y libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libgtk-3-0t64 libasound2t64
       - npm_ci
       - run: xvfb-run -a node ci/scripts/smoke-test.mjs
 
