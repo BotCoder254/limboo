@@ -21,6 +21,7 @@ import type {
   AgentMode,
   AgentSessionSnapshot,
   ChatMessage,
+  ClarificationRequest,
   FileChange,
   PermissionRequest,
   RateLimitInfo,
@@ -53,6 +54,8 @@ interface AgentStoreState {
   bySession: Record<string, AgentSessionSnapshot>;
   diagnostics: AgentDiagnostic[];
   pending: PermissionRequest | null;
+  /** A pending AskUserQuestion clarification awaiting the user's answers. */
+  pendingClarification: ClarificationRequest | null;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -64,6 +67,7 @@ interface AgentStoreState {
   clearRateLimit: () => void;
   retryAuth: () => void;
   respond: (behavior: 'allow' | 'deny', remember?: boolean) => void;
+  respondClarification: (answers: Record<string, string | string[]>, response?: string) => void;
   approvePlan: (sessionId: string) => void;
   rejectPlan: (sessionId: string) => void;
   regeneratePlan: (sessionId: string, extra?: string) => void;
@@ -153,6 +157,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     bySession: {},
     diagnostics: [],
     pending: null,
+    pendingClarification: null,
     hydrated: false,
 
     hydrate: async () => {
@@ -186,6 +191,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       );
       api.onEvent((event) => apply(event));
       api.onPermissionRequest((request) => set({ pending: request }));
+      api.onClarificationRequest?.((request) => set({ pendingClarification: request }));
 
       // Seed the diagnostics console with recent history.
       void get().loadDiagnostics();
@@ -249,11 +255,23 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
 
     stop: (sessionId) => {
       void window.limboo?.agent?.stop(sessionId);
+      // Stopping aborts any paused clarification for this session (main resolves
+      // the canUseTool promise via the abort signal) — drop the card too.
+      const { pendingClarification } = get();
+      if (pendingClarification?.sessionId === sessionId) {
+        set({ pendingClarification: null });
+      }
     },
 
     clear: (sessionId) => {
       void window.limboo?.agent?.clearSession(sessionId);
-      set((state) => ({ bySession: { ...state.bySession, [sessionId]: emptySnapshot() } }));
+      set((state) => ({
+        bySession: { ...state.bySession, [sessionId]: emptySnapshot() },
+        pendingClarification:
+          state.pendingClarification?.sessionId === sessionId
+            ? null
+            : state.pendingClarification,
+      }));
     },
 
     clearRateLimit: () => {
@@ -269,6 +287,17 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       if (!pending) return;
       void window.limboo?.agent?.respondPermission({ id: pending.id, behavior, remember });
       set({ pending: null });
+    },
+
+    respondClarification: (answers, response) => {
+      const { pendingClarification } = get();
+      if (!pendingClarification) return;
+      void window.limboo?.agent?.respondClarification?.({
+        id: pendingClarification.id,
+        answers,
+        response,
+      });
+      set({ pendingClarification: null });
     },
 
     approvePlan: (sessionId) => {

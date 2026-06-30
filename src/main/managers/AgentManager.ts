@@ -36,6 +36,10 @@ import type {
   AgentState,
   AgentToolCall,
   ChatMessage,
+  ClarificationDecision,
+  ClarificationOption,
+  ClarificationQuestion,
+  ClarificationRequest,
   DiagnosticCategory,
   DiagnosticSeverity,
   FileChange,
@@ -90,6 +94,19 @@ const COMMAND_TOOLS = new Set(['Bash', 'BashOutput', 'KillBash', 'KillShell']);
 const EXIT_PLAN_TOOL = 'ExitPlanMode';
 /** The SDK tool the agent uses to maintain its implementation checklist. */
 const TODO_TOOL = 'TodoWrite';
+/** The SDK tool the agent uses to ask the user clarifying questions. */
+const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
+
+/**
+ * Streamed text is coalesced before it crosses IPC: rather than one
+ * `message-delta` per token (which floods IPC and forces a React render +
+ * full-Markdown re-parse per token), deltas are buffered and flushed once the
+ * buffer reaches DELTA_FLUSH_CHARS or DELTA_FLUSH_MS elapses — whichever comes
+ * first. This caps renderer updates at ~25/s regardless of token rate while
+ * keeping perceived latency well under one frame.
+ */
+const DELTA_FLUSH_CHARS = 80;
+const DELTA_FLUSH_MS = 40;
 
 function classifyTool(name: string): ToolRisk {
   if (WRITE_TOOLS.has(name)) return 'write';
@@ -262,6 +279,22 @@ export class AgentManager {
   private readonly pending = new Map<
     string,
     { resolve: (r: PermissionResult) => void; sessionId: string; input: Record<string, unknown> }
+  >();
+  /**
+   * Pending AskUserQuestion clarifications awaiting renderer answers. Kept apart
+   * from {@link pending} because the resolve shape differs — answers are folded
+   * back into `updatedInput` rather than approving the original input.
+   */
+  private readonly pendingClarifications = new Map<
+    string,
+    {
+      resolve: (r: PermissionResult) => void;
+      sessionId: string;
+      /** The original SDK input, passed back verbatim so the tool resolves. */
+      input: Record<string, unknown>;
+      /** The normalized questions, used to key answers and summarize the result. */
+      questions: ClarificationQuestion[];
+    }
   >();
   /** Remembered "always allow" choices, keyed `sessionId:risk`. */
   private readonly remembered = new Set<string>();
@@ -528,7 +561,110 @@ export class AgentManager {
     }
 
     // Drop back to streaming if there are no other prompts outstanding.
-    if (this.pending.size === 0 && this.runs.has(entry.sessionId)) {
+    if (
+      this.pending.size === 0 &&
+      this.pendingClarifications.size === 0 &&
+      this.runs.has(entry.sessionId)
+    ) {
+      this.setLifecycle('streaming');
+      this.setRequest({ phase: 'streaming' });
+    }
+  }
+
+  /**
+   * AskUserQuestion bridge: surface the agent's clarifying questions to the
+   * renderer and pause the run until answers come back. The returned promise is
+   * the `canUseTool` result — resolving it with `{ behavior: 'allow', updatedInput }`
+   * resumes the SDK with the user's selections folded into the tool input.
+   */
+  private requestClarification(
+    sessionId: string,
+    input: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<PermissionResult> {
+    const questions = normalizeQuestions(input);
+    if (questions.length === 0) {
+      return Promise.resolve({
+        behavior: 'deny',
+        message: 'No well-formed questions were provided.',
+      });
+    }
+
+    const request: ClarificationRequest = {
+      id: newId(),
+      sessionId,
+      questions,
+      createdAt: Date.now(),
+    };
+    const headers = questions.map((q) => q.header).join(', ');
+    // No persisted activity yet — the live "Waiting for your decision…" row in
+    // the stream (driven by pendingClarification) covers the paused moment, and
+    // resolving records the answered summary. This avoids a duplicate marker.
+    this.diag('tool', 'info', 'Clarification requested', headers, sessionId);
+    this.setLifecycle('awaiting-permission');
+    this.setRequest({ phase: 'awaiting-permission' });
+    this.broadcastChannel(IpcEvents.agentClarificationRequest, request);
+
+    return new Promise<PermissionResult>((resolve) => {
+      const onAbort = () => {
+        this.pendingClarifications.delete(request.id);
+        resolve({ behavior: 'deny', message: 'Run stopped.', interrupt: true });
+      };
+      if (signal.aborted) return onAbort();
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pendingClarifications.set(request.id, {
+        sessionId,
+        input,
+        questions,
+        resolve: (r) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(r);
+        },
+      });
+    });
+  }
+
+  /** Resolve a pending AskUserQuestion clarification with the user's answers. */
+  respondClarification(decision: ClarificationDecision): void {
+    const entry = this.pendingClarifications.get(decision.id);
+    if (!entry) return;
+    this.pendingClarifications.delete(decision.id);
+
+    // Build a clean answers map keyed only by known question texts (defense in
+    // depth: never trust renderer-supplied keys, and drop prototype-pollution keys).
+    const answers: Record<string, string | string[]> = Object.create(null);
+    const summary: string[] = [];
+    for (const q of entry.questions) {
+      if (q.question === '__proto__' || q.question === 'constructor' || q.question === 'prototype') {
+        continue;
+      }
+      const value = decision.answers?.[q.question];
+      if (value === undefined) continue;
+      answers[q.question] = value;
+      const text = Array.isArray(value) ? value.join(', ') : value;
+      summary.push(`${q.header}: ${text}`);
+    }
+
+    const response = typeof decision.response === 'string' ? decision.response.trim() : '';
+    // The SDK requires the original questions array passed back verbatim.
+    const updatedInput: Record<string, unknown> = { questions: entry.input.questions, answers };
+    if (response) updatedInput.response = response;
+
+    const label = response
+      ? `Replied: ${truncate(response, 80)}`
+      : summary.length > 0
+        ? `Answered: ${truncate(summary.join(' · '), 120)}`
+        : 'Answered';
+    this.pushActivity(entry.sessionId, 'clarification', label, summary.join('\n') || undefined, 'success');
+    this.diag('tool', 'info', 'Clarification answered', label, entry.sessionId);
+    entry.resolve({ behavior: 'allow', updatedInput });
+
+    // Drop back to streaming if there are no other prompts outstanding.
+    if (
+      this.pending.size === 0 &&
+      this.pendingClarifications.size === 0 &&
+      this.runs.has(entry.sessionId)
+    ) {
       this.setLifecycle('streaming');
       this.setRequest({ phase: 'streaming' });
     }
@@ -768,6 +904,20 @@ export class AgentManager {
     const agent = this.settings.getAll().agent;
 
     let streaming: ChatMessage | null = null;
+    // Coalesced-delta state: `pendingDelta` accrues streamed text between flushes;
+    // `flushTimer` bounds the latency of a partial buffer (see DELTA_FLUSH_*).
+    let pendingDelta = '';
+    let flushTimer: NodeJS.Timeout | null = null;
+    const flushDelta = (): void => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (!streaming || pendingDelta.length === 0) return;
+      const text = pendingDelta;
+      pendingDelta = '';
+      this.pushEvent({ kind: 'message-delta', sessionId, messageId: streaming.id, text });
+    };
     const ensureStreaming = (): ChatMessage => {
       if (!streaming) {
         streaming = {
@@ -782,7 +932,23 @@ export class AgentManager {
       }
       return streaming;
     };
+    // Buffer a streamed text chunk; flush eagerly past the size threshold,
+    // otherwise arm a short timer so a trailing partial buffer still lands fast.
+    const queueDelta = (text: string): void => {
+      const m = ensureStreaming();
+      m.text += text;
+      pendingDelta += text;
+      if (pendingDelta.length >= DELTA_FLUSH_CHARS) flushDelta();
+      else if (!flushTimer) flushTimer = setTimeout(flushDelta, DELTA_FLUSH_MS);
+    };
     const finishStreaming = (finalText?: string): void => {
+      // Drop any buffered partial — the `message-done` below carries the full,
+      // authoritative text and the renderer replaces (not appends) on done.
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      pendingDelta = '';
       if (!streaming) return;
       if (typeof finalText === 'string' && finalText.length > 0) streaming.text = finalText;
       streaming.streaming = false;
@@ -822,7 +988,7 @@ export class AgentManager {
 
       for await (const msg of q) {
         if (abort.signal.aborted) break;
-        this.handleMessage(sessionId, msg, ensureStreaming, finishStreaming);
+        this.handleMessage(sessionId, msg, ensureStreaming, finishStreaming, queueDelta);
       }
     } finally {
       finishStreaming();
@@ -849,6 +1015,7 @@ export class AgentManager {
     msg: SDKMessage,
     ensureStreaming: () => ChatMessage,
     finishStreaming: (finalText?: string) => void,
+    queueDelta: (text: string) => void,
   ): void {
     switch (msg.type) {
       case 'system': {
@@ -861,9 +1028,9 @@ export class AgentManager {
       case 'stream_event': {
         const ev = msg.event as unknown as { type?: string; delta?: { type?: string; text?: string } };
         if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
-          const m = ensureStreaming();
-          m.text += ev.delta.text;
-          this.pushEvent({ kind: 'message-delta', sessionId, messageId: m.id, text: ev.delta.text });
+          // Buffered emit (see queueDelta / DELTA_FLUSH_*) — `ensureStreaming` is
+          // still invoked inside queueDelta so the message is created on first token.
+          queueDelta(ev.delta.text);
         }
         break;
       }
@@ -1326,6 +1493,13 @@ export class AgentManager {
       // allow them (even during a plan run) so reading memories never prompts.
       if (toolName.startsWith('mcp__limboo_memory__')) {
         return { behavior: 'allow', updatedInput: input };
+      }
+
+      // AskUserQuestion: a workflow pause point, not a tool to approve. Handle it
+      // BEFORE risk classification and the plan-mode read-only guard — clarifying
+      // questions are the whole point of plan mode and must not be blocked there.
+      if (toolName === ASK_USER_QUESTION_TOOL) {
+        return this.requestClarification(sessionId, input, signal);
       }
 
       const risk = classifyTool(toolName);
@@ -1928,4 +2102,38 @@ function countLines(s: string): number {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+/**
+ * Defensively coerce the agent-supplied `AskUserQuestion` input into a clean,
+ * bounded {@link ClarificationQuestion} list before it crosses to the renderer.
+ * The SDK contract is 1–4 questions with 2–4 options each; anything malformed is
+ * dropped rather than trusted. Returns an empty array if nothing is usable.
+ */
+function normalizeQuestions(input: Record<string, unknown>): ClarificationQuestion[] {
+  const raw = Array.isArray(input.questions) ? input.questions : [];
+  const out: ClarificationQuestion[] = [];
+  for (const q of raw.slice(0, 4)) {
+    if (!q || typeof q !== 'object') continue;
+    const rec = q as Record<string, unknown>;
+    const question = typeof rec.question === 'string' ? rec.question.trim() : '';
+    if (!question) continue;
+    const header =
+      typeof rec.header === 'string' && rec.header.trim()
+        ? rec.header.trim().slice(0, 12)
+        : 'Question';
+    const rawOptions = Array.isArray(rec.options) ? rec.options : [];
+    const options: ClarificationOption[] = [];
+    for (const o of rawOptions.slice(0, 4)) {
+      if (!o || typeof o !== 'object') continue;
+      const orec = o as Record<string, unknown>;
+      const label = typeof orec.label === 'string' ? orec.label.trim() : '';
+      if (!label) continue;
+      const description = typeof orec.description === 'string' ? orec.description.trim() : '';
+      options.push({ label, description });
+    }
+    if (options.length < 1) continue;
+    out.push({ question, header, options, multiSelect: rec.multiSelect === true });
+  }
+  return out;
 }

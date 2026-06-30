@@ -42,8 +42,14 @@ import { InlineApproval } from './InlineApproval';
 /** Activity types that surface inline in the conversation as status markers.
  *  Tool / prompt / file-change / permission activity is intentionally excluded —
  *  those are already represented by the tool rows and the user bubble, so showing
- *  them again would double up the timeline. */
-const MARKER_TYPES: ReadonlySet<AgentActivityItem['type']> = new Set(['result', 'status', 'error']);
+ *  them again would double up the timeline. `clarification` is included so a
+ *  resolved AskUserQuestion leaves an answered summary in the stream. */
+const MARKER_TYPES: ReadonlySet<AgentActivityItem['type']> = new Set([
+  'result',
+  'status',
+  'error',
+  'clarification',
+]);
 
 /** A single chronological item inside an assistant block. */
 type Block =
@@ -128,6 +134,23 @@ function buildTurns(
 export function ConversationView({ sessionId }: { sessionId: string }) {
   const snapshot = useAgentStore((s) => s.bySession[sessionId]) ?? EMPTY_SNAPSHOT;
   const pending = useAgentStore((s) => s.pending);
+  // The active run's phase for THIS session — drives the pre-first-token skeleton
+  // so the connect→first-token gap (the part that actually feels slow) shows the
+  // shimmer instead of nothing. `ensureStreaming` only fires on the first token,
+  // so without this the skeleton's empty-text window never paints.
+  const thinking = useAgentStore(
+    (s) =>
+      s.request.sessionId === sessionId &&
+      (s.request.phase === 'submitting' ||
+        s.request.phase === 'connecting' ||
+        s.request.phase === 'streaming' ||
+        s.request.phase === 'recovering'),
+  );
+  // The run is paused on an AskUserQuestion for this session — the card lives
+  // above the composer; here we only show a lightweight inline "waiting" status.
+  const clarifying = useAgentStore(
+    (s) => !!s.pendingClarification && s.pendingClarification.sessionId === sessionId,
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   // Id of the last user message we pinned to — lets us force-follow the user's own
@@ -175,14 +198,25 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
         <TurnView
           key={turn.key}
           turn={turn}
-          // The pending approval docks inside the most recent turn's assistant
-          // block, immediately beneath the latest streamed content.
+          // The pending approval / clarification wait docks inside the most recent
+          // turn's assistant block, immediately beneath the latest streamed content.
           approval={approval && turn.key === lastKey ? approval : null}
+          waiting={clarifying && !approval && turn.key === lastKey}
+          // Pre-first-token shimmer for the in-flight turn, only while it has no
+          // content of its own yet (tools / text supersede it).
+          thinking={thinking && !approval && !clarifying && turn.key === lastKey}
         />
       ))}
-      {/* Approval arriving before any assistant content has a turn to attach to. */}
-      {approval && !turns.length && (
+      {/* Approval / clarification arriving before any assistant content has a turn
+          to attach to. */}
+      {!turns.length && approval && (
         <AssistantBlock blocks={[]} trailing={<InlineApproval request={approval} />} />
+      )}
+      {!turns.length && !approval && clarifying && (
+        <AssistantBlock blocks={[]} trailing={<WaitingForDecision />} />
+      )}
+      {!turns.length && !approval && !clarifying && thinking && (
+        <AssistantBlock blocks={[]} trailing={<MessageSkeleton />} />
       )}
       {/* Scroll anchor — a small bottom margin keeps the last line off the very
           edge when auto-scrolling (honored by scrollIntoView). The composer is
@@ -203,17 +237,43 @@ function findScrollParent(node: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-function TurnView({ turn, approval }: { turn: Turn; approval: PermissionRequest | null }) {
-  const showAssistant = turn.blocks.length > 0 || !!approval;
+function TurnView({
+  turn,
+  approval,
+  waiting,
+  thinking,
+}: {
+  turn: Turn;
+  approval: PermissionRequest | null;
+  waiting?: boolean;
+  thinking?: boolean;
+}) {
+  // The shimmer is the pre-first-token placeholder: only surface it while this
+  // turn has produced no blocks of its own (a tool row or streamed text replaces it).
+  const showSkeleton = !!thinking && turn.blocks.length === 0;
+  const showAssistant = turn.blocks.length > 0 || !!approval || !!waiting || showSkeleton;
+  const trailing = approval ? (
+    <InlineApproval request={approval} />
+  ) : waiting ? (
+    <WaitingForDecision />
+  ) : showSkeleton ? (
+    <MessageSkeleton />
+  ) : null;
   return (
     <div className="flex flex-col gap-4">
       {turn.user && <UserBubble message={turn.user} />}
-      {showAssistant && (
-        <AssistantBlock
-          blocks={turn.blocks}
-          trailing={approval ? <InlineApproval request={approval} /> : null}
-        />
-      )}
+      {showAssistant && <AssistantBlock blocks={turn.blocks} trailing={trailing} />}
+    </div>
+  );
+}
+
+/** Lightweight inline status while the run is paused on an AskUserQuestion. The
+ *  interactive card lives above the composer; this just keeps the stream honest. */
+function WaitingForDecision() {
+  return (
+    <div className="flex items-center gap-2 border-l border-accent/50 pl-3 text-[12px] text-accent animate-fade-in">
+      <Spinner size={12} />
+      <span>Waiting for your decision…</span>
     </div>
   );
 }
@@ -359,6 +419,7 @@ function InlineMarkerRow({ item }: { item: AgentActivityItem }) {
 
 function MarkerIcon({ item }: { item: AgentActivityItem }) {
   if (item.type === 'result') return <Check size={12} className="shrink-0 text-success" />;
+  if (item.type === 'clarification') return <Check size={12} className="shrink-0 text-accent" />;
   if (item.type === 'error') return <CircleAlert size={12} className="shrink-0 text-danger" />;
   const dot =
     item.tone === 'success'

@@ -1,8 +1,11 @@
 name: CI
 
-# Lightweight verification matching the project's prescribed checks (CLAUDE.md §9):
-# lint, then the renderer Vite build. TypeScript is old (~4.5) and the renderer is
-# transpiled by esbuild via Vite, so `tsc --noEmit` is intentionally NOT used.
+# Continuous Integration — validates every push and pull request and never
+# produces shippable artifacts. Layered, fail-fast stages mirror ci/pipeline.yml:
+#   validate  ->  build  ->  test (cross-platform).
+# TypeScript is ~4.5 and the renderer is esbuild-bundled, so `tsc --noEmit` is
+# intentionally NOT used (CLAUDE.md §2/§9). All reusable logic lives in
+# ci/scripts/*.mjs so GitLab CI and CircleCI run identical behavior.
 
 on:
   push:
@@ -18,28 +21,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Lint and renderer build
+  validate:
+    name: Validate
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
           cache: npm
-
-      - name: Install system build dependencies
-        # Native modules (better-sqlite3, node-pty) need a C/C++ toolchain to install.
+      - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential python3
-
       - name: Install dependencies
         run: npm ci
-
-      - name: Lint
+      - name: Lint sources
         run: npm run lint
+      - name: License compliance
+        run: node ci/scripts/check-licenses.mjs
+      - name: Electron security invariants
+        run: node ci/scripts/check-electron-security.mjs
+      - name: Manifest + docs integrity
+        run: node ci/scripts/check-manifest.mjs
+      - name: Dependency audit (high+)
+        run: npm audit --audit-level=high || echo "::warning::npm audit reported advisories"
 
+  build:
+    name: Build
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install native build deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3
+      - name: Install dependencies
+        run: npm ci
       - name: Build renderer
         run: npx vite build --config vite.renderer.config.mts
+      - name: Package (compiles main + preload)
+        run: npm run package
+
+  test:
+    name: Test (${{ matrix.os }})
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install native build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3 xvfb libnss3 libgbm1 libasound2t64
+      - name: Install dependencies
+        run: npm ci
+      - name: Electron smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node ci/scripts/smoke-test.mjs
+      - name: Electron smoke test (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: node ci/scripts/smoke-test.mjs

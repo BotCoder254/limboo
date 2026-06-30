@@ -1,0 +1,98 @@
+name: Package (reusable)
+
+# Reusable CD build: packages platform installers, generates an SBOM + checksums,
+# verifies signing where configured, and emits build-provenance + SBOM
+# attestations. Called by cd.yml (manual dry-run) and release.yml (tags). Keeping
+# the build in ONE reusable workflow is what lets every caller produce identical
+# artifacts and moves toward SLSA Build L3 (isolated, vetted build instructions).
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build
+        type: string
+        required: false
+        default: ${{ github.ref }}
+      attest:
+        description: Generate provenance/SBOM attestations
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    permissions:
+      contents: read
+      id-token: write        # OIDC for attestations
+      attestations: write     # write artifact attestations
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        # rpm/dpkg makers + native module toolchain; xvfb is only needed for tests.
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3 rpm fakeroot dpkg
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Make installers
+        run: npm run make
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: out/make/limboo-sbom.cdx.json
+
+      - name: Compute checksums
+        run: node ci/scripts/make-checksums.mjs out/make out/make/SHA256SUMS
+
+      - name: Verify code signing (skips when unsigned)
+        run: node ci/scripts/verify-signing.mjs out/make
+
+      - name: Attest build provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            out/make/**/*.deb
+            out/make/**/*.rpm
+            out/make/**/*.zip
+            out/make/**/*.exe
+            out/make/**/*.nupkg
+
+      - name: Attest SBOM
+        if: ${{ inputs.attest }}
+        uses: actions/attest-sbom@v1
+        with:
+          subject-path: out/make/SHA256SUMS
+          sbom-path: out/make/limboo-sbom.cdx.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: limboo-${{ runner.os }}
+          path: out/make/**/*
+          if-no-files-found: error
+          retention-days: 14

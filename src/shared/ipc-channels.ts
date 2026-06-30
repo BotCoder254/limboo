@@ -59,6 +59,7 @@ export const IpcChannels = {
   agentStop: 'agent:stop',
   agentGetSnapshot: 'agent:getSnapshot',
   agentPermissionRespond: 'agent:permissionRespond',
+  agentClarificationRespond: 'agent:clarificationRespond',
   agentClearSession: 'agent:clearSession',
   agentGetDiagnostics: 'agent:getDiagnostics',
   agentClearRateLimit: 'agent:clearRateLimit',
@@ -152,6 +153,8 @@ export const IpcEvents = {
   agentEvent: 'agent:event',
   /** The agent needs the user to approve or deny a tool call. */
   agentPermissionRequest: 'agent:permission-request',
+  /** The agent (AskUserQuestion) needs the user to answer clarifying questions. */
+  agentClarificationRequest: 'agent:clarification-request',
   /** Progress of an in-flight workspace index pass. */
   fsIndexProgress: 'fs:index-progress',
   /** The active workspace's directory tree changed (watcher or reindex). */

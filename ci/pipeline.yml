@@ -1,0 +1,105 @@
+# Limboo — canonical pipeline specification
+#
+# This file is the SINGLE SOURCE OF TRUTH for the logical CI/CD pipeline. It is
+# provider-agnostic: GitHub Actions (.github/workflows), GitLab CI (.gitlab-ci.yml)
+# and CircleCI (.circleci/config.yml) each implement these exact stages, in this
+# exact order, producing identical artifacts. When you change the pipeline, change
+# THIS file first, then update all three provider implementations to match.
+#
+# It is documentation, not an executable config — no provider reads it directly.
+# The reusable logic lives in ci/scripts/*.mjs so every provider runs byte-for-byte
+# identical behavior rather than re-implementing steps in YAML.
+
+meta:
+  project: limboo
+  package_manager: npm            # package-lock.json is authoritative
+  node_version: "20"              # LTS; Electron 42 / Forge 7 compatible
+  native_modules: [better-sqlite3, node-pty]  # need a C/C++ toolchain + python3 to install
+  platforms: [linux, macos, windows]
+  makers:                         # from forge.config.ts
+    windows: squirrel
+    macos: zip
+    linux: [deb, rpm]
+
+# Layered responsibilities. Each layer has ONE job; failures isolate to their
+# lifecycle instead of interrupting unrelated work.
+layers:
+  ci:       Validate every push and pull request. Never produces shippable artifacts.
+  cd:       Package, sign, SBOM, checksum platform binaries. Never publishes.
+  release:  Tag-triggered. Collect CD artifacts, generate notes, publish releases.
+
+# Canonical stage order. "fail fast": cheap validation gates the expensive build.
+stages:
+  - id: validate
+    layer: ci
+    fail_fast: true
+    steps:
+      - Install dependencies from the lockfile (npm ci).
+      - Lint sources (npm run lint  ->  eslint .ts/.tsx).
+      - Lint workflow + config YAML and Markdown docs.
+      - Secret scanning (gitleaks).
+      - Dependency vulnerability audit (npm audit / dependency review).
+      - License compliance (ci/scripts/check-licenses.mjs).
+      - Static analysis / SAST (CodeQL — see .github/workflows/codeql.yml).
+      - Electron security invariants (ci/scripts/check-electron-security.mjs):
+          contextIsolation on, nodeIntegration off, sandbox on, CSP present.
+      - Manifest + docs integrity (ci/scripts/check-manifest.mjs).
+
+  - id: build
+    layer: ci
+    needs: [validate]
+    steps:
+      - Build the renderer (vite build --config vite.renderer.config.mts).
+      - Build main + preload (electron-forge package compiles them via the Vite plugin).
+      # NOTE: do NOT use `tsc --noEmit` — TS is ~4.5 and the renderer is esbuild-bundled.
+
+  - id: test
+    layer: ci
+    needs: [build]
+    matrix: [linux, macos, windows]
+    steps:
+      - Unit tests (when present).
+      - Integration tests (when present).
+      - Electron smoke launch (ci/scripts/smoke-test.mjs under xvfb on Linux):
+          app boots, main process initializes, window is created, no crash.
+
+  - id: package
+    layer: cd
+    needs: [test]
+    matrix: [linux, macos, windows]
+    when: tag OR manual dispatch
+    steps:
+      - electron-forge make  ->  per-OS installers (deb/rpm on linux, zip on macOS,
+        squirrel on windows).
+      - Collect artifacts under out/make.
+
+  - id: secure
+    layer: cd
+    needs: [package]
+    steps:
+      - Generate an SBOM (CycloneDX / anchore sbom-action) for the build.
+      - Compute SHA-256 checksums (ci/scripts/make-checksums.mjs  ->  SHA256SUMS).
+      - Verify code signing where signing credentials are configured
+        (ci/scripts/verify-signing.mjs); skip cleanly when unsigned.
+      - Generate build-provenance + SBOM attestations (GitHub artifact attestations;
+        GitLab/CircleCI document the equivalent / cosign path).
+
+  - id: release
+    layer: release
+    needs: [secure]
+    when: tag matching v*
+    steps:
+      - Generate categorized release notes (ci/scripts/generate-release-notes.mjs)
+        from conventional commits + merged-PR labels between the previous tag and HEAD.
+      - Publish a GitHub Release with installers + SHA256SUMS + attestations.
+      - Optionally mirror the release to GitLab Releases.
+
+# Security is a first-class, every-commit concern — never a post-release afterthought.
+security_invariants:
+  - "Least-privilege tokens; default `permissions: contents: read`, widen per-job only."
+  - Prefer the built-in GITHUB_TOKEN + OIDC over long-lived credentials.
+  - Secrets live ONLY in the provider's secret store (GH secrets / GitLab masked+protected
+    vars / CircleCI contexts) — never in the repo or in YAML.
+  - Pin third-party actions to a commit SHA where practical.
+  - Provenance/SBOM attestation on every release; start in audit mode, then enforce.
+  - Any git automation uses `--force-with-lease`, never a bare `--force`.
