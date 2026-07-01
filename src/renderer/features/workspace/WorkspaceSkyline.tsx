@@ -26,7 +26,10 @@ export function WorkspaceSkyline({ className }: { className?: string }) {
   const reduced = prefersReducedMotion();
 
   return (
-    <div className={cn('limboo-skyline group w-full select-none', className)} aria-hidden>
+    <div
+      className={cn('limboo-skyline group relative z-0 w-full select-none overflow-hidden', className)}
+      aria-hidden
+    >
       <svg
         viewBox="0 0 1440 320"
         preserveAspectRatio="none"

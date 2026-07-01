@@ -29,7 +29,7 @@ export function TitleBar() {
     updateStage === 'downloaded';
 
   return (
-    <header className="drag-region flex h-10 shrink-0 items-center justify-between border-b border-line bg-surface pl-3 pr-0">
+    <header className="drag-region relative z-20 flex h-10 shrink-0 items-center justify-between border-b border-line bg-surface pl-3 pr-0">
       <div className="flex items-center gap-2">
         <Wordmark />
         <WorkspaceSwitcher />
