@@ -220,13 +220,23 @@ with a custom title bar on top and a horizontal row of resizable regions below i
 
 ### Brand / logo
 
-The logo is the lucide **`Orbit`** glyph (a core with orbiting bodies = one
-workspace orchestrating many agents/sessions), rendered solid + on-palette via
-[`components/brand/Logo.tsx`](src/renderer/components/brand/Logo.tsx) — no
-background, no gradient. The OS-level window/tray/app icon is
-[`assets/icon.png`](assets/icon.png) / `tray.png`, rasterized from
-[`assets/icon.svg`](assets/icon.svg) with `rsvg-convert` (regenerate after editing
-the SVG: `rsvg-convert -w 512 -h 512 assets/icon.svg -o assets/icon.png`).
+The logo is an organic **pink "blob"** mark (`--color-brand` = `#ff0066`), rendered
+as an inline SVG (solid fill, no background, no gradient) via
+[`components/brand/Logo.tsx`](src/renderer/components/brand/Logo.tsx). This pink is
+the **one intentional exception** to the "no off-palette colors" rule in §4 — it's a
+dedicated `--color-brand` token (→ `text-brand`/`fill-brand`) used only for the
+brand mark, not for UI chrome (which still uses the blue `--color-accent`). `Logo`
+defaults to `tone="brand"` but keeps `accent`/`fg`/`muted` tones for contexts that
+need the mark to blend into text.
+
+The OS-level window/tray/app icon is [`assets/icon.png`](assets/icon.png) (512),
+`icon@256.png`, and `tray.png` (32), rasterized from the same-shape
+[`assets/icon.svg`](assets/icon.svg). Regenerate the runtime PNGs with
+`npm run gen:icons` (a cross-platform `sharp` script,
+[`scripts/gen-icons.mjs`](scripts/gen-icons.mjs)) after editing the SVG — this
+replaces the old `rsvg-convert` one-liner, which isn't available on Windows. The
+Windows *installer* art (`.ico`, NSIS sidebars) still derives from `icon.svg` via
+`scripts/gen-installer-assets.sh` (needs `rsvg-convert` + ImageMagick).
 
 ### Frameless window + the `window.limboo` bridge
 

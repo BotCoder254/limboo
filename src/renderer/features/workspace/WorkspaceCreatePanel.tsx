@@ -13,6 +13,7 @@
 import { useMemo, useState } from 'react';
 import { ArrowLeft, FolderSearch, GitBranch, FolderPlus } from 'lucide-react';
 import { cn } from '@/renderer/lib/cn';
+import { Logo } from '@/renderer/components/brand/Logo';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
 import { WorkspaceActionButton } from './WorkspaceActionButton';
@@ -91,11 +92,14 @@ export function WorkspaceCreatePanel() {
         Back to workspaces
       </button>
 
-      <div className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold tracking-tight text-fg">Create a workspace</h1>
-        <p className="text-[12px] text-muted">
-          Limboo creates the project folder, then profiles it automatically.
-        </p>
+      <div className="flex flex-col gap-3">
+        <Logo size={40} />
+        <div className="flex flex-col gap-1">
+          <h1 className="text-lg font-semibold tracking-tight text-fg">Create a workspace</h1>
+          <p className="text-[12px] text-muted">
+            Limboo creates the project folder, then profiles it automatically.
+          </p>
+        </div>
       </div>
 
       <form

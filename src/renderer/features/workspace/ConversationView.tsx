@@ -339,7 +339,7 @@ const AssistantBlock = memo(function AssistantBlock({
   return (
     <div className="flex gap-3 animate-fade-in">
       <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2">
-        <Logo size={16} tone={streaming ? 'accent' : 'fg'} />
+        <Logo size={16} className={streaming ? 'animate-pulse' : undefined} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5">
         {blocks.map((block) => {
