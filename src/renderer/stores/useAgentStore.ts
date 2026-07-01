@@ -85,6 +85,56 @@ interface AgentStoreState {
 }
 
 export const useAgentStore = create<AgentStoreState>((set, get) => {
+  // Streamed-delta frame batching. A burst of `message-delta` events (the main
+  // process now flushes finely so text reveals smoothly) would otherwise force a
+  // React render per delta. Instead we accumulate delta text per streaming
+  // message and apply it to the store ONCE per animation frame — collapsing a
+  // burst into a single render aligned to the display refresh. Any non-delta
+  // event flushes the buffer first so `message-done` carries the full text and
+  // timeline ordering is preserved.
+  const deltaBuffer = new Map<string, { sessionId: string; text: string }>(); // key: messageId
+  let rafHandle: number | null = null;
+
+  const scheduleFlush = (): void => {
+    if (rafHandle !== null) return;
+    if (typeof requestAnimationFrame === 'function') {
+      rafHandle = requestAnimationFrame(() => flushDeltasNow());
+    } else {
+      rafHandle = setTimeout(() => flushDeltasNow(), 16) as unknown as number;
+    }
+  };
+
+  const flushDeltasNow = (): void => {
+    if (rafHandle !== null) {
+      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafHandle);
+      else clearTimeout(rafHandle as unknown as ReturnType<typeof setTimeout>);
+      rafHandle = null;
+    }
+    if (deltaBuffer.size === 0) return;
+    // messageId -> accumulated text, and the set of sessions touched this frame.
+    const appends = new Map<string, string>(); // key: messageId
+    const sessions = new Set<string>();
+    for (const [messageId, entry] of deltaBuffer) {
+      appends.set(messageId, entry.text);
+      sessions.add(entry.sessionId);
+    }
+    deltaBuffer.clear();
+    set((state) => {
+      const bySession = { ...state.bySession };
+      for (const sessionId of sessions) {
+        const prev = bySession[sessionId] ?? emptySnapshot();
+        bySession[sessionId] = {
+          ...prev,
+          messages: prev.messages.map((m) => {
+            const add = appends.get(m.id);
+            return add ? { ...m, text: m.text + add, streaming: true } : m;
+          }),
+        };
+      }
+      return { bySession };
+    });
+  };
+
   /** Apply a structured event to its session's snapshot / global state. */
   function apply(event: AgentEvent): void {
     // Global (session-less) events first.
@@ -104,6 +154,18 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       return;
     }
 
+    // Streamed text: accumulate and apply on the next frame (see deltaBuffer).
+    if (event.kind === 'message-delta') {
+      const existing = deltaBuffer.get(event.messageId);
+      if (existing) existing.text += event.text;
+      else deltaBuffer.set(event.messageId, { sessionId: event.sessionId, text: event.text });
+      scheduleFlush();
+      return;
+    }
+    // Any other event must see the fully-applied stream first — otherwise a
+    // `message-done` (which replaces text) could race ahead of buffered deltas.
+    flushDeltasNow();
+
     set((state) => {
       const prev = state.bySession[event.sessionId] ?? emptySnapshot();
       const next: AgentSessionSnapshot = {
@@ -119,11 +181,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         case 'message-start':
           next.messages = upsertMessage(prev.messages, event.message);
           break;
-        case 'message-delta':
-          next.messages = prev.messages.map((m) =>
-            m.id === event.messageId ? { ...m, text: m.text + event.text, streaming: true } : m,
-          );
-          break;
+        // 'message-delta' is handled ahead of this switch via the frame-batched
+        // deltaBuffer (flushed just above), so it never reaches here.
         case 'message-done':
           next.messages = upsertMessage(prev.messages, event.message);
           break;

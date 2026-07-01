@@ -148,11 +148,16 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
             )}
           </div>
 
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 px-1">
+          {/* One-line footer: as the center column narrows (side panels dragged
+              inward) the controls SHRINK — the select labels truncate — rather
+              than wrapping onto a new bottom row. No horizontal-overflow here on
+              purpose: the selects' popovers open upward, and any overflow-x would
+              force overflow-y:auto and clip them. */}
+          <div className="flex min-w-0 flex-nowrap items-center gap-x-2 px-1">
             <ComposerModeSwitch mode={mode} onChange={setMode} disabled={disabled || !installed} />
             <span className="hidden h-3.5 w-px shrink-0 bg-line sm:block" />
             <ComposerControls disabled={disabled || !installed} />
-            <span className="ml-auto flex min-w-0 items-center gap-2 text-[11px] text-faint">
+            <span className="ml-auto flex min-w-0 shrink items-center gap-2 text-[11px] text-faint">
               <StatusHint
                 installed={installed}
                 installError={installError}

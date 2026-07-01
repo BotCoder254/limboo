@@ -1,20 +1,34 @@
 /**
- * Plan / Implement segmented switch — the control that governs the agent's
- * execution mode for the next prompt. In Plan mode the agent runs read-only and
- * proposes an implementation strategy for review; in Implement mode it is free to
+ * Plan / Build mode select — the control that governs the agent's execution mode
+ * for the next prompt. In Plan mode the agent runs read-only and proposes an
+ * implementation strategy for review; in Build (implement) mode it is free to
  * modify the repository (still gated by the per-tool approval policy).
+ *
+ * Rendered as a compact popover select (the shared {@link MiniSelect}) so it looks
+ * and behaves exactly like the other composer footer controls — click the trigger,
+ * pick the other mode from a small menu — rather than an always-expanded segmented
+ * block. This also keeps the footer on one line as the center column narrows.
  *
  * Pure presentation: the selected mode lives in the Composer and is passed to
  * `agent.send(sessionId, prompt, mode)`.
  */
+import type { ReactNode } from 'react';
 import { ClipboardList, Hammer } from 'lucide-react';
 import type { AgentMode } from '@shared/types';
-import { cn } from '@/renderer/lib/cn';
+import { MiniSelect, type Option } from './ComposerControls';
 
-const MODES: Array<{ value: AgentMode; label: string; icon: typeof ClipboardList; title: string }> = [
-  { value: 'plan', label: 'Plan', icon: ClipboardList, title: 'Plan — analyze the repository and propose a strategy (read-only)' },
-  { value: 'implement', label: 'Build', icon: Hammer, title: 'Implement — let the agent modify the repository' },
+const MODE_GLYPH: Record<AgentMode, ReactNode> = {
+  plan: <ClipboardList size={13} className="text-accent" />,
+  implement: <Hammer size={13} className="text-muted" />,
+};
+
+const MODE_OPTIONS: Option<AgentMode>[] = [
+  { value: 'plan', label: 'Plan', glyph: MODE_GLYPH.plan },
+  { value: 'implement', label: 'Build', glyph: MODE_GLYPH.implement },
 ];
+
+const MODE_TITLE =
+  'Execution mode — Plan analyzes the repository read-only and proposes a strategy; Build lets the agent modify it';
 
 export function ComposerModeSwitch({
   mode,
@@ -26,30 +40,15 @@ export function ComposerModeSwitch({
   disabled?: boolean;
 }) {
   return (
-    <div className="no-drag inline-flex items-center gap-0.5 rounded-md border border-line bg-surface p-0.5">
-      {MODES.map(({ value, label, icon: Icon, title }) => {
-        const active = mode === value;
-        return (
-          <button
-            key={value}
-            type="button"
-            title={title}
-            disabled={disabled}
-            onClick={() => onChange(value)}
-            className={cn(
-              'flex h-6 items-center gap-1 rounded-[5px] px-2 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-              active
-                ? value === 'plan'
-                  ? 'bg-elevated text-accent'
-                  : 'bg-elevated text-fg'
-                : 'text-muted hover:text-fg',
-            )}
-          >
-            <Icon size={12} />
-            {label}
-          </button>
-        );
-      })}
-    </div>
+    <MiniSelect
+      title={MODE_TITLE}
+      value={mode}
+      options={MODE_OPTIONS}
+      onChange={onChange}
+      // Mirror the active mode's glyph on the trigger so the current mode reads at
+      // a glance, matching the model select's provider-mark trigger.
+      triggerGlyph={MODE_GLYPH[mode]}
+      disabled={disabled}
+    />
   );
 }

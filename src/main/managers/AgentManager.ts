@@ -108,14 +108,15 @@ const IDLE_REQUEST: RequestState = {
 
 /**
  * Streamed text is coalesced before it crosses IPC: rather than one
- * `message-delta` per token (which floods IPC and forces a React render +
- * full-Markdown re-parse per token), deltas are buffered and flushed once the
- * buffer reaches DELTA_FLUSH_CHARS or DELTA_FLUSH_MS elapses — whichever comes
- * first. This caps renderer updates at ~25/s regardless of token rate while
- * keeping perceived latency well under one frame.
+ * `message-delta` per token (which floods IPC), deltas are buffered and flushed
+ * once the buffer reaches DELTA_FLUSH_CHARS or DELTA_FLUSH_MS elapses — whichever
+ * comes first. These are kept small so text emits near display-refresh cadence
+ * (smooth, real-time reveal rather than large periodic bursts); the renderer then
+ * coalesces bursts of deltas into one render per animation frame, so a fine flush
+ * here never causes a React render storm.
  */
-const DELTA_FLUSH_CHARS = 80;
-const DELTA_FLUSH_MS = 40;
+const DELTA_FLUSH_CHARS = 24;
+const DELTA_FLUSH_MS = 16;
 
 function classifyTool(name: string): ToolRisk {
   if (WRITE_TOOLS.has(name)) return 'write';
