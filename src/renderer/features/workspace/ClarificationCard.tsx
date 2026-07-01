@@ -21,6 +21,7 @@ import { useAgentStore } from '@/renderer/stores/useAgentStore';
 
 export function ClarificationCard({ request }: { request: ClarificationRequest }) {
   const respondClarification = useAgentStore((s) => s.respondClarification);
+  const requestId = request.id;
   const questions = request.questions;
   const total = questions.length;
 
@@ -68,7 +69,7 @@ export function ClarificationCard({ request }: { request: ClarificationRequest }
         if (value) answers[q.question] = value;
       }
     });
-    respondClarification(answers);
+    respondClarification(requestId, answers);
   }
 
   function advance(): void {

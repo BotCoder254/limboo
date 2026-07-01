@@ -35,7 +35,7 @@ export function CenterWorkspace() {
   );
   // A paused AskUserQuestion for THIS session — the run resumes only once answered.
   const clarification = useAgentStore((s) =>
-    session && s.pendingClarification?.sessionId === session.id ? s.pendingClarification : null,
+    session ? (s.pendingClarificationBySession[session.id] ?? null) : null,
   );
 
   // Restore the transcript whenever the selected session changes.

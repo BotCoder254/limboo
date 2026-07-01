@@ -34,10 +34,12 @@ function formatReset(resetsAt?: number, timezone?: string): string {
 export function ComposerBanner() {
   const lifecycle = useAgentStore((s) => s.lifecycle);
   const rateLimit = useAgentStore((s) => s.rateLimit);
-  const outcome = useAgentStore((s) => s.request.outcome);
   const retryAuth = useAgentStore((s) => s.retryAuth);
   const clearRateLimit = useAgentStore((s) => s.clearRateLimit);
   const sessionId = useSessionStore((s) => s.selectedId);
+  // Scoped to THIS composer's session — sessions can run concurrently, so the
+  // outcome must never be read off a single global "last request" field.
+  const outcome = useAgentStore((s) => (sessionId ? s.requestsBySession[sessionId]?.outcome : null));
   const planReady = useAgentStore(
     (s) => (sessionId ? s.bySession[sessionId]?.plan?.status : undefined) === 'ready',
   );

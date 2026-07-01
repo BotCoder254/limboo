@@ -1023,10 +1023,22 @@ export interface AgentState {
   /** Axis A — capability health. */
   lifecycle: AgentLifecycleStatus;
   install: AgentInstall;
-  /** Axis B — the active / last run. */
+  /**
+   * Axis B — the active / last run, kept for back-compat with anything that
+   * only cares about the most-recently-touched session. Multi-session UI must
+   * use {@link requestsBySession} instead — sessions can run concurrently, and
+   * this single field cannot represent more than one at a time.
+   */
   request: RequestState;
   /** Session id whose run is currently active, if any. */
   activeSessionId: string | null;
+  /** Per-session run phase — the source of truth once more than one session
+   *  can be in flight at once (see CLAUDE.md multi-session concurrency notes). */
+  requestsBySession: Record<string, RequestState>;
+  /** Every tool approval currently awaiting a renderer decision, across all sessions. */
+  pendingPermissions: PermissionRequest[];
+  /** Every `AskUserQuestion` clarification currently awaiting renderer answers, across all sessions. */
+  pendingClarifications: ClarificationRequest[];
   /** Present while lifecycle === 'rate-limited'. */
   rateLimit?: RateLimitInfo;
   /** Last capability-level error (NOT a request-level failure). */

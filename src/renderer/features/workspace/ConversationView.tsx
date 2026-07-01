@@ -133,24 +133,25 @@ function buildTurns(
 
 export function ConversationView({ sessionId }: { sessionId: string }) {
   const snapshot = useAgentStore((s) => s.bySession[sessionId]) ?? EMPTY_SNAPSHOT;
-  const pending = useAgentStore((s) => s.pending);
+  const pending = useAgentStore((s) => s.pendingBySession[sessionId] ?? null);
   // The active run's phase for THIS session — drives the pre-first-token skeleton
   // so the connect→first-token gap (the part that actually feels slow) shows the
   // shimmer instead of nothing. `ensureStreaming` only fires on the first token,
-  // so without this the skeleton's empty-text window never paints.
-  const thinking = useAgentStore(
-    (s) =>
-      s.request.sessionId === sessionId &&
-      (s.request.phase === 'submitting' ||
-        s.request.phase === 'connecting' ||
-        s.request.phase === 'streaming' ||
-        s.request.phase === 'recovering'),
-  );
+  // so without this the skeleton's empty-text window never paints. Reads the
+  // per-session phase map — sessions can run concurrently, so this must never
+  // fall back to a single global "the active request" field.
+  const thinking = useAgentStore((s) => {
+    const phase = s.requestsBySession[sessionId]?.phase;
+    return (
+      phase === 'submitting' ||
+      phase === 'connecting' ||
+      phase === 'streaming' ||
+      phase === 'recovering'
+    );
+  });
   // The run is paused on an AskUserQuestion for this session — the card lives
   // above the composer; here we only show a lightweight inline "waiting" status.
-  const clarifying = useAgentStore(
-    (s) => !!s.pendingClarification && s.pendingClarification.sessionId === sessionId,
-  );
+  const clarifying = useAgentStore((s) => !!s.pendingClarificationBySession[sessionId]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   // Id of the last user message we pinned to — lets us force-follow the user's own
