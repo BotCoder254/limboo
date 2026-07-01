@@ -47,7 +47,7 @@ function assertValidPath(p: unknown): asserts p is string {
 /** Characters never allowed in a new workspace folder name: Windows reserved
  *  filename characters plus ASCII control codes. */
 // eslint-disable-next-line no-control-regex
-const ILLEGAL_NAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
+const ILLEGAL_NAME_CHARS = /[<>:"/\\|?*\x00-\x1f\x7f]/;
 /** Reserved device names Windows forbids as a directory name (case-insensitive). */
 const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 

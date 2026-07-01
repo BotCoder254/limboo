@@ -16,12 +16,10 @@ import { formatBytes, formatCount, relativeTime } from '@/renderer/lib/format';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { WorkspaceIconBadge } from './WorkspaceIconBadge';
 import { WorkspaceActions } from './WorkspaceDropZone';
-import { WorkspaceCreatePanel } from './WorkspaceCreatePanel';
 import { WorkspaceRemoveDialog } from './WorkspaceRemoveDialog';
 
 export function WorkspaceLauncher() {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
-  const launcherView = useWorkspaceStore((s) => s.launcherView);
 
   const [query, setQuery] = useState('');
   // Workspace pending safe-delete confirmation (null = dialog closed).
@@ -42,11 +40,6 @@ export function WorkspaceLauncher() {
       return b.lastOpenedAt - a.lastOpenedAt;
     });
   }, [workspaces, query]);
-
-  // The in-app Create form takes over the launcher body (no native folder dialog).
-  if (launcherView === 'create') {
-    return <WorkspaceCreatePanel />;
-  }
 
   // Empty state: a centered hero with large Open / Create actions. Dropping a
   // folder anywhere on the window works too (handled by the drag overlay).
