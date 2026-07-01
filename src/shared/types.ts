@@ -262,6 +262,53 @@ export interface AppSettings {
     };
   };
   /**
+   * Search Engine — a core platform service that maintains a continuously-updated,
+   * on-device index (files, content, symbols) and federates every other subsystem
+   * (memory, git, sessions, commands, …) behind one query interface. Fully local:
+   * no network, no embeddings API — retrieval is SQLite FTS5/BM25 fused with fuzzy
+   * + trigram substring matching. These knobs live alongside Memory (both are the
+   * app's retrieval layer). Settings are surfaced in the Memory settings category.
+   */
+  search: {
+    /** Master switch for background indexing + the Search UI + context injection. */
+    enabled: boolean;
+    /** Index file contents (not just paths + symbols) for full-text search. */
+    indexContents: boolean;
+    /** Also index files matched by the workspace ignore rules (node_modules, …). */
+    includeIgnored: boolean;
+    /** Max file size (KiB) whose contents are indexed; larger files index path-only. */
+    maxFileSizeKb: number;
+    /** Supply ranked project context (files/symbols/docs) to the agent's prompt. */
+    injectContext: boolean;
+    /** Max context items injected into a single prompt (ranked, budget-capped). */
+    maxInjected: number;
+    /** Max results shown per source group in the Search UI. */
+    maxResultsPerGroup: number;
+    /**
+     * Per-subsystem include/exclude for Global Search. Turning a noisy source off
+     * removes its group from results without touching the index. Files/symbols/docs
+     * come from the on-device index; the rest are federated from their managers.
+     */
+    sources: {
+      files: boolean;
+      symbols: boolean;
+      docs: boolean;
+      memory: boolean;
+      commits: boolean;
+      /** Branches + tags (git refs). */
+      branches: boolean;
+      sessions: boolean;
+    };
+    /** Real-time as-you-type debounce: instant (0ms) · fast (90ms) · balanced (200ms). */
+    liveDelay: 'instant' | 'fast' | 'balanced';
+    /** Recent-search ring length kept per scope (bounded by SEARCH_LIMITS.historyMax). */
+    historyLimit: number;
+    /** Fuzzy/typo-tolerant (substring) matching; off = strict prefix matching. */
+    fuzzy: boolean;
+    /** Title-bar search box opens the modal on click; off = only the ⌘P/Ctrl+P shortcut. */
+    openOnClick: boolean;
+  };
+  /**
    * In-app auto-update (electron-updater + GitHub releases). Only ever active in
    * a packaged build; a no-op in dev. Limboo downloads updates over HTTPS from
    * its own GitHub Releases and verifies the signed installer before applying.
@@ -685,6 +732,124 @@ export interface MemoryListFilter {
   /** Include archived rows (default false). */
   includeArchived?: boolean;
   limit?: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Search Engine — unified, cross-subsystem retrieval                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The kind of object a search hit represents — i.e. which subsystem owns it.
+ * `file` / `symbol` come from the SearchManager's own FTS index; the rest are
+ * federated from the subsystem that already owns them (memory, git, sessions,
+ * commands, settings, saved searches).
+ */
+export type SearchKind =
+  | 'file'
+  | 'symbol'
+  | 'doc'
+  | 'memory'
+  | 'commit'
+  | 'branch'
+  | 'tag'
+  | 'session'
+  | 'terminal'
+  | 'diagnostic'
+  | 'command'
+  | 'setting'
+  | 'saved';
+
+/** A language-aware symbol classification (best-effort, from the regex extractor). */
+export type SymbolKind =
+  | 'function'
+  | 'method'
+  | 'class'
+  | 'interface'
+  | 'enum'
+  | 'type'
+  | 'constant'
+  | 'variable'
+  | 'struct'
+  | 'trait'
+  | 'module';
+
+/** One unified search result, regardless of which subsystem produced it. */
+export interface SearchHit {
+  /** Stable id for React keys — `${kind}:${ref}`. */
+  id: string;
+  kind: SearchKind;
+  /** Primary label (file name, symbol name, memory title, commit subject, …). */
+  title: string;
+  /** Secondary line (directory, signature, snippet, author/date, …). */
+  subtitle?: string;
+  /** Workspace-relative path when the hit maps to a file (file/symbol/doc). */
+  path?: string;
+  /** 1-indexed line for symbol/doc hits. */
+  line?: number;
+  /** Symbol classification for `symbol` hits. */
+  symbolKind?: SymbolKind;
+  /** Detected language for file/symbol hits. */
+  lang?: string;
+  /**
+   * Opaque, kind-specific reference used to open the hit (commit hash, memory id,
+   * command id, session id, branch name, …). For files this is the path.
+   */
+  ref: string;
+  /** Composite rank score (ordering/debug only). */
+  score?: number;
+}
+
+/** A group of hits sharing a `SearchKind`, for the grouped results UI. */
+export interface SearchGroup {
+  kind: SearchKind;
+  label: string;
+  hits: SearchHit[];
+  /** True when more hits exist than were returned (per-group cap hit). */
+  truncated?: boolean;
+}
+
+/** Inline filters that narrow a global/scoped search. */
+export interface SearchFilter {
+  /** Restrict to these kinds (empty/undefined = all). */
+  kinds?: SearchKind[];
+  /** Restrict file/symbol hits to this language. */
+  lang?: string;
+  /** Restrict symbol hits to this classification. */
+  symbolKind?: SymbolKind;
+  /** Hard cap on total hits returned. */
+  limit?: number;
+  /** Fuzzy/substring matching; when false, symbol search is prefix-only (strict). */
+  fuzzy?: boolean;
+}
+
+/** Options for a search request, always scoped to a workspace (or global). */
+export interface SearchQueryOptions extends SearchFilter {
+  workspaceId: string | null;
+}
+
+/** A persisted, re-runnable saved search. */
+export interface SavedSearch {
+  id: string;
+  workspaceId: string | null;
+  name: string;
+  query: string;
+  filter: SearchFilter;
+  createdAt: number;
+}
+
+/** A recent-search entry (most-recent-first). */
+export interface SearchHistoryEntry {
+  query: string;
+  at: number;
+}
+
+/** Progress of an in-flight search index pass (mirrors IndexProgress). */
+export interface SearchIndexProgress {
+  workspaceId: string;
+  phase: 'indexing' | 'done';
+  processed: number;
+  total: number;
+  percent: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1354,6 +1519,7 @@ export type CommandId =
   | 'drawer.toggleActivity'
   | 'sidebar.toggle'
   | 'palette.open'
+  | 'search.open'
   | 'settings.open'
   | 'view.reload'
   | 'workspace.open'

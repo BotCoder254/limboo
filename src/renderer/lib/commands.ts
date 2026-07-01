@@ -220,6 +220,14 @@ export const COMMANDS: Command[] = [
     run: () => useLayoutStore.getState().toggleTab('activity'),
   },
   {
+    id: 'search.open',
+    title: 'Search everything',
+    section: 'General',
+    keys: ['Mod', 'P'],
+    inPalette: true,
+    run: () => useUIStore.getState().openSearch(),
+  },
+  {
     id: 'settings.open',
     title: 'Open settings',
     section: 'General',

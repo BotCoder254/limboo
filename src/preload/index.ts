@@ -44,6 +44,13 @@ import type {
   MemoryListFilter,
   MemoryTier,
   MemoryUpdateInput,
+  SavedSearch,
+  SearchFilter,
+  SearchGroup,
+  SearchHistoryEntry,
+  SearchHit,
+  SearchIndexProgress,
+  SearchQueryOptions,
   PermissionDecision,
   PermissionRequest,
   PlanRevision,
@@ -369,6 +376,43 @@ const memoryApi = {
   onChanged: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.memoryChanged, cb),
 };
 
+const searchApi = {
+  /** Unified, cross-subsystem search — ranked hits grouped by originating source. */
+  global: (query: string, opts: SearchQueryOptions): Promise<SearchGroup[]> =>
+    ipcRenderer.invoke(IpcChannels.searchGlobal, query, opts),
+  /** File-only search (name / path / content). */
+  files: (query: string, opts: SearchQueryOptions): Promise<SearchHit[]> =>
+    ipcRenderer.invoke(IpcChannels.searchFiles, query, opts),
+  /** Symbol-only search (functions / classes / interfaces / …). */
+  symbols: (query: string, opts: SearchQueryOptions): Promise<SearchHit[]> =>
+    ipcRenderer.invoke(IpcChannels.searchSymbols, query, opts),
+  /** Rebuild the workspace's file + symbol index. */
+  reindex: (workspaceId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.searchReindex, workspaceId),
+  /** Whether a workspace is indexed + its indexed file count. */
+  getStatus: (workspaceId: string | null): Promise<{ indexed: boolean; files: number }> =>
+    ipcRenderer.invoke(IpcChannels.searchGetStatus, workspaceId),
+  /** Recent searches for a scope (most-recent-first). */
+  historyList: (workspaceId: string | null): Promise<SearchHistoryEntry[]> =>
+    ipcRenderer.invoke(IpcChannels.searchHistoryList, workspaceId),
+  historyClear: (workspaceId: string | null): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.searchHistoryClear, workspaceId),
+  /** Named, re-runnable saved searches. */
+  savedList: (workspaceId: string | null): Promise<SavedSearch[]> =>
+    ipcRenderer.invoke(IpcChannels.searchSavedList, workspaceId),
+  savedCreate: (input: {
+    workspaceId: string | null;
+    name: string;
+    query: string;
+    filter?: SearchFilter;
+  }): Promise<SavedSearch> => ipcRenderer.invoke(IpcChannels.searchSavedCreate, input),
+  savedDelete: (id: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.searchSavedDelete, id),
+  onChanged: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.searchChanged, cb),
+  onIndexProgress: (cb: (progress: SearchIndexProgress) => void): (() => void) =>
+    subscribe<SearchIndexProgress>(IpcEvents.searchIndexProgress, cb),
+};
+
 const updatesApi = {
   /** The current updater status (for hydration on mount). */
   getState: (): Promise<UpdateStatus> => ipcRenderer.invoke(IpcChannels.updateGetState),
@@ -395,6 +439,7 @@ const limbooApi = {
   terminal: terminalApi,
   git: gitApi,
   memory: memoryApi,
+  search: searchApi,
   updates: updatesApi,
 };
 

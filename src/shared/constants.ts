@@ -106,6 +106,36 @@ export const MEMORY_LIMITS = {
   staleDays: { min: 7, max: 3_650, default: 180 },
 } as const;
 
+/** Bounds + caps for the Search Engine (main + renderer both clamp). */
+export const SEARCH_LIMITS = {
+  /** Free-text query length cap accepted from the renderer. */
+  queryMax: 512,
+  /** Saved-search name length cap. */
+  savedNameMax: 120,
+  /** Hard ceiling on total hits returned by a single global search. */
+  resultsMax: 500,
+  /** Rows returned per source group in the UI. */
+  maxResultsPerGroup: { min: 3, max: 50, default: 12 },
+  /** Context items injected into a single agent prompt. */
+  maxInjected: { min: 0, max: 24, default: 10 },
+  /** Approx character budget for the injected `<project-context>` block. */
+  injectCharBudget: 4_000,
+  /** Files above this size (KiB) index path-only (contents skipped). */
+  maxIndexFileKb: { min: 16, max: 4_096, default: 512 },
+  /** Chars of file content stored in the FTS index per file (head of file). */
+  contentIndexChars: 200_000,
+  /** Cap on symbols extracted per file (avoids pathological generated files). */
+  maxSymbolsPerFile: 400,
+  /** Recent-search history ring length (hard ceiling). */
+  historyMax: 50,
+  /** User-configurable recent-search ring length (clamped to historyMax). */
+  historyLimit: { min: 5, max: 50, default: 25 },
+  /** Saved searches per scope. */
+  savedMax: 200,
+  /** TTL (ms) for the cached git federation snapshot (log/branches/tags). */
+  gitCacheTtlMs: 15_000,
+} as const;
+
 export const FONT_SCALE_LIMITS = { min: 0.85, max: 1.3, default: 1 } as const;
 
 /** Minimum window size enforced by the main process. */
@@ -211,6 +241,28 @@ export const DEFAULT_SETTINGS: AppSettings = {
       enabled: true,
       staleDays: MEMORY_LIMITS.staleDays.default,
     },
+  },
+  search: {
+    enabled: true,
+    indexContents: true,
+    includeIgnored: false,
+    maxFileSizeKb: SEARCH_LIMITS.maxIndexFileKb.default,
+    injectContext: true,
+    maxInjected: SEARCH_LIMITS.maxInjected.default,
+    maxResultsPerGroup: SEARCH_LIMITS.maxResultsPerGroup.default,
+    sources: {
+      files: true,
+      symbols: true,
+      docs: true,
+      memory: true,
+      commits: true,
+      branches: true,
+      sessions: true,
+    },
+    liveDelay: 'fast',
+    historyLimit: SEARCH_LIMITS.historyLimit.default,
+    fuzzy: true,
+    openOnClick: true,
   },
   updates: {
     autoCheck: true,

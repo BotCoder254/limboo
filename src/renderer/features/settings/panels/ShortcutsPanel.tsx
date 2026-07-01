@@ -28,6 +28,20 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
+const MOD = IS_MAC ? '⌘' : 'Ctrl';
+
+/**
+ * Universal navigation/dialog keys that aren't part of the command registry —
+ * they're framework affordances (palette/search/list navigation, dialog
+ * confirm/dismiss) that users still expect to see documented here.
+ */
+const NAVIGATION_SHORTCUTS: { title: string; keys: string[] }[] = [
+  { title: 'Close palette, search, or dialog', keys: ['Esc'] },
+  { title: 'Move selection up / down', keys: ['↑', '↓'] },
+  { title: 'Open / run the selected item', keys: ['↵'] },
+  { title: 'Confirm (approvals & clarifications)', keys: [MOD, '↵'] },
+];
+
 export function ShortcutsPanel() {
   const sections = Array.from(new Set(COMMANDS.map((c) => c.section)));
   const bound = (section: string): Command[] =>
@@ -64,6 +78,25 @@ export function ShortcutsPanel() {
             ))}
           </Section>
         ))}
+
+      <Section
+        title="Navigation & dialogs"
+        hint="Work everywhere — inside the command palette, Global Search, lists, and approval dialogs."
+      >
+        {NAVIGATION_SHORTCUTS.map((sc) => (
+          <div
+            key={sc.title}
+            className="flex items-center justify-between gap-4 rounded-md px-2 py-1.5"
+          >
+            <span className="text-[13px] text-fg">{sc.title}</span>
+            <span className="flex items-center gap-1">
+              {sc.keys.map((k, i) => (
+                <Kbd key={i}>{k}</Kbd>
+              ))}
+            </span>
+          </div>
+        ))}
+      </Section>
     </div>
   );
 }
