@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 8;
+export const SETTINGS_VERSION = 9;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -164,6 +164,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
       showReasoning: true,
       highlightRisk: true,
       archiveCompleted: false,
+      showTaskDurations: true,
+      showCheckpointsOnTasks: true,
+      retainPlanHistory: true,
+      historyLimit: 20,
+      savePlansToMemory: false,
+      allowManualReorder: false,
+      notifyOnPhaseComplete: false,
     },
     terminal: {
       shell: '',
@@ -220,7 +227,7 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 6;
+export const WORKSPACE_SCHEMA_VERSION = 7;
 
 /** Input caps the main process enforces on renderer-supplied session values. */
 export const SESSION_LIMITS = {
@@ -287,6 +294,8 @@ export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
   ignoredDirs: [...DEFAULT_IGNORED_DIRS],
   approveTerminalCommands: true,
   preferredShell: '',
+  // Undefined = inherit the global agent.plan.defaultMode.
+  planDefaultMode: undefined,
 };
 
 /**

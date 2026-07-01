@@ -46,10 +46,12 @@ import type {
   PermissionDecision,
   PermissionRequest,
   PlanMeta,
+  PlanRevision,
   PlanStatus,
   RateLimitInfo,
   RequestOutcome,
   RequestState,
+  SessionPermissionMode,
   SessionPlan,
   TaskItem,
   TaskStatus,
@@ -763,9 +765,10 @@ export class AgentManager {
   async send(
     sessionId: string,
     prompt: string,
-    mode: AgentMode = 'implement',
+    permMode: SessionPermissionMode = 'default',
     clientMessageId?: string,
   ): Promise<void> {
+    const isPlan = permMode === 'plan';
     if (this.runs.has(sessionId)) {
       throw new Error('The agent is already working on this session.');
     }
@@ -799,17 +802,17 @@ export class AgentManager {
     // Name an untitled session after its first prompt (a no-op once renamed).
     this.sessions?.autoTitle(sessionId, prompt);
     // Remember the mode so the composer restores it when this session reopens.
-    this.sessions?.setMode(sessionId, mode);
+    this.sessions?.setMode(sessionId, permMode);
 
     // Plan run: open a fresh planning artifact so the panel switches into its
     // "analyzing repository" state immediately while the agent reads.
-    if (mode === 'plan') {
+    if (isPlan) {
       this.beginPlan(sessionId, prompt);
     }
 
     const cfg = this.settings.getAll().agent.connection;
     const abort = new AbortController();
-    this.runs.set(sessionId, { abort, query: null, mode });
+    this.runs.set(sessionId, { abort, query: null, mode: isPlan ? 'plan' : 'implement' });
     this.clearIdleTimer();
     this.setRequest(sessionId, {
       phase: 'submitting',
@@ -819,16 +822,16 @@ export class AgentManager {
       detail: undefined,
     });
     this.setLifecycle('busy', { activeSessionId: sessionId, error: undefined });
-    this.diag('request', 'info', `Prompt submitted (${mode})`, prompt.slice(0, ACTIVITY_LIMITS.detailMax), sessionId);
+    this.diag('request', 'info', `Prompt submitted (${permMode})`, prompt.slice(0, ACTIVITY_LIMITS.detailMax), sessionId);
 
     try {
-      await this.runWithRecovery(sessionId, prompt, abort, cfg, mode);
+      await this.runWithRecovery(sessionId, prompt, abort, cfg, permMode);
     } finally {
       const captured = this.runs.get(sessionId)?.planCaptured;
       this.runs.delete(sessionId);
       // A plan run that ended without presenting a plan (error/cancel) must not
       // leave the panel stuck "analyzing" — settle it back to a rejected state.
-      if (mode === 'plan' && !captured) {
+      if (isPlan && !captured) {
         const plan = this.loadPlan(sessionId);
         if (plan && plan.status === 'planning') {
           const settled: SessionPlan = { ...plan, status: 'rejected' };
@@ -847,12 +850,12 @@ export class AgentManager {
     prompt: string,
     abort: AbortController,
     cfg: ReturnType<SettingsManager['getAll']>['agent']['connection'],
-    mode: AgentMode,
+    permMode: SessionPermissionMode,
   ): Promise<void> {
     let attempt = 0;
     for (;;) {
       try {
-        await this.runOnce(sessionId, prompt, abort, mode);
+        await this.runOnce(sessionId, prompt, abort, permMode);
         if (abort.signal.aborted) {
           // The user stopped mid-stream; stop() already recorded 'cancelled'.
           return;
@@ -864,7 +867,7 @@ export class AgentManager {
           return;
         }
         // A successful implement run that fulfilled a plan marks it completed.
-        if (mode === 'implement') this.markPlanCompletedIfImplementing(sessionId);
+        if (permMode !== 'plan') this.markPlanCompletedIfImplementing(sessionId);
         this.completeRequest(sessionId, 'success');
         this.markHeartbeatOk();
         if (this.state.lifecycle === 'reconnecting') {
@@ -936,7 +939,7 @@ export class AgentManager {
     sessionId: string,
     prompt: string,
     abort: AbortController,
-    mode: AgentMode,
+    permMode: SessionPermissionMode,
   ): Promise<void> {
     const ws = this.workspace.getActive();
     if (!ws) throw new Error('Open a workspace before talking to the agent.');
@@ -1007,7 +1010,7 @@ export class AgentManager {
       const sdk = await loadSdk();
       const { query } = sdk;
       const memoryContext = this.memoryContextFor(sessionId, prompt);
-      const options = this.buildOptions(sessionId, cwd, abort, agent, mode, memoryContext);
+      const options = this.buildOptions(sessionId, cwd, abort, agent, permMode, memoryContext);
       // Expose a live, read-only view of the Local Memory System so the agent can
       // actually list/search the developer's memories on demand (the injected
       // <project-memory> block is only a one-shot snapshot).
@@ -1347,22 +1350,34 @@ export class AgentManager {
    * writes (implement mode), and resumes the same SDK session so the agent keeps
    * the plan in context. The only transition that lets the agent touch the repo.
    */
-  async approvePlan(sessionId: string): Promise<void> {
+  async approvePlan(sessionId: string, execMode: SessionPermissionMode = 'default'): Promise<void> {
     const plan = this.loadPlan(sessionId);
     if (!plan || plan.status !== 'ready') {
       throw new Error('There is no plan ready to approve for this session.');
     }
+    // Approving a plan never starts another planning pass — coerce a stray 'plan'
+    // to the ask-before-edits execution mode.
+    const mode: SessionPermissionMode = execMode === 'plan' ? 'default' : execMode;
     const approved: SessionPlan = { ...plan, status: 'implementing', approvedAt: Date.now() };
     this.savePlan(approved);
     this.pushEvent({ kind: 'plan', sessionId, plan: approved });
     this.pushActivity(sessionId, 'status', 'Plan approved — implementing', undefined, 'success');
-    this.diag('request', 'info', 'Plan approved', undefined, sessionId);
+    this.diag('request', 'info', `Plan approved (${mode})`, undefined, sessionId);
 
     await this.send(
       sessionId,
       'The plan is approved. Implement it now, working through the steps in order and tracking your progress with the TodoWrite tool. Ask for approval before any change you are unsure about.',
-      'implement',
+      mode,
     );
+  }
+
+  /** Pin / unpin the current plan so it is preserved even after a new plan begins. */
+  setPlanPinned(sessionId: string, pinned: boolean): void {
+    const plan = this.loadPlan(sessionId);
+    if (!plan) return;
+    const next: SessionPlan = { ...plan, pinned };
+    this.savePlan(next);
+    this.pushEvent({ kind: 'plan', sessionId, plan: next });
   }
 
   /** Reject a ready plan; the session returns to an idle, no-plan state. */
@@ -1379,9 +1394,102 @@ export class AgentManager {
   /** Discard the current plan and run a fresh planning pass (optionally guided). */
   async regeneratePlan(sessionId: string, extra?: string): Promise<void> {
     const plan = this.loadPlan(sessionId);
+    // Preserve the outgoing plan as a revision before the new pass overwrites it,
+    // so iterative planning cycles can be compared/restored.
+    if (plan && plan.markdown.trim().length > 0) this.snapshotRevision(plan);
     const base = plan?.title ? `Reconsider the plan for: ${plan.title}.` : 'Produce a new implementation plan.';
     const prompt = extra && extra.trim().length > 0 ? `${base}\n\n${extra.trim()}` : base;
     await this.send(sessionId, prompt, 'plan');
+  }
+
+  /** List the historical plan revisions for a session, newest first. */
+  listPlanRevisions(sessionId: string): PlanRevision[] {
+    if (!this.settings.getAll().agent.plan.retainPlanHistory) return [];
+    const rows = getDb()
+      .prepare(
+        'SELECT id, session_id, rev, status, title, markdown, meta, created_at FROM plan_revisions WHERE session_id = ? ORDER BY rev DESC',
+      )
+      .all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      rev: number;
+      status: string;
+      title: string;
+      markdown: string;
+      meta: string;
+      created_at: number;
+    }>;
+    return rows.map((r) => {
+      let meta: PlanMeta = {};
+      try {
+        meta = JSON.parse(r.meta) as PlanMeta;
+      } catch {
+        /* keep empty meta on a corrupt row */
+      }
+      return {
+        id: r.id,
+        sessionId: r.session_id,
+        rev: r.rev,
+        status: r.status as PlanStatus,
+        title: r.title,
+        markdown: r.markdown,
+        meta,
+        createdAt: r.created_at,
+      };
+    });
+  }
+
+  /** Restore a historical revision as the session's current (ready) plan. */
+  restorePlanRevision(sessionId: string, revisionId: string): void {
+    const rev = this.listPlanRevisions(sessionId).find((r) => r.id === revisionId);
+    if (!rev) throw new Error('That plan revision no longer exists.');
+    const current = this.loadPlan(sessionId);
+    // Snapshot the current plan first so the restore itself is reversible.
+    if (current && current.markdown.trim().length > 0) this.snapshotRevision(current);
+    const restored: SessionPlan = {
+      sessionId,
+      status: 'ready',
+      title: rev.title,
+      markdown: rev.markdown,
+      meta: rev.meta,
+      createdAt: current?.createdAt ?? Date.now(),
+      pinned: current?.pinned,
+    };
+    this.savePlan(restored);
+    this.pushEvent({ kind: 'plan', sessionId, plan: restored });
+    this.pushActivity(sessionId, 'status', 'Plan revision restored', undefined, 'info');
+  }
+
+  /** Persist a plan snapshot into `plan_revisions`, pruning to the history limit. */
+  private snapshotRevision(plan: SessionPlan): void {
+    const planCfg = this.settings.getAll().agent.plan;
+    if (!planCfg.retainPlanHistory) return;
+    const db = getDb();
+    const next =
+      ((db
+        .prepare('SELECT MAX(rev) AS m FROM plan_revisions WHERE session_id = ?')
+        .get(plan.sessionId) as { m: number | null } | undefined)?.m ?? 0) + 1;
+    db.prepare(
+      `INSERT INTO plan_revisions (id, session_id, rev, status, title, markdown, meta, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      newId(),
+      plan.sessionId,
+      next,
+      plan.status,
+      plan.title,
+      plan.markdown,
+      JSON.stringify(plan.meta ?? {}),
+      Date.now(),
+    );
+    // Prune older revisions beyond the configured limit.
+    db.prepare(
+      `DELETE FROM plan_revisions
+        WHERE session_id = ?
+          AND id NOT IN (
+            SELECT id FROM plan_revisions WHERE session_id = ? ORDER BY rev DESC LIMIT ?
+          )`,
+    ).run(plan.sessionId, plan.sessionId, planCfg.historyLimit);
   }
 
   /** When a plan was being implemented and the run succeeds, mark it completed. */
@@ -1392,6 +1500,37 @@ export class AgentManager {
     this.savePlan(completed);
     this.pushEvent({ kind: 'plan', sessionId, plan: completed });
     this.diag('request', 'info', 'Plan implementation completed', undefined, sessionId);
+    this.savePlanToMemory(completed);
+  }
+
+  /**
+   * Persist a completed plan into the Local Memory system (opt-in) so its strategy
+   * becomes retrievable project knowledge on future tasks. Best-effort: a memory
+   * failure never breaks the run.
+   */
+  private savePlanToMemory(plan: SessionPlan): void {
+    const s = this.settings.getAll();
+    if (!this.memory || !s.memory.enabled || !s.agent.plan.savePlansToMemory) return;
+    if (plan.markdown.trim().length === 0) return;
+    try {
+      this.memory.create({
+        workspaceId: this.workspace.getActive()?.id ?? null,
+        tier: 'solution',
+        title: `Plan: ${plan.title}`.slice(0, 200),
+        body: plan.markdown,
+        source: 'conversation',
+        sessionId: plan.sessionId,
+      });
+      this.diag('request', 'info', 'Plan saved to memory', undefined, plan.sessionId);
+    } catch (err) {
+      this.diag(
+        'request',
+        'warning',
+        'Could not save plan to memory',
+        err instanceof Error ? err.message : String(err),
+        plan.sessionId,
+      );
+    }
   }
 
   private savePlan(plan: SessionPlan): void {
@@ -1459,17 +1598,20 @@ export class AgentManager {
     cwd: string,
     abort: AbortController,
     agent: ReturnType<SettingsManager['getAll']>['agent'],
-    mode: AgentMode,
+    permMode: SessionPermissionMode,
     memoryContext?: string,
   ): Options {
     const options: Options = {
       cwd,
       model: agent.model,
-      // Plan mode keeps the SDK read-only and lets the agent present a plan via
-      // the ExitPlanMode tool; our canUseTool captures it. Implement mode runs
-      // normally with the per-tool approval bridge.
-      permissionMode: mode === 'plan' ? 'plan' : 'default',
-      canUseTool: this.makeCanUseTool(sessionId, cwd, mode),
+      // The composer's permission mode maps 1:1 to the SDK's:
+      //   plan        → read-only; agent presents a plan via ExitPlanMode.
+      //   default     → writes/commands prompt through our canUseTool bridge.
+      //   acceptEdits → SDK auto-approves file edits; commands still prompt.
+      // bypassPermissions is never used (safety); the auto/approve-all knobs are
+      // enforced on top inside canUseTool.
+      permissionMode: permMode,
+      canUseTool: this.makeCanUseTool(sessionId, cwd, permMode === 'plan'),
       maxTurns: agent.maxTurns,
       includePartialMessages: true,
       abortController: abort,
@@ -1499,8 +1641,7 @@ export class AgentManager {
     return row?.sdk_session_id || undefined;
   }
 
-  private makeCanUseTool(sessionId: string, cwd: string, mode: AgentMode) {
-    const planRun = mode === 'plan';
+  private makeCanUseTool(sessionId: string, cwd: string, planRun: boolean) {
     return async (
       toolName: string,
       input: Record<string, unknown>,

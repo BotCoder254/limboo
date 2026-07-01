@@ -14,7 +14,6 @@ import type {
   AgentDiagnostic,
   AgentEvent,
   AgentInstall,
-  AgentMode,
   AgentSessionSnapshot,
   AgentState,
   AppInfo,
@@ -47,7 +46,9 @@ import type {
   MemoryUpdateInput,
   PermissionDecision,
   PermissionRequest,
+  PlanRevision,
   Session,
+  SessionPermissionMode,
   SessionPlan,
   SessionUpdate,
   TerminalChunk,
@@ -167,19 +168,25 @@ const agentApi = {
   send: (
     sessionId: string,
     prompt: string,
-    mode?: AgentMode,
+    mode?: SessionPermissionMode,
     clientMessageId?: string,
   ): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentSend, sessionId, prompt, mode, clientMessageId),
   stop: (sessionId: string): Promise<void> => ipcRenderer.invoke(IpcChannels.agentStop, sessionId),
   getPlan: (sessionId: string): Promise<SessionPlan | null> =>
     ipcRenderer.invoke(IpcChannels.agentGetPlan, sessionId),
-  approvePlan: (sessionId: string): Promise<void> =>
-    ipcRenderer.invoke(IpcChannels.agentApprovePlan, sessionId),
+  approvePlan: (sessionId: string, execMode?: SessionPermissionMode): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentApprovePlan, sessionId, execMode),
   rejectPlan: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentRejectPlan, sessionId),
   regeneratePlan: (sessionId: string, extra?: string): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentRegeneratePlan, sessionId, extra),
+  setPlanPinned: (sessionId: string, pinned: boolean): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentSetPlanPinned, sessionId, pinned),
+  listPlanRevisions: (sessionId: string): Promise<PlanRevision[]> =>
+    ipcRenderer.invoke(IpcChannels.agentListPlanRevisions, sessionId),
+  restorePlanRevision: (sessionId: string, revisionId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.agentRestorePlanRevision, sessionId, revisionId),
   clearSession: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.agentClearSession, sessionId),
   getDiagnostics: (sessionId?: string | null): Promise<AgentDiagnostic[]> =>

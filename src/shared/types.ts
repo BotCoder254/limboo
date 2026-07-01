@@ -133,8 +133,8 @@ export interface AppSettings {
      * a plan before touching the repository. None of these touch credentials.
      */
     plan: {
-      /** Composer default when a session has no remembered mode. */
-      defaultMode: AgentMode;
+      /** Composer default permission mode when a session has no remembered mode. */
+      defaultMode: SessionPermissionMode;
       /** Stream the task checklist incrementally as the plan is built. */
       streamIncrementally: boolean;
       /** Auto-expand newly generated task rows in the panel. */
@@ -153,6 +153,20 @@ export interface AppSettings {
       highlightRisk: boolean;
       /** Archive a plan once its implementation completes. */
       archiveCompleted: boolean;
+      /** Show per-task execution durations once implementation runs. */
+      showTaskDurations: boolean;
+      /** Surface a Git-checkpoint hint next to tasks during execution. */
+      showCheckpointsOnTasks: boolean;
+      /** Keep previous plan revisions so iterations can be compared/restored. */
+      retainPlanHistory: boolean;
+      /** Max plan revisions kept per session (older ones are pruned). */
+      historyLimit: number;
+      /** Save a completed plan into the Local Memory system for future retrieval. */
+      savePlansToMemory: boolean;
+      /** Allow manual reordering of tasks after approval (best-effort UI only). */
+      allowManualReorder: boolean;
+      /** Fire a desktop notification when a plan phase completes. */
+      notifyOnPhaseComplete: boolean;
     };
     /**
      * Integrated-terminal preferences. Appearance + behavior knobs for the
@@ -317,8 +331,22 @@ export type SessionStatus = 'active' | 'idle' | 'done';
 /**
  * Composer execution mode. `plan` runs the agent read-only to propose an
  * implementation strategy for review; `implement` lets it modify the repository.
+ * Internal to the main process (plan lifecycle, run bookkeeping); the renderer +
+ * IPC speak {@link SessionPermissionMode} instead.
  */
 export type AgentMode = 'plan' | 'implement';
+
+/**
+ * The harness-aligned permission mode the composer exposes as a single selector,
+ * matching Claude Code's `Shift+Tab` cycle vocabulary:
+ * - `plan`        → read-only analysis; the agent proposes a plan (SDK `plan`).
+ * - `default`     → asks before edits/commands (SDK `default`).
+ * - `acceptEdits` → auto-approves file edits; commands still prompt (SDK `acceptEdits`).
+ * `bypassPermissions` is intentionally NOT exposed (this is a local, safety-first
+ * app). The coarser auto/approve-all knobs live in Settings › Agent as advanced
+ * enforcement layered on top by `canUseTool`.
+ */
+export type SessionPermissionMode = 'plan' | 'default' | 'acceptEdits';
 
 /**
  * A development workspace — the primary unit of software engineering in Limboo.
@@ -345,8 +373,8 @@ export interface Session {
   archived: boolean;
   /** Epoch ms when soft-deleted (moved to trash), or null when live. */
   deletedAt: number | null;
-  /** Last composer mode used for this session (drives the Plan/Implement switch). */
-  mode?: AgentMode;
+  /** Last composer permission mode used for this session (drives the selector). */
+  mode?: SessionPermissionMode;
 }
 
 /** Renderer-supplied patch for a session update (rename / pin / archive). */
@@ -725,6 +753,12 @@ export interface WorkspaceConfig {
   approveTerminalCommands: boolean;
   /** Preferred shell for terminal sessions (empty = OS default). */
   preferredShell: string;
+  /**
+   * Permission mode every new session in this workspace starts in. Overrides the
+   * global `agent.plan.defaultMode`. The desktop equivalent of a repo's
+   * `.claude/settings.json` `permissions.defaultMode`. Undefined = inherit global.
+   */
+  planDefaultMode?: SessionPermissionMode;
 }
 
 /** Groundable repository statistics (no indexing/search engine required yet). */
@@ -1249,6 +1283,26 @@ export interface SessionPlan {
   approvedAt?: number;
   /** Pinned plans are preserved even after a new plan begins. */
   pinned?: boolean;
+}
+
+/**
+ * A historical snapshot of a {@link SessionPlan}, captured whenever the plan is
+ * regenerated or re-captured. Lets the user compare and restore across iterative
+ * planning cycles. Persisted to the `plan_revisions` table.
+ */
+export interface PlanRevision {
+  /** Stable id for this revision row. */
+  id: string;
+  sessionId: string;
+  /** Monotonic revision number within the session (1-based). */
+  rev: number;
+  /** The plan status at the moment it was snapshotted. */
+  status: PlanStatus;
+  title: string;
+  markdown: string;
+  meta: PlanMeta;
+  /** Epoch ms the revision was recorded. */
+  createdAt: number;
 }
 
 /** Everything the renderer needs to render a session when it (re)mounts. */

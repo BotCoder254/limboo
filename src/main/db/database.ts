@@ -161,6 +161,22 @@ function migrate(database: Database.Database): void {
       updated_at  INTEGER NOT NULL
     );
 
+    -- Plan revisions — historical snapshots of a session's plan, captured on each
+    -- regenerate / re-capture so iterative planning cycles can be compared and
+    -- restored. Additive to agent_plans (which always holds the current plan).
+    CREATE TABLE IF NOT EXISTS plan_revisions (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT NOT NULL,
+      rev         INTEGER NOT NULL,
+      status      TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      markdown    TEXT NOT NULL,
+      meta        TEXT NOT NULL,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_plan_revisions_session
+      ON plan_revisions (session_id, rev DESC);
+
     -- Git checkpoints — lightweight, session-scoped recovery points stored as
     -- dedicated git refs (refs/limboo/checkpoints/<sessionId>/<ts>); this table
     -- holds only the metadata + which ref to restore. Never on a branch, never

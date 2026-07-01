@@ -10,11 +10,12 @@ import { AGENT_LIMITS } from '@shared/constants';
 import type {
   AgentDiagnostic,
   AgentInstall,
-  AgentMode,
   AgentSessionSnapshot,
   AgentState,
   ClarificationDecision,
   PermissionDecision,
+  PlanRevision,
+  SessionPermissionMode,
   SessionPlan,
 } from '@shared/types';
 import type { AgentManager } from '../managers/AgentManager';
@@ -35,11 +36,22 @@ function assertSessionId(value: unknown): string {
   return value;
 }
 
-/** Default to implement when unspecified; reject any value outside the union. */
-function assertMode(value: unknown): AgentMode {
-  if (value === undefined) return 'implement';
-  if (value !== 'plan' && value !== 'implement') {
-    throw new Error('Agent mode must be "plan" or "implement"');
+const PERMISSION_MODES: SessionPermissionMode[] = ['plan', 'default', 'acceptEdits'];
+
+/** Default to ask-before-edits when unspecified; reject values outside the union. */
+function assertMode(value: unknown): SessionPermissionMode {
+  if (value === undefined) return 'default';
+  if (!PERMISSION_MODES.includes(value as SessionPermissionMode)) {
+    throw new Error('Permission mode must be "plan", "default" or "acceptEdits"');
+  }
+  return value as SessionPermissionMode;
+}
+
+/** Approval never re-enters planning — restrict to the execution modes. */
+function assertExecMode(value: unknown): SessionPermissionMode {
+  if (value === undefined) return 'default';
+  if (value !== 'default' && value !== 'acceptEdits') {
+    throw new Error('Execution mode must be "default" or "acceptEdits"');
   }
   return value;
 }
@@ -53,7 +65,7 @@ export function registerAgentHandlers(agent: AgentManager): void {
     agent.getSnapshot(assertSessionId(sessionId)),
   );
 
-  handle<[string, string, AgentMode?, string?], void>(
+  handle<[string, string, SessionPermissionMode?, string?], void>(
     IpcChannels.agentSend,
     async (_event, sessionId, prompt, mode, clientMessageId) => {
       const id = assertSessionId(sessionId);
@@ -103,13 +115,38 @@ export function registerAgentHandlers(agent: AgentManager): void {
     agent.getPlan(assertSessionId(sessionId)),
   );
 
-  handle<[string], void>(IpcChannels.agentApprovePlan, async (_event, sessionId) => {
-    await agent.approvePlan(assertSessionId(sessionId));
-  });
+  handle<[string, SessionPermissionMode?], void>(
+    IpcChannels.agentApprovePlan,
+    async (_event, sessionId, execMode) => {
+      await agent.approvePlan(assertSessionId(sessionId), assertExecMode(execMode));
+    },
+  );
 
   handle<[string], void>(IpcChannels.agentRejectPlan, (_event, sessionId) => {
     agent.rejectPlan(assertSessionId(sessionId));
   });
+
+  handle<[string, boolean], void>(
+    IpcChannels.agentSetPlanPinned,
+    (_event, sessionId, pinned) => {
+      agent.setPlanPinned(assertSessionId(sessionId), pinned === true);
+    },
+  );
+
+  handle<[string], PlanRevision[]>(IpcChannels.agentListPlanRevisions, (_event, sessionId) =>
+    agent.listPlanRevisions(assertSessionId(sessionId)),
+  );
+
+  handle<[string, string], void>(
+    IpcChannels.agentRestorePlanRevision,
+    (_event, sessionId, revisionId) => {
+      const id = assertSessionId(sessionId);
+      if (typeof revisionId !== 'string' || revisionId.length === 0 || revisionId.length > 200) {
+        throw new Error('Expected a valid revision id');
+      }
+      agent.restorePlanRevision(id, revisionId);
+    },
+  );
 
   handle<[string, string?], void>(
     IpcChannels.agentRegeneratePlan,

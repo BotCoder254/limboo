@@ -5,7 +5,7 @@
  * `useSettingsStore.update`, so changes apply to the next prompt immediately.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Brain, Check, ChevronDown, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Brain, Check, ChevronDown, type LucideIcon } from 'lucide-react';
 import { AGENT_MODELS, providerForModel } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { ProviderIcon } from '@/renderer/components/brand/ProviderIcon';
@@ -29,6 +29,7 @@ export function MiniSelect<T extends string>({
   triggerGlyph,
   title,
   disabled,
+  accent = false,
 }: {
   value: T;
   options: Option<T>[];
@@ -38,6 +39,8 @@ export function MiniSelect<T extends string>({
   triggerGlyph?: React.ReactNode;
   title: string;
   disabled?: boolean;
+  /** Render the trigger as a filled accent pill (used for the active Plan state). */
+  accent?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -67,8 +70,12 @@ export function MiniSelect<T extends string>({
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50',
-          open && 'bg-elevated text-fg',
+          'flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+          accent
+            ? 'bg-accent/15 font-medium text-accent hover:bg-accent/25'
+            : 'text-muted hover:bg-elevated hover:text-fg',
+          open && !accent && 'bg-elevated text-fg',
+          open && accent && 'bg-accent/25',
         )}
       >
         {triggerGlyph ?? (Icon && <Icon size={12} className="text-faint" />)}
@@ -132,19 +139,6 @@ export function ComposerControls({ disabled = false }: { disabled?: boolean }) {
           { value: 'adaptive', label: 'Thinking: Adaptive' },
         ]}
         onChange={(thinking) => void update({ agent: { thinking } })}
-        disabled={disabled}
-      />
-      <span className="h-3.5 w-px bg-line" />
-      <MiniSelect
-        title="Approval policy"
-        icon={ShieldCheck}
-        value={agent.permissionMode}
-        options={[
-          { value: 'approve-edits', label: 'Approve edits & commands' },
-          { value: 'approve-all', label: 'Approve everything' },
-          { value: 'auto', label: 'Auto-approve' },
-        ]}
-        onChange={(permissionMode) => void update({ agent: { permissionMode } })}
         disabled={disabled}
       />
     </div>

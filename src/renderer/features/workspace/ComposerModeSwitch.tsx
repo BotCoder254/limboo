@@ -1,42 +1,47 @@
 /**
- * Plan / Build mode select — the control that governs the agent's execution mode
- * for the next prompt. In Plan mode the agent runs read-only and proposes an
- * implementation strategy for review; in Build (implement) mode it is free to
- * modify the repository (still gated by the per-tool approval policy).
+ * Permission-mode selector — the single composer control that governs how the
+ * agent is allowed to act on the next prompt. It mirrors Claude Code's own
+ * `Shift+Tab` cycle vocabulary so the desktop app stays in lock-step with the
+ * harness (see {@link SessionPermissionMode}):
  *
- * Rendered as a compact popover select (the shared {@link MiniSelect}) so it looks
- * and behaves exactly like the other composer footer controls — click the trigger,
- * pick the other mode from a small menu — rather than an always-expanded segmented
- * block. This also keeps the footer on one line as the center column narrows.
+ *   • Plan            — read-only; the agent proposes a strategy for review.
+ *   • Ask before edits — writes/commands prompt for approval (SDK `default`).
+ *   • Accept edits     — file edits auto-approve; commands still prompt.
+ *
+ * `bypassPermissions` is deliberately absent (this is a safety-first local app).
+ * When Plan is active the trigger renders as a prominent accent "Plan" pill so the
+ * planning state reads at a glance without a separate panel.
  *
  * Pure presentation: the selected mode lives in the Composer and is passed to
- * `agent.send(sessionId, prompt, mode)`.
+ * `agent.send(sessionId, prompt, mode)`; every prompt inherits it until changed.
  */
 import type { ReactNode } from 'react';
-import { ClipboardList, Hammer } from 'lucide-react';
-import type { AgentMode } from '@shared/types';
+import { ClipboardList, FilePen, ShieldCheck } from 'lucide-react';
+import type { SessionPermissionMode } from '@shared/types';
 import { MiniSelect, type Option } from './ComposerControls';
 
-const MODE_GLYPH: Record<AgentMode, ReactNode> = {
+const MODE_GLYPH: Record<SessionPermissionMode, ReactNode> = {
   plan: <ClipboardList size={13} className="text-accent" />,
-  implement: <Hammer size={13} className="text-muted" />,
+  default: <ShieldCheck size={13} className="text-muted" />,
+  acceptEdits: <FilePen size={13} className="text-muted" />,
 };
 
-const MODE_OPTIONS: Option<AgentMode>[] = [
+const MODE_OPTIONS: Option<SessionPermissionMode>[] = [
   { value: 'plan', label: 'Plan', glyph: MODE_GLYPH.plan },
-  { value: 'implement', label: 'Build', glyph: MODE_GLYPH.implement },
+  { value: 'default', label: 'Ask before edits', glyph: MODE_GLYPH.default },
+  { value: 'acceptEdits', label: 'Accept edits', glyph: MODE_GLYPH.acceptEdits },
 ];
 
 const MODE_TITLE =
-  'Execution mode — Plan analyzes the repository read-only and proposes a strategy; Build lets the agent modify it';
+  'Permission mode — Plan is read-only and proposes a strategy; Ask before edits prompts for every change; Accept edits auto-approves file edits (commands still prompt)';
 
 export function ComposerModeSwitch({
   mode,
   onChange,
   disabled = false,
 }: {
-  mode: AgentMode;
-  onChange: (mode: AgentMode) => void;
+  mode: SessionPermissionMode;
+  onChange: (mode: SessionPermissionMode) => void;
   disabled?: boolean;
 }) {
   return (
@@ -45,9 +50,10 @@ export function ComposerModeSwitch({
       value={mode}
       options={MODE_OPTIONS}
       onChange={onChange}
-      // Mirror the active mode's glyph on the trigger so the current mode reads at
-      // a glance, matching the model select's provider-mark trigger.
+      // Mirror the active mode's glyph on the trigger so it reads at a glance, and
+      // light the trigger up in accent while Plan is active (first-class state).
       triggerGlyph={MODE_GLYPH[mode]}
+      accent={mode === 'plan'}
       disabled={disabled}
     />
   );

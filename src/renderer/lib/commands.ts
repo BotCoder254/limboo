@@ -5,7 +5,7 @@
  * Commands operate on Zustand stores via `getState()` so they can run from
  * anywhere (inside or outside React) without prop drilling.
  */
-import type { AgentMode, CommandId } from '@shared/types';
+import type { CommandId, SessionPermissionMode } from '@shared/types';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
@@ -15,8 +15,8 @@ import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
 
-/** Set the composer's default execution mode (Plan-first vs direct Implement). */
-function setDefaultMode(defaultMode: AgentMode): void {
+/** Set the composer's default permission mode (Plan / Ask before edits / Accept edits). */
+function setDefaultMode(defaultMode: SessionPermissionMode): void {
   void useSettingsStore.getState().update({ agent: { plan: { defaultMode } } });
 }
 
@@ -136,10 +136,10 @@ export const COMMANDS: Command[] = [
   },
   {
     id: 'agent.implementMode',
-    title: 'Switch to Implement mode',
+    title: 'Switch to Ask-before-edits mode',
     section: 'Agent',
     inPalette: true,
-    run: () => setDefaultMode('implement'),
+    run: () => setDefaultMode('default'),
   },
   {
     id: 'plan.approve',
