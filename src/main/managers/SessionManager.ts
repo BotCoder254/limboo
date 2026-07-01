@@ -17,7 +17,12 @@ import { BrowserWindow } from 'electron';
 import type Database from 'better-sqlite3';
 import { IpcEvents } from '@shared/ipc-channels';
 import { SESSION_DEFAULTS } from '@shared/constants';
-import type { AgentMode, Session, SessionStatus, SessionUpdate } from '@shared/types';
+import type {
+  Session,
+  SessionPermissionMode,
+  SessionStatus,
+  SessionUpdate,
+} from '@shared/types';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
 
@@ -273,10 +278,10 @@ export class SessionManager {
   }
 
   /**
-   * Persist the last composer mode used for a session (drives the Plan/Implement
-   * switch on reopen). Does NOT bump `updated_at` — mode is UI state, not activity.
+   * Persist the last composer permission mode used for a session (drives the
+   * mode selector on reopen). Does NOT bump `updated_at` — it is UI state.
    */
-  setMode(id: string, mode: AgentMode): void {
+  setMode(id: string, mode: SessionPermissionMode): void {
     const info = this.db
       .prepare('UPDATE sessions SET mode = ? WHERE id = ? AND (mode IS NULL OR mode != ?)')
       .run(mode, id, mode);
@@ -397,6 +402,17 @@ function rowToSession(row: SessionRow): Session {
     pinned: row.pinned === 1,
     archived: row.archived === 1,
     deletedAt: row.deleted_at,
-    mode: row.mode === 'plan' || row.mode === 'implement' ? row.mode : undefined,
+    mode: coerceMode(row.mode),
   };
+}
+
+/**
+ * Map a persisted `sessions.mode` string to a {@link SessionPermissionMode}. The
+ * column predates the harness-aligned modes, so coerce the legacy `implement`
+ * value to `default` and drop anything unrecognized.
+ */
+function coerceMode(value: string | null): SessionPermissionMode | undefined {
+  if (value === 'plan' || value === 'default' || value === 'acceptEdits') return value;
+  if (value === 'implement') return 'default';
+  return undefined;
 }

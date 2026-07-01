@@ -145,6 +145,14 @@ export class SettingsManager {
       clamp(mem.expiry.staleDays, MEMORY_LIMITS.staleDays.min, MEMORY_LIMITS.staleDays.max),
     );
 
+    // Plan Mode — the composer now speaks harness permission modes. Coerce the
+    // legacy 'implement' default (pre-v9) to 'default' and reject stray values.
+    const plan = merged.agent.plan;
+    if (!['plan', 'default', 'acceptEdits'].includes(plan.defaultMode as string)) {
+      plan.defaultMode = plan.defaultMode === ('implement' as unknown) ? 'default' : 'plan';
+    }
+    plan.historyLimit = Math.round(clamp(plan.historyLimit, 1, 100));
+
     merged.updates.autoCheck = !!merged.updates.autoCheck;
     merged.updates.autoDownload = !!merged.updates.autoDownload;
 

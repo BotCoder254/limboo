@@ -18,14 +18,15 @@ import type {
   AgentEvent,
   AgentInstall,
   AgentLifecycleStatus,
-  AgentMode,
   AgentSessionSnapshot,
   ChatMessage,
   ClarificationRequest,
   FileChange,
   PermissionRequest,
+  PlanRevision,
   RateLimitInfo,
   RequestState,
+  SessionPermissionMode,
 } from '@shared/types';
 import { useUIStore } from './useUIStore';
 
@@ -68,7 +69,7 @@ interface AgentStoreState {
   hydrate: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
   loadDiagnostics: (sessionId?: string | null) => Promise<void>;
-  send: (sessionId: string, prompt: string, mode?: AgentMode) => Promise<void>;
+  send: (sessionId: string, prompt: string, mode?: SessionPermissionMode) => Promise<void>;
   stop: (sessionId: string) => void;
   clear: (sessionId: string) => void;
   clearRateLimit: () => void;
@@ -79,9 +80,12 @@ interface AgentStoreState {
     answers: Record<string, string | string[]>,
     response?: string,
   ) => void;
-  approvePlan: (sessionId: string) => void;
+  approvePlan: (sessionId: string, execMode?: SessionPermissionMode) => void;
   rejectPlan: (sessionId: string) => void;
   regeneratePlan: (sessionId: string, extra?: string) => void;
+  setPlanPinned: (sessionId: string, pinned: boolean) => void;
+  listPlanRevisions: (sessionId: string) => Promise<PlanRevision[]>;
+  restorePlanRevision: (sessionId: string, revisionId: string) => void;
 }
 
 export const useAgentStore = create<AgentStoreState>((set, get) => {
@@ -402,10 +406,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       }));
     },
 
-    approvePlan: (sessionId) => {
+    approvePlan: (sessionId, execMode) => {
       const api = window.limboo?.agent;
       if (!api?.approvePlan) return;
-      api.approvePlan(sessionId).catch((err: unknown) => {
+      api.approvePlan(sessionId, execMode).catch((err: unknown) => {
         useUIStore.getState().addToast({
           title: 'Could not start implementation',
           description: err instanceof Error ? err.message : String(err),
@@ -420,6 +424,24 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
 
     regeneratePlan: (sessionId, extra) => {
       void window.limboo?.agent?.regeneratePlan?.(sessionId, extra);
+    },
+
+    setPlanPinned: (sessionId, pinned) => {
+      void window.limboo?.agent?.setPlanPinned?.(sessionId, pinned);
+    },
+
+    listPlanRevisions: async (sessionId) => {
+      const api = window.limboo?.agent;
+      if (!api?.listPlanRevisions) return [];
+      try {
+        return await api.listPlanRevisions(sessionId);
+      } catch {
+        return [];
+      }
+    },
+
+    restorePlanRevision: (sessionId, revisionId) => {
+      void window.limboo?.agent?.restorePlanRevision?.(sessionId, revisionId);
     },
   };
 });

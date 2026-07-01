@@ -71,6 +71,9 @@ export const IpcChannels = {
   agentApprovePlan: 'agent:approvePlan',
   agentRejectPlan: 'agent:rejectPlan',
   agentRegeneratePlan: 'agent:regeneratePlan',
+  agentSetPlanPinned: 'agent:setPlanPinned',
+  agentListPlanRevisions: 'agent:listPlanRevisions',
+  agentRestorePlanRevision: 'agent:restorePlanRevision',
 
   // File System Layer (Phase 4) — read + watch + index foundation.
   fsIndex: 'fs:index',

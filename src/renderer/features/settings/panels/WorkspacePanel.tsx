@@ -11,7 +11,7 @@ import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
 import { CircularProgress } from '@/renderer/components/ui';
-import { Section, Field, StackedField, Toggle, TextInput } from '../controls';
+import { Section, Field, Select, StackedField, Toggle, TextInput } from '../controls';
 import { detectedStack, suggestedIgnores } from '../detectIgnores';
 
 export function WorkspacePanel() {
@@ -157,6 +157,28 @@ function WorkspaceConfig({ workspace }: { workspace: Workspace }) {
           value={workspace.config.preferredShell}
           placeholder="OS default"
           onChange={(preferredShell) => void updateConfig(workspace.id, { preferredShell })}
+        />
+      </Field>
+
+      <Field
+        id="wsPlanDefaultMode"
+        label="Start sessions in"
+        hint="Permission mode every new session in this workspace begins in — overrides the global default. The desktop equivalent of a repo's permissions.defaultMode."
+      >
+        <Select<string>
+          value={workspace.config.planDefaultMode ?? 'inherit'}
+          options={[
+            { value: 'inherit', label: 'Global default' },
+            { value: 'plan', label: 'Plan' },
+            { value: 'default', label: 'Ask before edits' },
+            { value: 'acceptEdits', label: 'Accept edits' },
+          ]}
+          onChange={(value) =>
+            void updateConfig(workspace.id, {
+              planDefaultMode:
+                value === 'inherit' ? undefined : (value as 'plan' | 'default' | 'acceptEdits'),
+            })
+          }
         />
       </Field>
 

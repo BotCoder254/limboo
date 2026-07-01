@@ -15,12 +15,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { ArrowUp, CircleStop, Paperclip, Sparkles } from 'lucide-react';
-import type { AgentMode } from '@shared/types';
+import type { SessionPermissionMode } from '@shared/types';
 import { cn } from '@/renderer/lib/cn';
 import { Spinner } from '@/renderer/components/ui';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
+import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
 import { RUNNING_PHASES } from '@/renderer/features/sessions/useSessionRunning';
 import { ComposerControls } from './ComposerControls';
@@ -49,11 +50,17 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   );
   const send = useAgentStore((s) => s.send);
   const stop = useAgentStore((s) => s.stop);
-  const defaultMode = useSettingsStore((s) => s.settings.agent.plan.defaultMode);
+  const globalDefaultMode = useSettingsStore((s) => s.settings.agent.plan.defaultMode);
+  // A workspace can pin its own starting mode (repo-level Plan-first), overriding
+  // the global default — the desktop equivalent of `permissions.defaultMode`.
+  const workspaceDefaultMode = useWorkspaceStore(
+    (s) => s.workspaces.find((w) => w.id === s.activeId)?.config.planDefaultMode,
+  );
+  const defaultMode: SessionPermissionMode = workspaceDefaultMode ?? globalDefaultMode;
 
-  // Per-session composer mode, defaulting to the configured Plan-first default.
+  // Per-session composer mode, defaulting to the resolved Plan-first default.
   // Reset to the default whenever the active session changes.
-  const [mode, setMode] = useState<AgentMode>(defaultMode);
+  const [mode, setMode] = useState<SessionPermissionMode>(defaultMode);
   useEffect(() => {
     setMode(defaultMode);
   }, [sessionId, defaultMode]);
@@ -178,7 +185,7 @@ function composerPlaceholder(
   disabled: boolean,
   installed: boolean,
   restricted: boolean,
-  mode: AgentMode,
+  mode: SessionPermissionMode,
 ): string {
   if (!installed) return 'Sign in to Claude Code to start…';
   if (restricted) return 'Drafting is fine — sending resumes shortly…';

@@ -15,6 +15,7 @@ import {
   GitBranch,
   Keyboard,
   Info,
+  ListTodo,
   TerminalSquare,
   ArrowUpCircle,
   type LucideIcon,
@@ -24,6 +25,7 @@ import { AppearancePanel } from './panels/AppearancePanel';
 import { WorkspacePanel } from './panels/WorkspacePanel';
 import { BehaviorPanel } from './panels/BehaviorPanel';
 import { AgentPanel } from './panels/AgentPanel';
+import { PlanTasksPanel } from './panels/PlanTasksPanel';
 import { TerminalPanel } from './panels/TerminalPanel';
 import { GitPanel } from './panels/GitPanel';
 import { MemoryPanel } from './panels/MemoryPanel';
@@ -76,6 +78,7 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
     fields: [
       { id: 'approveTerminal', label: 'Approve terminal commands', keywords: ['shell', 'safety'] },
       { id: 'preferredShell', label: 'Preferred shell', keywords: ['bash', 'zsh', 'terminal'] },
+      { id: 'wsPlanDefaultMode', label: 'Start sessions in', keywords: ['plan', 'permission mode', 'default', 'accept edits'] },
       { id: 'ignoredDirs', label: 'Ignored directories', keywords: ['exclude', 'node_modules', 'index'] },
       { id: 'rescan', label: 'Refresh & reindex', keywords: ['rescan', 'reindex', 'detect', 'index', 'files'] },
     ],
@@ -115,6 +118,32 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
       { id: 'logVerbosity', label: 'Log verbosity', keywords: ['diagnostics', 'console', 'debug', 'log'] },
     ],
     Panel: AgentPanel,
+  },
+  {
+    id: 'plan',
+    label: 'Plan & Tasks',
+    icon: ListTodo,
+    keywords: ['plan', 'plan mode', 'tasks', 'todo', 'checklist', 'approve', 'execute', 'permission mode', 'accept edits', 'history', 'revisions', 'outline', 'phases'],
+    fields: [
+      { id: 'planDefaultMode', label: 'Default permission mode', keywords: ['plan', 'ask', 'accept edits', 'permission', 'start'] },
+      { id: 'planRequireSecondaryConfirm', label: 'Confirm before executing', keywords: ['approve', 'confirm', 'safety'] },
+      { id: 'planSaveToMemory', label: 'Save completed plans to Memory', keywords: ['memory', 'retain', 'knowledge'] },
+      { id: 'planShowReasoning', label: 'Show plan reasoning', keywords: ['markdown', 'reasoning', 'plan body'] },
+      { id: 'planShowEstimates', label: 'Show plan metadata', keywords: ['risk', 'files', 'task count'] },
+      { id: 'planHighlightRisk', label: 'Highlight risk', keywords: ['risk', 'color'] },
+      { id: 'planStreamIncrementally', label: 'Stream tasks as they appear', keywords: ['stream', 'incremental', 'live'] },
+      { id: 'planAutoExpandTasks', label: 'Auto-expand new tasks', keywords: ['expand', 'tasks'] },
+      { id: 'planAutoCollapseCompleted', label: 'Collapse completed tasks', keywords: ['collapse', 'done'] },
+      { id: 'planExportFormat', label: 'Plan export format', keywords: ['export', 'markdown', 'download'] },
+      { id: 'planShowTaskDurations', label: 'Show task durations', keywords: ['duration', 'time', 'execution'] },
+      { id: 'planShowCheckpoints', label: 'Show checkpoints on tasks', keywords: ['git', 'checkpoint', 'recovery'] },
+      { id: 'planAllowReorder', label: 'Allow manual reordering', keywords: ['reorder', 'drag', 'tasks'] },
+      { id: 'planNotifyPhase', label: 'Notify on phase completion', keywords: ['notify', 'notification', 'phase'] },
+      { id: 'planArchiveCompleted', label: 'Archive on completion', keywords: ['archive', 'done'] },
+      { id: 'planRetainHistory', label: 'Keep plan revisions', keywords: ['history', 'revisions', 'compare', 'restore'] },
+      { id: 'planHistoryLimit', label: 'Revisions kept per session', keywords: ['history', 'limit', 'prune'] },
+    ],
+    Panel: PlanTasksPanel,
   },
   {
     id: 'terminal',
