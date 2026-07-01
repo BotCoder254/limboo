@@ -136,6 +136,18 @@ export const IpcChannels = {
   memoryListProposals: 'memory:listProposals',
   memoryAcceptProposal: 'memory:acceptProposal',
   memoryRejectProposal: 'memory:rejectProposal',
+
+  // Search Engine — unified, cross-subsystem retrieval, all local.
+  searchGlobal: 'search:global',
+  searchFiles: 'search:files',
+  searchSymbols: 'search:symbols',
+  searchReindex: 'search:reindex',
+  searchGetStatus: 'search:getStatus',
+  searchHistoryList: 'search:historyList',
+  searchHistoryClear: 'search:historyClear',
+  searchSavedList: 'search:savedList',
+  searchSavedCreate: 'search:savedCreate',
+  searchSavedDelete: 'search:savedDelete',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
@@ -183,6 +195,10 @@ export const IpcEvents = {
   gitCheckpointsChanged: 'git:checkpoints-changed',
   /** The memory store changed (created / updated / proposed / accepted / pruned). */
   memoryChanged: 'memory:changed',
+  /** The search index / history / saved searches changed (reindex, save, clear). */
+  searchChanged: 'search:changed',
+  /** Progress of an in-flight search index pass. */
+  searchIndexProgress: 'search:index-progress',
   /** The auto-update lifecycle advanced (checking / available / progress / ready). */
   updateStatus: 'update:status',
 } as const;

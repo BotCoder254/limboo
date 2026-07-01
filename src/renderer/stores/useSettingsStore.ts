@@ -44,7 +44,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       return;
     }
 
-    const settings = await api.getAll();
+    // Always merge onto DEFAULT_SETTINGS: a stale/partial payload from an older
+    // settings.json (or a previously-running instance) must never leave newer
+    // nested keys (e.g. search.sources) undefined, or the UI crashes reading them.
+    const settings = deepMergeLocal(DEFAULT_SETTINGS, await api.getAll());
     applyAppearance(settings.appearance);
     if (!layoutSeeded) {
       useLayoutStore.getState().seed(settings.layout);
@@ -53,8 +56,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ settings, hydrated: true });
 
     api.onChange((next) => {
-      applyAppearance(next.appearance);
-      set({ settings: next });
+      const merged = deepMergeLocal(DEFAULT_SETTINGS, next);
+      applyAppearance(merged.appearance);
+      set({ settings: merged });
     });
   },
 
@@ -73,7 +77,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     try {
       // Reconcile with the main process truth (clamped / migrated / normalized).
-      const next = await api.set(patch);
+      const next = deepMergeLocal(DEFAULT_SETTINGS, await api.set(patch));
       set({ settings: next });
       applyAppearance(next.appearance);
     } catch (err) {
@@ -92,7 +96,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       useLayoutStore.getState().seed(DEFAULT_SETTINGS.layout);
       return;
     }
-    const next = await api.reset();
+    const next = deepMergeLocal(DEFAULT_SETTINGS, await api.reset());
     set({ settings: next });
     useLayoutStore.getState().seed(next.layout);
   },

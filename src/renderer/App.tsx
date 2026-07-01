@@ -8,6 +8,7 @@ import { AppShell } from '@/renderer/app/AppShell';
 import { WorkspaceSelection } from '@/renderer/features/workspace/WorkspaceSelection';
 import { WorkspaceCreateScreen } from '@/renderer/features/workspace/WorkspaceCreateScreen';
 import { CommandPalette } from '@/renderer/features/command-palette/CommandPalette';
+import { GlobalSearch } from '@/renderer/features/search/GlobalSearch';
 import { SettingsModal } from '@/renderer/features/settings/SettingsModal';
 import { UpdateBanner } from '@/renderer/features/updates/UpdateBanner';
 import { Toaster } from '@/renderer/components/feedback/Toaster';
@@ -21,6 +22,7 @@ import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
 import { useMemoryStore } from '@/renderer/stores/useMemoryStore';
+import { useSearchStore } from '@/renderer/stores/useSearchStore';
 import { useUpdateStore } from '@/renderer/stores/useUpdateStore';
 
 export function App() {
@@ -56,6 +58,8 @@ export function App() {
     useGitStore.getState().hydrate();
     // Subscribe to memory changes (proposals drive the rail badge) + follow ws.
     useMemoryStore.getState().hydrate();
+    // Subscribe to search index/changed events (drives Global Search + Search tab).
+    useSearchStore.getState().hydrate();
     // Subscribe to the in-app updater's lifecycle (drives the UpdateBanner).
     useUpdateStore.getState().hydrate();
   }, []);
@@ -70,6 +74,7 @@ export function App() {
         <WorkspaceSelection />
       )}
       <CommandPalette />
+      <GlobalSearch />
       <SettingsModal />
       <UpdateBanner />
       <Toaster />

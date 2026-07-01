@@ -15,6 +15,7 @@ import {
   GIT_LIMITS,
   LAYOUT_LIMITS,
   MEMORY_LIMITS,
+  SEARCH_LIMITS,
   SETTINGS_VERSION,
   clamp,
 } from '@shared/constants';
@@ -144,6 +145,21 @@ export class SettingsManager {
     mem.expiry.staleDays = Math.round(
       clamp(mem.expiry.staleDays, MEMORY_LIMITS.staleDays.min, MEMORY_LIMITS.staleDays.max),
     );
+
+    // Search — clamp the recent-search ring, whitelist the live-search delay, and
+    // coerce the boolean toggles (source switches, fuzzy, title-bar open behaviour).
+    const search = merged.search;
+    search.historyLimit = Math.round(
+      clamp(search.historyLimit, SEARCH_LIMITS.historyLimit.min, SEARCH_LIMITS.historyLimit.max),
+    );
+    if (!['instant', 'fast', 'balanced'].includes(search.liveDelay)) {
+      search.liveDelay = 'fast';
+    }
+    search.fuzzy = !!search.fuzzy;
+    search.openOnClick = !!search.openOnClick;
+    for (const key of Object.keys(search.sources) as (keyof typeof search.sources)[]) {
+      search.sources[key] = !!search.sources[key];
+    }
 
     // Plan Mode — the composer now speaks harness permission modes. Coerce the
     // legacy 'implement' default (pre-v9) to 'default' and reject stray values.

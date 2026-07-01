@@ -36,6 +36,10 @@ export function useKeyboardShortcuts(): void {
           ui.closePalette();
           return;
         }
+        if (ui.searchOpen) {
+          ui.closeSearch();
+          return;
+        }
         if (ui.activeModal) {
           ui.closeModal();
           return;

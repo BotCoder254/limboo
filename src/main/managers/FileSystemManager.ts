@@ -34,6 +34,7 @@ import { FileHistory } from './fs/history';
 import { WorkspaceWatcher } from './fs/watcher';
 import { gitStatus } from './git/status';
 import type { GitManager } from './GitManager';
+import type { SearchManager } from './search/SearchManager';
 import { isInsideRoot } from './workspace/validate';
 
 export class FileSystemManager {
@@ -50,6 +51,8 @@ export class FileSystemManager {
   private sessions: SessionManager | null = null;
   /** Git Manager to notify (git workspace refresh) on working-tree changes. */
   private git: GitManager | null = null;
+  /** Search Manager to (re)index as the working tree changes. */
+  private search: SearchManager | null = null;
   /** Last broadcast git key per workspace, so unchanged status is a no-op. */
   private readonly lastGitKey = new Map<string, string>();
 
@@ -63,6 +66,11 @@ export class FileSystemManager {
   /** Inject the Git Manager so the watcher can refresh the Git workspace live. */
   setGitManager(git: GitManager): void {
     this.git = git;
+  }
+
+  /** Inject the Search Manager so the index is rebuilt as the tree changes. */
+  setSearchManager(search: SearchManager): void {
+    this.search = search;
   }
 
   /* ----------------------------------------------------------- reads */
@@ -206,6 +214,10 @@ export class FileSystemManager {
     if (ws) this.refreshGitStatus(ws);
     // Refresh the Git workspace (status/diff lists) live as the tree changes.
     this.git?.notifyChanged(workspaceId);
+    // Rebuild the search index (coalesced; off the hot path — errors are logged).
+    void this.search?.indexWorkspace(workspaceId).catch((err) =>
+      logger.warn('search reindex on change failed', err),
+    );
   }
 
   /**

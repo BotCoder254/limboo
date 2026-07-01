@@ -23,6 +23,7 @@ import { FileSystemManager } from './managers/FileSystemManager';
 import { TerminalManager } from './managers/TerminalManager';
 import { GitManager } from './managers/GitManager';
 import { MemoryManager } from './managers/memory/MemoryManager';
+import { SearchManager } from './managers/search/SearchManager';
 import { AutoUpdateManager } from './managers/AutoUpdateManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
@@ -75,6 +76,7 @@ function bootstrap(): void {
   let terminal: TerminalManager;
   let git: GitManager;
   let memory: MemoryManager;
+  let search: SearchManager;
   let updates: AutoUpdateManager;
   let memorySweepTimer: ReturnType<typeof setInterval> | undefined;
   const windowState = new WindowStateManager();
@@ -106,6 +108,10 @@ function bootstrap(): void {
     // into prompts before they reach the harness.
     memory = new MemoryManager(settings);
     memory.seedDefaults(null); // global / user-scope starters
+    // The Search Engine — a platform service owned by the app. Maintains the local
+    // file/symbol index and federates every other subsystem behind one query
+    // interface; also the primary context provider for the coding agent.
+    search = new SearchManager(settings, workspace);
     // In-app updater (electron-updater + GitHub releases). No-op in dev / non-AppImage.
     updates = new AutoUpdateManager(settings, notifications);
     // The agent mirrors its shell commands into the integrated terminal.
@@ -118,10 +124,18 @@ function bootstrap(): void {
     // new memories from commits. Both treat memory as an optional collaborator.
     agent.setMemoryManager(memory);
     git.setMemoryManager(memory);
+    // The Search Engine federates memory / git / sessions at query time, powers the
+    // Global Search UI, and feeds ranked context into the agent prompt.
+    search.setMemoryManager(memory);
+    search.setGitManager(git);
+    search.setSessionManager(sessions);
+    agent.setSearchManager(search);
     // The File System Layer pushes live git status (branch + diff) into sessions
     // and notifies the Git workspace whenever the working tree changes.
     fileSystem.setSessionManager(sessions);
     fileSystem.setGitManager(git);
+    // The File System Layer drives incremental search reindexing on tree changes.
+    fileSystem.setSearchManager(search);
 
     hardenSession();
     registerAllIpc({
@@ -134,6 +148,7 @@ function bootstrap(): void {
       terminal,
       git,
       memory,
+      search,
       updates,
     });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
@@ -146,11 +161,17 @@ function bootstrap(): void {
     // active workspace also seeds its starter memories (idempotent).
     workspace.onActiveChanged((ws) => {
       fileSystem.setActiveWorkspace(ws);
-      if (ws) memory.seedDefaults(ws.id);
+      if (ws) {
+        memory.seedDefaults(ws.id);
+        void search.indexWorkspace(ws.id).catch((err) => logger.warn('search index failed', err));
+      }
     });
     const initialWs = workspace.getActive();
     fileSystem.setActiveWorkspace(initialWs);
-    if (initialWs) memory.seedDefaults(initialWs.id);
+    if (initialWs) {
+      memory.seedDefaults(initialWs.id);
+      void search.indexWorkspace(initialWs.id).catch((err) => logger.warn('search index failed', err));
+    }
 
     // Low-frequency memory maintenance (decay/flag stale entries). Off the hot
     // path; runs hourly and once shortly after boot.

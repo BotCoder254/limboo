@@ -15,12 +15,17 @@ export interface Toast {
 
 interface UIState {
   paletteOpen: boolean;
+  searchOpen: boolean;
   activeModal: ModalId;
   toasts: Toast[];
 
   openPalette: () => void;
   closePalette: () => void;
   togglePalette: () => void;
+
+  openSearch: () => void;
+  closeSearch: () => void;
+  toggleSearch: () => void;
 
   openModal: (id: Exclude<ModalId, null>) => void;
   closeModal: () => void;
@@ -31,12 +36,18 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   paletteOpen: false,
+  searchOpen: false,
   activeModal: null,
   toasts: [],
 
-  openPalette: () => set({ paletteOpen: true }),
+  // The command palette and Global Search are mutually exclusive overlays.
+  openPalette: () => set({ paletteOpen: true, searchOpen: false }),
   closePalette: () => set({ paletteOpen: false }),
-  togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
+  togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen, searchOpen: false })),
+
+  openSearch: () => set({ searchOpen: true, paletteOpen: false }),
+  closeSearch: () => set({ searchOpen: false }),
+  toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen, paletteOpen: false })),
 
   openModal: (id) => set({ activeModal: id }),
   closeModal: () => set({ activeModal: null }),

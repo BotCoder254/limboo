@@ -254,6 +254,104 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_memory_links_memory
       ON memory_links (memory_id);
+
+    -- Search Engine — the app-owned index of workspace files. One row per indexed
+    -- file, scoped by workspace. Content is bounded (head of file, text only) and
+    -- read solely through the guarded file reader. All values are bound, never
+    -- string-interpolated. The FTS5 shadow below powers BM25 keyword retrieval.
+    CREATE TABLE IF NOT EXISTS search_files (
+      id           TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      path         TEXT NOT NULL,
+      lang         TEXT,
+      size         INTEGER NOT NULL DEFAULT 0,
+      content      TEXT NOT NULL DEFAULT '',
+      updated_at   INTEGER NOT NULL,
+      UNIQUE (workspace_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_files_workspace
+      ON search_files (workspace_id, updated_at DESC);
+
+    -- Full-text index over path + content (default unicode tokenizer → BM25).
+    -- Shadows search_files via content='search_files'; kept in sync by triggers.
+    CREATE VIRTUAL TABLE IF NOT EXISTS search_files_fts USING fts5(
+      path, content, content='search_files', content_rowid='rowid'
+    );
+    CREATE TRIGGER IF NOT EXISTS search_files_ai AFTER INSERT ON search_files BEGIN
+      INSERT INTO search_files_fts(rowid, path, content)
+        VALUES (new.rowid, new.path, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS search_files_ad AFTER DELETE ON search_files BEGIN
+      INSERT INTO search_files_fts(search_files_fts, rowid, path, content)
+        VALUES ('delete', old.rowid, old.path, old.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS search_files_au AFTER UPDATE ON search_files BEGIN
+      INSERT INTO search_files_fts(search_files_fts, rowid, path, content)
+        VALUES ('delete', old.rowid, old.path, old.content);
+      INSERT INTO search_files_fts(rowid, path, content)
+        VALUES (new.rowid, new.path, new.content);
+    END;
+
+    -- Language-aware symbol index (best-effort, regex-extracted during indexing).
+    -- One row per declaration; navigable via path + line.
+    CREATE TABLE IF NOT EXISTS search_symbols (
+      id           TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      path         TEXT NOT NULL,
+      name         TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      lang         TEXT,
+      line         INTEGER NOT NULL DEFAULT 1,
+      signature    TEXT NOT NULL DEFAULT '',
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_symbols_workspace
+      ON search_symbols (workspace_id, name);
+    CREATE INDEX IF NOT EXISTS idx_search_symbols_path
+      ON search_symbols (workspace_id, path);
+
+    -- Trigram tokenizer → substring + fuzzy matching on symbol names/signatures
+    -- (built into FTS5 since 3.34; substrings <3 chars fall back to a LIKE scan).
+    CREATE VIRTUAL TABLE IF NOT EXISTS search_symbols_fts USING fts5(
+      name, signature, content='search_symbols', content_rowid='rowid',
+      tokenize='trigram'
+    );
+    CREATE TRIGGER IF NOT EXISTS search_symbols_ai AFTER INSERT ON search_symbols BEGIN
+      INSERT INTO search_symbols_fts(rowid, name, signature)
+        VALUES (new.rowid, new.name, new.signature);
+    END;
+    CREATE TRIGGER IF NOT EXISTS search_symbols_ad AFTER DELETE ON search_symbols BEGIN
+      INSERT INTO search_symbols_fts(search_symbols_fts, rowid, name, signature)
+        VALUES ('delete', old.rowid, old.name, old.signature);
+    END;
+    CREATE TRIGGER IF NOT EXISTS search_symbols_au AFTER UPDATE ON search_symbols BEGIN
+      INSERT INTO search_symbols_fts(search_symbols_fts, rowid, name, signature)
+        VALUES ('delete', old.rowid, old.name, old.signature);
+      INSERT INTO search_symbols_fts(rowid, name, signature)
+        VALUES (new.rowid, new.name, new.signature);
+    END;
+
+    -- Recent searches (most-recent-first) per scope. workspace_id NULL = global.
+    CREATE TABLE IF NOT EXISTS search_history (
+      id           TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      query        TEXT NOT NULL,
+      created_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_history_scope
+      ON search_history (workspace_id, created_at DESC);
+
+    -- Named, re-runnable saved searches. filter is a JSON blob (validated on write).
+    CREATE TABLE IF NOT EXISTS saved_searches (
+      id           TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      name         TEXT NOT NULL,
+      query        TEXT NOT NULL,
+      filter       TEXT NOT NULL DEFAULT '{}',
+      created_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_searches_scope
+      ON saved_searches (workspace_id, created_at DESC);
   `);
 
   // Idempotent column additions for databases created before a column existed.

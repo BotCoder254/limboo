@@ -70,6 +70,8 @@ import type { SessionManager } from './SessionManager';
 import type { GitManager } from './GitManager';
 import type { MemoryManager } from './memory/MemoryManager';
 import { createMemoryMcpServer } from './memory/memoryTools';
+import type { SearchManager } from './search/SearchManager';
+import { createSearchMcpServer } from './search/searchTools';
 
 /* ------------------------------------------------------------------ */
 /* ESM loader — the SDK is ESM-only; main is a CJS bundle. Load it with */
@@ -403,6 +405,49 @@ export class AgentManager {
       return block || undefined;
     } catch (err) {
       logger.warn('memory: context build failed', err);
+      return undefined;
+    }
+  }
+
+  /** Search Engine, wired after construction (retrieval-based prompt context). */
+  private search: SearchManager | null = null;
+
+  /**
+   * Inject the Search Manager. Search is a platform service owned by the app — the
+   * agent only *consumes* it to enrich each prompt with the files/symbols/docs most
+   * relevant to the task, so the harness explores less before doing real work.
+   */
+  setSearchManager(search: SearchManager): void {
+    this.search = search;
+  }
+
+  /**
+   * Build the system-prompt addition that injects ranked, relevant project context
+   * (files/symbols/docs) for a prompt. Returns undefined when search is disabled /
+   * not injecting / empty. Fully local and best-effort: a failure never blocks the
+   * run. Advisory to the agent — its own Read/Grep/Glob remain authoritative.
+   */
+  private searchContextFor(sessionId: string, prompt: string): string | undefined {
+    if (!this.search) return undefined;
+    const cfg = this.settings.getAll().search;
+    if (!cfg.enabled || !cfg.injectContext) return undefined;
+    try {
+      const ws = this.workspace.getActive();
+      const hits = this.search.retrieveContext({
+        workspaceId: ws?.id ?? null,
+        prompt,
+        limit: cfg.maxInjected,
+      });
+      const block = this.search.buildContextBlock(hits);
+      if (block) {
+        this.diag('request', 'debug', `Injected ${hits.length} context items`, undefined, sessionId);
+        const label =
+          hits.length === 1 ? 'Retrieved 1 relevant location' : `Retrieved ${hits.length} relevant locations`;
+        this.pushActivity(sessionId, 'status', label, undefined, 'info');
+      }
+      return block || undefined;
+    } catch (err) {
+      logger.warn('search: context build failed', err);
       return undefined;
     }
   }
@@ -1009,8 +1054,13 @@ export class AgentManager {
     try {
       const sdk = await loadSdk();
       const { query } = sdk;
+      // Compose the injected context: durable Memory knowledge + the Search
+      // Engine's ranked retrieval for this prompt. Both are appended to the Claude
+      // Code preset via a single systemPrompt.append (blank-line separated).
       const memoryContext = this.memoryContextFor(sessionId, prompt);
-      const options = this.buildOptions(sessionId, cwd, abort, agent, permMode, memoryContext);
+      const searchContext = this.searchContextFor(sessionId, prompt);
+      const injectedContext = [memoryContext, searchContext].filter(Boolean).join('\n\n') || undefined;
+      const options = this.buildOptions(sessionId, cwd, abort, agent, permMode, injectedContext);
       // Expose a live, read-only view of the Local Memory System so the agent can
       // actually list/search the developer's memories on demand (the injected
       // <project-memory> block is only a one-shot snapshot).
@@ -1018,6 +1068,14 @@ export class AgentManager {
         options.mcpServers = {
           ...(options.mcpServers ?? {}),
           limboo_memory: createMemoryMcpServer(sdk, this.memory, this.workspace),
+        };
+      }
+      // Expose read-only Search Engine tools so the agent can query the local index
+      // on demand to decide what to explore before its own Read/Grep/Glob run.
+      if (this.search && this.settings.getAll().search.enabled) {
+        options.mcpServers = {
+          ...(options.mcpServers ?? {}),
+          limboo_search: createSearchMcpServer(sdk, this.search, this.workspace),
         };
       }
       this.diag('lifecycle', 'debug', 'Handshake — query opened', undefined, sessionId);
@@ -1599,7 +1657,7 @@ export class AgentManager {
     abort: AbortController,
     agent: ReturnType<SettingsManager['getAll']>['agent'],
     permMode: SessionPermissionMode,
-    memoryContext?: string,
+    injectedContext?: string,
   ): Options {
     const options: Options = {
       cwd,
@@ -1619,11 +1677,12 @@ export class AgentManager {
       thinking: mapThinking(agent.thinking),
       stderr: (data: string) => logger.warn('[claude]', redact(data)),
     };
-    // Local Memory System: append ranked project knowledge to Claude Code's
-    // default system prompt (preset preserved), so the agent starts each task
-    // with the most relevant context instead of an empty slate.
-    if (memoryContext) {
-      options.systemPrompt = { type: 'preset', preset: 'claude_code', append: memoryContext };
+    // Memory + Search context: append durable project knowledge and the ranked
+    // retrieval for this prompt to Claude Code's default system prompt (preset
+    // preserved), so the agent starts each task with the most relevant context
+    // instead of an empty slate.
+    if (injectedContext) {
+      options.systemPrompt = { type: 'preset', preset: 'claude_code', append: injectedContext };
     }
     if (!agent.webSearch) options.disallowedTools = ['WebSearch', 'WebFetch'];
 
@@ -1670,9 +1729,12 @@ export class AgentManager {
         };
       }
 
-      // Limboo's own memory tools are internal and strictly read-only — always
-      // allow them (even during a plan run) so reading memories never prompts.
-      if (toolName.startsWith('mcp__limboo_memory__')) {
+      // Limboo's own memory + search tools are internal and strictly read-only —
+      // always allow them (even during a plan run) so retrieval never prompts.
+      if (
+        toolName.startsWith('mcp__limboo_memory__') ||
+        toolName.startsWith('mcp__limboo_search__')
+      ) {
         return { behavior: 'allow', updatedInput: input };
       }
 

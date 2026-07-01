@@ -437,6 +437,8 @@ the real (no-mock) UI. Each owns one responsibility:
   workspace, persists transcript/activity/diagnostics, resumes SDK sessions.
 - **Memory System** (`managers/memory/MemoryManager.ts`) — the **Local Memory
   System** (see below).
+- **Search Engine** (`managers/search/SearchManager.ts`) — the **Search Engine**
+  platform service (see below).
 
 ### Local Memory System
 
@@ -469,10 +471,46 @@ relevant entries into the agent prompt *before* it reaches the harness.
   search / tier filters / proposals / inline note composer; settings under the
   **Memory** category.
 
+### Search Engine
+
+A provider-independent **platform service owned by the app** — the single retrieval
+interface every subsystem (and the agent) queries instead of rolling its own
+lookup. Fully local: no network, no embeddings. It **indexes** the large/expensive
+sources itself (files, content, symbols) and **federates** the already-queryable
+ones at query time (memory, git, sessions, commands).
+
+- **Storage** — in `limboo.db`: `search_files`(+`search_files_fts`, FTS5 BM25 over
+  path+content) and `search_symbols`(+`search_symbols_fts`, FTS5 **trigram** for
+  substring/fuzzy on names), plus `search_history` and `saved_searches`. All access
+  is parameterized; kept in sync by triggers (mirrors the memory FTS pattern).
+- **Indexing** — a bounded, cooperative walk (reuses the guarded `readWorkspaceFile`
+  reader + the workspace ignore matcher, never follows symlinks, capped by
+  `FS_LIMITS`). Runs on active-workspace activation and re-runs (coalesced) on the
+  `FileSystemManager` watcher's change signal. Symbols come from a lightweight,
+  regex-based per-language extractor (`search/symbols.ts`) — no parser deps.
+- **Retrieval + ranking** — `globalSearch` merges own-index + federated hits into
+  ranked, per-source **groups**; ranking fuses BM25 relevance with filename/path
+  affinity, symbol exact/prefix matches, and structure weight (source over
+  generated). Git federation is cached with a short TTL to avoid spawning `git` per
+  keystroke.
+- **Agent context provider** — `retrieveContext` + `buildContextBlock` render a
+  `<project-context>` block of ranked files/symbols that `AgentManager` appends to
+  the Claude Code preset **alongside** the memory block (single `systemPrompt.append`).
+  A read-only `limboo_search` MCP server (`search/searchTools.ts`:
+  `search_project` / `find_files` / `find_symbols`) lets the agent query the index
+  on demand; auto-allowed in `canUseTool`. Search **retrieves/ranks**; the SDK's
+  Read/Grep/Glob remain authoritative.
+- **UI** — **Global Search** (`features/search/GlobalSearch.tsx`, Cmd/Ctrl+P) is the
+  universal command-palette-style entry point; a **Search** activity tab
+  (`features/search/SearchPanel.tsx` + the `Search` rail icon) mirrors it with
+  filters, recent + saved searches. Backed by `useSearchStore`. Settings live in the
+  **Memory & Search** category (`settings.search`).
+
 **Still open / future** — Repository clone/track UI, a dedicated Permission System
-beyond the agent's `canUseTool`, a standalone Project Indexer/Search Engine, merge-
-conflict resolution UI, remote management, and stash. Memory could later layer
-local vector embeddings on top of BM25 (the ranking is already fusion-ready).
+beyond the agent's `canUseTool`, merge-conflict resolution UI, remote management, and
+stash. True per-file incremental search indexing (v1 does a coalesced full reindex on
+change) and local vector embeddings on top of BM25 (both Memory and Search rankings
+are already fusion-ready) are natural follow-ups.
 
 ---
 

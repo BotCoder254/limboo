@@ -178,6 +178,16 @@ html[data-reduced-motion="true"] *::after {
   animation: limboo-shimmer 1.4s ease-in-out infinite;
 }
 
+/* Blinking caret for the typewriter placeholder (title-bar search box). */
+@keyframes limboo-caret-blink {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+@utility animate-caret {
+  animation: limboo-caret-blink 1.1s step-end infinite;
+}
+
 /* ------------------------------------------------------------------ */
 /* Markdown rendering (assistant messages)                            */
 /* ------------------------------------------------------------------ */
