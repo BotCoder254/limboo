@@ -5,7 +5,6 @@
  * that shape how the agent is driven: model, thinking, permissions, web search,
  * turn budget, and the connection-monitoring / reliability controls.
  */
-import { Bot } from 'lucide-react';
 import { AGENT_CONNECTION_LIMITS, AGENT_LIMITS, AGENT_MODELS } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { ProviderIcon } from '@/renderer/components/brand/ProviderIcon';
@@ -38,7 +37,7 @@ export function AgentPanel() {
       >
         <div className="flex items-center gap-3 rounded-md border border-line bg-surface-2 px-3 py-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-elevated text-muted">
-            <Bot size={18} />
+            <ProviderIcon provider="anthropic" size={18} className="text-muted" />
           </span>
           <div className="flex min-w-0 flex-col">
             <span className="text-[13px] text-fg">Claude Code</span>

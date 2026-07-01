@@ -54,10 +54,10 @@ const config: ForgeConfig = {
       // plugin), bundled static assets, and node_modules (pruned to production
       // deps above). Ignore everything else (source, configs, dev-only files).
       const keep =
-        file.startsWith('/.vite') ||
+        /^\/\.vite($|\/)/.test(file) ||
         file === '/package.json' ||
-        file.startsWith('/assets') ||
-        file.startsWith('/node_modules');
+        /^\/assets($|\/)/.test(file) ||
+        /^\/node_modules($|\/)/.test(file);
       return !keep;
     },
   },

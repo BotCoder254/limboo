@@ -92,11 +92,11 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
     <div className="bg-base px-4 pb-6 pt-1">
       <div className="mx-auto w-full max-w-3xl">
         <ComposerBanner />
-        <div className="flex flex-col gap-1.5 rounded-md border border-line bg-surface-2 px-3 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors focus-within:border-line-strong">
-          <div className="flex items-end gap-2">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-end gap-2 rounded-3xl border border-line bg-surface-2 px-4 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors focus-within:border-line-strong">
             <button
               type="button"
-              className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+              className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Attach"
               disabled={blocked}
             >
@@ -120,7 +120,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
               <button
                 type="button"
                 onClick={() => sessionId && stop(sessionId)}
-                className="mb-0.5 flex h-7 items-center gap-1.5 rounded-md bg-surface px-2.5 text-[12px] font-semibold text-fg transition-colors hover:bg-elevated"
+                className="mb-0.5 flex h-7 items-center gap-1.5 rounded-full bg-surface px-2.5 text-[12px] font-semibold text-fg transition-colors hover:bg-elevated"
               >
                 <CircleStop size={14} />
                 Stop
@@ -131,7 +131,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                 onClick={submit}
                 disabled={blocked || value.trim().length === 0}
                 className={cn(
-                  'mb-0.5 flex h-7 w-7 items-center justify-center rounded-md transition-opacity',
+                  'mb-0.5 flex h-7 w-7 items-center justify-center rounded-full transition-opacity',
                   blocked || value.trim().length === 0
                     ? 'cursor-not-allowed bg-surface text-faint'
                     : 'bg-accent text-base hover:opacity-90',
@@ -143,7 +143,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
             )}
           </div>
 
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-line/60 pt-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 px-1">
             <ComposerModeSwitch mode={mode} onChange={setMode} disabled={disabled || !installed} />
             <span className="hidden h-3.5 w-px shrink-0 bg-line sm:block" />
             <ComposerControls disabled={disabled || !installed} />
