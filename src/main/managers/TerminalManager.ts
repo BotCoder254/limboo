@@ -5,12 +5,18 @@
  *
  * Each terminal is a managed resource keyed by id and grouped by workspace: it
  * tracks the working directory, shell, lifecycle state, a bounded scrollback ring
- * (for replay on rehydrate), and the underlying `node-pty` process. Output is
- * streamed to every window as `terminal:data` events; lifecycle changes broadcast
- * `terminal:updated` / `terminal:exit`.
+ * (for replay on rehydrate), and the underlying `node-pty` process. Pinned to the
+ * `1.2.0-beta` line, which rewrote the native addon on Node-API (`node-addon-api`)
+ * instead of NAN: the compiled binary is ABI-stable across Node.js *and* Electron
+ * major versions, so the bundled per-platform prebuilt never needs a `node-gyp`
+ * rebuild for a new Electron release (unlike `node-pty@1.1.0` or any of its
+ * NAN-based prebuilt forks, which still rebuild — and need Visual Studio Build
+ * Tools on Windows — whenever the host Electron ABI has no matching prebuilt).
+ * Output is streamed to every window as `terminal:data` events; lifecycle changes
+ * broadcast `terminal:updated` / `terminal:exit`.
  *
- * Security (CLAUDE.md §6): PTYs are spawned argv-style (node-pty execs the shell
- * binary directly — never `shell: true`), the `cwd` is pinned to and validated
+ * Security (CLAUDE.md §6): PTYs are spawned argv-style (the shell binary is
+ * exec'd directly — never `shell: true`), the `cwd` is pinned to and validated
  * inside the workspace root before spawning, the environment is sanitized, and no
  * PTY output or command text is ever written to the logger (audit lines are
  * redacted). Bounds (max terminals/workspace, scrollback ring, write byte cap)

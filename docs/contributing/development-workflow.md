@@ -6,7 +6,7 @@ contract is in the root [CONTRIBUTING.md](../../CONTRIBUTING.md); this expands i
 ## Setup
 
 ```bash
-npm install     # installs deps; compiles native modules (better-sqlite3, node-pty)
+npm install     # installs deps; may compile better-sqlite3 (node-pty ships a prebuilt)
 npm start       # Electron + Vite (renderer on :5173). There is no npm run dev.
 ```
 

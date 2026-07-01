@@ -56,7 +56,7 @@ which avoids tightly coupled code:
    |-- Workspace Manager                          (project lifecycle)
    |-- Session Manager                            (units of work)
    |-- Git Engine (+ git/{exec,parse,status})     (deep git + checkpoints)
-   |-- Terminal Manager                           (node-pty shells)
+   |-- Terminal Manager                           (PTY shells, node-pty fork)
    |-- File System Layer (+ fs/{...})             (watch + index + read)
    |-- Agent Manager (+ memory MCP tools)         (agent orchestration)
    |-- Memory Manager                             (Local Memory System)

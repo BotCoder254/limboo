@@ -21,7 +21,8 @@ UI:
 - **Local Database** — SQLite (WAL, FTS5), versioned schema, idempotent migrations.
 - **Git Engine** — status / diff / stage / commit / log / branches / tags / blame /
   fetch / init / push / pull, plus lightweight per-session checkpoints.
-- **Integrated Terminal** — `node-pty` sessions with mirrored agent commands.
+- **Integrated Terminal** — `node-pty` (Node-API `1.2.0-beta` line) sessions
+  with mirrored agent commands.
 - **File System Layer** — watch + index + guarded reads + live git status.
 - **Agent Manager** — Claude Code orchestration (plan / implement), risk-gated tool
   approvals, path guarding, diagnostics, session resume.

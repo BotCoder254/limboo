@@ -20,9 +20,11 @@ export default defineConfig({
       // runtime; it must stay external and be loaded via native dynamic import
       // (see AgentManager) rather than bundled into the CJS main entry.
       //
-      // `node-pty` is a native module: it `require()`s its compiled `pty.node`
-      // binary, so it must stay external (kept as a runtime `require`, resolved
-      // from node_modules, unpacked from the asar by AutoUnpackNatives).
+      // `node-pty` (pinned to the 1.2.0-beta Node-API line — see
+      // TerminalManager.ts) is a native module: it `require()`s its compiled
+      // `pty.node` / `conpty.node` binary, so it must stay external (kept as a
+      // runtime `require`, resolved from node_modules, unpacked from the asar by
+      // AutoUnpackNatives).
       // `electron-updater` does runtime `require()`s (its lazy provider loading +
       // native-ish behavior) that Rollup cannot trace, and it must resolve from
       // node_modules at runtime. Keep it external (plain runtime `require`) like

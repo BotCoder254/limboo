@@ -15,6 +15,23 @@ All notable changes to Limboo are documented here. The format is based on
   `SUPPORT`, `GOVERNANCE`, `AUTHORS`, `CITATION.cff`), and `.github/` automation
   (CI, CodeQL, Dependabot, issue/PR templates).
 
+### Changed
+
+- **Integrated Terminal** — pinned `node-pty` to the `1.2.0-beta` line,
+  Microsoft's in-progress rewrite of the native addon on Node-API
+  (`node-addon-api`) instead of NAN. The compiled binary is ABI-stable across
+  Node.js *and* Electron major versions, so the per-platform prebuilt bundled
+  in the npm package works as-is — no `node-gyp` rebuild, no Visual Studio
+  Build Tools requirement, for any Electron version including future ones.
+  `forge.config.ts`'s `rebuildConfig.ignoreModules` excludes `node-pty` from
+  Electron Forge's native-rebuild pass, since `@electron/rebuild` doesn't know
+  the bundled prebuilt is already correct and would otherwise try (and fail
+  without the toolchain) to recompile it. No terminal behavior change. (An
+  earlier attempt at this used `@homebridge/node-pty-prebuilt-multiarch`, a
+  NAN-based fork — verified afterward to have no published prebuilt past
+  roughly Electron 29's ABI, so it didn't actually fix the problem; superseded
+  by this change.) See [installation](docs/getting-started/installation.md).
+
 ## [1.0.0]
 
 The first consolidated release. The desktop foundation and platform services are

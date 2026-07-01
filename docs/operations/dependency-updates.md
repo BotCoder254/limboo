@@ -20,10 +20,13 @@ compatibility, and that the `.mts` ESM loading still holds.
 
 ## Native modules
 
-`better-sqlite3` and `node-pty` are compiled native modules. After a Node major
-upgrade or an Electron upgrade, reinstall so they rebuild against the new ABI. If a
-build fails, confirm the C/C++ toolchain is present and remove `node_modules` before
-reinstalling. See [installation](../getting-started/installation.md).
+`better-sqlite3` is a compiled native module. After a Node major upgrade,
+reinstall so it rebuilds against the new ABI; if a build fails, confirm the
+C/C++ toolchain is present and remove `node_modules` before reinstalling.
+`node-pty` (pinned to the Node-API `1.2.0-beta` line) does not need this —
+its prebuilt is ABI-stable across Node.js and Electron versions, and it's
+excluded from Electron Forge's rebuild pass (`forge.config.ts`
+`rebuildConfig.ignoreModules`). See [installation](../getting-started/installation.md).
 
 ## Process for a dependency PR
 

@@ -24,7 +24,7 @@ meta:
   project: limboo
   package_manager: npm            # package-lock.json is authoritative
   node_version: "22"              # Electron 42 requires Node >= 22.12 (ERR_REQUIRE_ESM otherwise)
-  native_modules: [better-sqlite3, node-pty]  # need a C/C++ toolchain + python3 to install
+  native_modules: [better-sqlite3]  # needs a C/C++ toolchain + python3; node-pty (Node-API 1.2.0-beta line) ships an ABI-stable prebuilt and is excluded from rebuild (forge.config.ts)
   platforms: [linux, macos, windows]
   installers:                     # produced by electron-builder (electron-builder.yml)
     windows: nsis                 # branded multi-page wizard + auto-update

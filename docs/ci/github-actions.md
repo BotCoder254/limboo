@@ -20,9 +20,11 @@ exactly one place. A single reusable build is also the path to SLSA Build L3.
 - For releases: **Settings -> Actions -> General -> Workflow permissions** set to allow
   workflows to create releases, or rely on the per-job `contents: write` already
   declared in `release.yml`.
-- Native modules (`better-sqlite3`, `node-pty`) compile from source; the workflows
-  install `build-essential python3` on Linux runners. macOS/Windows runners already
-  ship a toolchain.
+- `better-sqlite3` may compile from source; the workflows install
+  `build-essential python3` on Linux runners. macOS/Windows runners already
+  ship a toolchain. `node-pty` (pinned to the Node-API `1.2.0-beta` line) never
+  compiles — it loads a bundled, ABI-stable prebuilt and is excluded from
+  Electron Forge's native-rebuild pass (`forge.config.ts`).
 
 ## Permissions model
 

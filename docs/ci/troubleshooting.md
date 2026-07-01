@@ -1,13 +1,26 @@
 # CI/CD troubleshooting
 
-## Native module build fails (`better-sqlite3` / `node-pty`)
+## Native module build fails (`better-sqlite3`)
 
-These compile from source and need a C/C++ toolchain + Python.
+`better-sqlite3` ships prebuilt binaries for common platform/ABI combos, so
+`npm install` usually doesn't compile it — but on an unsupported platform/arch
+it needs a C/C++ toolchain + Python:
 
 - Linux: ensure `build-essential python3` is installed (the workflows do this).
 - macOS: Xcode Command Line Tools (`xcode-select --install`).
 - Windows: the GitHub `windows-latest` runner ships MSVC build tools; locally you may
   need the "Desktop development with C++" workload.
+
+**`node-pty` should never hit this.** It's pinned to the `1.2.0-beta` line —
+Microsoft's Node-API rewrite of the addon, which is ABI-stable across Node.js
+and Electron, so the bundled per-platform prebuilt loads as-is for any Electron
+ABI, no `node-gyp` rebuild. `forge.config.ts`'s `rebuildConfig.ignoreModules`
+explicitly excludes it from `@electron/rebuild`'s pass (which would otherwise
+try to recompile it and fail with `Could not find any Visual Studio
+installation to use`, since it doesn't know the bundled prebuilt is already
+correct). If you ever see that error mentioning `node-pty`, check that
+`ignoreModules` in `forge.config.ts` still lists it and that `package.json`
+still pins the `1.2.0-beta` line, not a NAN-based release/fork.
 
 If a prebuilt binary mismatches the Electron ABI, Forge's
 `plugin-auto-unpack-natives` + the maker rebuild handles it during `npm run package` /

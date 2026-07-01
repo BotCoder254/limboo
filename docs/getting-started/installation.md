@@ -7,17 +7,31 @@ supported path today.
 ## Prerequisites
 
 - **Node.js 20 or newer** and **npm**.
-- **A C/C++ build toolchain.** Two dependencies are native modules compiled during
-  `npm install`:
-  - `better-sqlite3` — the local database.
-  - `node-pty` — the integrated terminal's pseudo-terminals.
-
-  Install the platform toolchain first:
+- **A C/C++ build toolchain** for `better-sqlite3`, the local database — it ships
+  prebuilt binaries for common platforms/ABIs, so `npm install` usually doesn't
+  need to compile it, but a fallback compile is still possible on an
+  unsupported platform/arch.
   - **Linux** — `build-essential` and `python3` (for example
     `sudo apt-get install -y build-essential python3`).
   - **macOS** — the Xcode Command Line Tools (`xcode-select --install`).
   - **Windows** — the "Desktop development with C++" workload from the Visual Studio
     Build Tools.
+
+  **You should not need this toolchain for the integrated terminal.** It's
+  backed by `node-pty`, pinned to the `1.2.0-beta` line, which Microsoft
+  rewrote on Node-API (`node-addon-api`) instead of NAN — the compiled addon
+  is ABI-stable across Node.js *and* Electron major versions, so the
+  per-platform prebuilt bundled in the npm package works as-is, with no
+  `node-gyp` rebuild ever, for any Electron version including future ones.
+  Older `node-pty` releases (and NAN-based forks of it, like
+  `@homebridge/node-pty-prebuilt-multiarch`) don't have this property — they
+  rebuild via `node-gyp` for any Electron ABI without a matching prebuilt,
+  which needs the same toolchain as above. Because `@electron/rebuild` (used
+  by Electron Forge) doesn't know `node-pty@1.2.0-beta` is exempt, `node-pty`
+  is explicitly excluded from its rebuild pass via `ignoreModules` in
+  [`forge.config.ts`](../../forge.config.ts) — without that, Forge would still
+  try (and fail without Visual Studio) to recompile a module that doesn't need
+  it.
 
 - **A coding agent sign-in.** Limboo orchestrates the Claude Code agent through
   `@anthropic-ai/claude-agent-sdk` and never stores credentials. It reads an existing
@@ -68,9 +82,12 @@ Nothing is sent to a Limboo server, because there is none. See
 
 ## Troubleshooting
 
-- **Native module build fails** — confirm the C/C++ toolchain is installed, then
+- **`better-sqlite3` build fails** — confirm the C/C++ toolchain is installed, then
   remove `node_modules` and reinstall. A Node major-version change requires a
-  reinstall so native modules rebuild against the new ABI.
+  reinstall so it rebuilds against the new ABI. `@electron/rebuild` (a
+  devDependency) drives this rebuild for Forge's `start`/`package`/`make` steps
+  — it's configured in [`forge.config.ts`](../../forge.config.ts) to skip
+  `node-pty`, which doesn't need it (see above).
 - **The dev server is not reachable** — the main process retries the Vite dev server
   on launch and shows a diagnostic page if it never comes up. Restart `npm start`.
 - **Lint or build verification** — verify a checkout with `npm run lint` and

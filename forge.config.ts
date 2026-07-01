@@ -15,7 +15,15 @@ const config: ForgeConfig = {
     name: 'Limboo',
     icon: 'assets/icon',
   },
-  rebuildConfig: {},
+  // `node-pty` (pinned to the 1.2.0-beta Node-API line) ships its own
+  // ABI-stable per-platform prebuilt and resolves it at runtime without ever
+  // needing a `node-gyp` rebuild (see TerminalManager.ts). `@electron/rebuild`
+  // doesn't know that — left alone it tries to recompile every native module
+  // for Electron's ABI on every `start`/`package`/`make`, which fails on a
+  // machine with no Visual Studio Build Tools installed. Excluding it here is
+  // what actually avoids that requirement; better-sqlite3 (the only other
+  // native dep) still rebuilds normally.
+  rebuildConfig: { ignoreModules: ['node-pty'] },
   // No Forge makers: distributables are produced by electron-builder over the
   // Forge-packaged app dir (`npm run dist` -> scripts/dist.mjs), which is the only
   // path that supports the branded NSIS wizard + auto-update metadata + publishing.

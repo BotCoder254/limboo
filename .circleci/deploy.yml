@@ -20,7 +20,7 @@ executors:
 
 commands:
   install_native_deps:
-    description: System toolchain for native modules (better-sqlite3, node-pty)
+    description: System toolchain for native modules (better-sqlite3; node-pty ships an ABI-stable prebuilt and doesn't need this)
     steps:
       - run:
           name: Install build dependencies

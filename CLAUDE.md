@@ -415,7 +415,11 @@ the real (no-mock) UI. Each owns one responsibility:
   ahead/behind pill, an unpushed badge on the Git rail tab, and "publish branch"
   for an untracked branch. Push/pull preferences live under `settings.git.push` /
   `settings.git.pull`.
-- **Terminal Engine** (`managers/TerminalManager.ts`) — `node-pty` sessions.
+- **Terminal Engine** (`managers/TerminalManager.ts`) — `node-pty` sessions,
+  pinned to the `1.2.0-beta` line (Microsoft's Node-API rewrite): the bundled
+  per-platform prebuilt is ABI-stable across Node.js/Electron, so it never
+  needs a `node-gyp` rebuild; `forge.config.ts` excludes it from
+  `@electron/rebuild` accordingly.
 - **File System Layer** (`managers/FileSystemManager.ts`) — `chokidar` watch +
   tree index + guarded reads; pushes live git status into sessions.
 - **Agent Manager** (`managers/AgentManager.ts`) — drives `@anthropic-ai/claude-

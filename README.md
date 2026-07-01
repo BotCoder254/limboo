@@ -93,7 +93,7 @@ in the main process and crosses a single typed IPC bridge. See
 | Styling          | Tailwind CSS v4 (CSS-first, no config)          |
 | State            | Zustand 5 (slice-per-domain stores)             |
 | Database         | better-sqlite3 (WAL, FTS5)                       |
-| Terminal         | node-pty + xterm                                |
+| Terminal         | node-pty (Node-API) + xterm                     |
 | File watching    | chokidar                                        |
 | Coding agent     | `@anthropic-ai/claude-agent-sdk`                |
 | Icons            | lucide-react                                    |
@@ -103,9 +103,10 @@ in the main process and crosses a single typed IPC bridge. See
 **Prerequisites**
 
 - Node.js 20+ and npm.
-- A C/C++ build toolchain — `better-sqlite3` and `node-pty` are native modules
-  compiled on install (build-essential / Xcode Command Line Tools / MSVC Build
-  Tools depending on platform).
+- A C/C++ build toolchain for `better-sqlite3` (build-essential / Xcode Command
+  Line Tools / MSVC Build Tools depending on platform) — it may compile on
+  install if no matching prebuilt is published. `node-pty` (pinned to the
+  Node-API `1.2.0-beta` line) ships an ABI-stable prebuilt and never compiles.
 - The coding agent owns its own authentication. Limboo never stores credentials;
   it reads the agent's existing sign-in (for example `ANTHROPIC_API_KEY` or the
   Claude Code credentials file). See

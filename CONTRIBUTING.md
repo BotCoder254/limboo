@@ -16,7 +16,7 @@ summarizes. By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.
 ## Development setup
 
 ```bash
-npm install     # installs deps; compiles native modules (better-sqlite3, node-pty)
+npm install     # installs deps; may compile better-sqlite3 (node-pty ships a prebuilt)
 npm start       # runs Electron + Vite (renderer on :5173). There is no npm run dev.
 ```
 

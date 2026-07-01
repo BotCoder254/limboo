@@ -27,7 +27,11 @@ Reached via the `terminal:*` channels.
 
 ## Spawn details
 
-PTYs are spawned via `node-pty.spawn(shell, shellArgs, { cwd, cols, rows, env })`.
+PTYs are spawned via `pty.spawn(shell, shellArgs, { cwd, cols, rows, env })`, where
+`pty` is `node-pty` pinned to the `1.2.0-beta` line — Microsoft's Node-API rewrite
+of the addon, whose bundled per-platform prebuilt is ABI-stable across Node.js and
+Electron and never needs a `node-gyp` rebuild (see
+[installation](../../getting-started/installation.md)).
 The shell is resolved from the workspace config, then the global terminal setting,
 then the OS default. Args add interactive flags for bash / zsh / sh. The environment
 is sanitized: it inherits the user PATH and adds `TERM=xterm-256color`,

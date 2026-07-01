@@ -24,10 +24,13 @@ npm run publish   # publish (configured via forge.config.ts)
 
 ## Native modules
 
-Two dependencies are native modules (`better-sqlite3`, `node-pty`) and must be built
-for the target platform / Node ABI. The Forge `auto-unpack-natives` plugin keeps them
-runnable from the packaged app. Build on (or for) each target platform; cross-
-building native modules is not configured.
+Two dependencies are native modules: `better-sqlite3`, built per target platform
+/ Node ABI, and `node-pty` (pinned to the Node-API `1.2.0-beta` line), whose
+bundled prebuilt is ABI-stable and ships as-is — it's excluded from Electron
+Forge's native-rebuild pass (`forge.config.ts` `rebuildConfig.ignoreModules`).
+The Forge `auto-unpack-natives` plugin keeps both runnable from the packaged
+app. Build on (or for) each target platform; cross-building native modules is
+not configured.
 
 ## Build-output naming
 
