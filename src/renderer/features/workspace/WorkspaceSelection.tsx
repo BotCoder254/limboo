@@ -6,21 +6,30 @@
  * of truth every subsystem depends on.
  *
  * Structure: the frameless TitleBar on top (window controls + drag preserved),
- * then the recent-workspaces launcher centered in the body. Pure-black, dark
- * only — reuses existing primitives so it matches the rest of the app exactly.
+ * the recent-workspaces launcher in the body, and a themed, full-width animated
+ * skyline anchored to the bottom. A drag overlay covers the whole body so a folder
+ * can be dropped anywhere on the window (it only appears while dragging). Pure
+ * black, dark only — reuses existing primitives so it matches the app exactly.
  */
 import { TitleBar } from '@/renderer/components/layout/TitleBar';
 import { WorkspaceLauncher } from './WorkspaceLauncher';
+import { WorkspaceSkyline } from './WorkspaceSkyline';
+import { WorkspaceDragOverlay } from './WorkspaceDropZone';
 
 export function WorkspaceSelection() {
   return (
-    <div className="flex h-full w-full flex-col bg-base text-fg">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-base text-fg">
       <TitleBar />
-      {/* The launcher owns its own internal scroll for the workspace list, so
-          give it the full remaining height rather than a second scroller. */}
-      <div className="min-h-0 flex-1 px-4">
+      {/* Body: the launcher scrolls internally; the drop overlay fills it during a
+          drag. `relative` anchors both the overlay and the bottom fade. */}
+      <div className="relative min-h-0 flex-1 px-4">
         <WorkspaceLauncher />
+        <WorkspaceDragOverlay />
+        {/* Soft fade so the list dissolves into the skyline instead of colliding. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-16 bg-gradient-to-t from-base to-transparent" />
       </div>
+      {/* Full-window-width skyline footer, edge to edge, alive on hover. */}
+      <WorkspaceSkyline className="h-[24vh] max-h-[220px] min-h-[130px] shrink-0" />
     </div>
   );
 }

@@ -140,6 +140,22 @@ html[data-reduced-motion="true"] *::after {
   to { background-position: 200% 0; }
 }
 
+/* Skyline "breathe": bars rise a touch while the launcher skyline is hovered,
+   pairing with the SVG liquid-displacement filter for a poured-liquid feel. */
+@keyframes limboo-skyline-breathe {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.035); }
+}
+
+.limboo-skyline .limboo-skyline-bars {
+  transform-origin: bottom;
+  transition: transform 400ms ease-out;
+}
+
+.limboo-skyline:hover .limboo-skyline-bars {
+  animation: limboo-skyline-breathe 3.2s ease-in-out infinite;
+}
+
 @utility animate-fade-in {
   animation: limboo-fade-in 120ms ease-out;
 }

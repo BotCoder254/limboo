@@ -16,6 +16,10 @@ interface WorkspaceState {
   hydrated: boolean;
   /** True while a native directory picker is open (mirrors the main-process guard). */
   picking: boolean;
+  /** Which view the full-screen launcher shows: the recent list or the create form.
+   *  Held here (not local component state) so the command palette / native menu can
+   *  open the in-app "Create workspace" panel without firing the OS folder dialog. */
+  launcherView: 'list' | 'create';
   /** Lazily-loaded per-workspace statistics, memoized by id (each entry is one
    *  bounded filesystem walk, so we fetch on demand — not eagerly for every card). */
   statsById: Record<string, WorkspaceStats>;
@@ -24,6 +28,9 @@ interface WorkspaceState {
   open: (path: string) => Promise<Workspace | null>;
   openPath: (path: string) => Promise<Workspace | null>;
   create: (path: string) => Promise<Workspace | null>;
+  /** Create a brand-new project folder and open it (no native folder dialog). */
+  createNew: (name: string, parentPath: string, initGit: boolean) => Promise<Workspace | null>;
+  setLauncherView: (view: 'list' | 'create') => void;
   switchTo: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   toggleFavorite: (id: string) => Promise<void>;
@@ -54,6 +61,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   activeId: null,
   hydrated: false,
   picking: false,
+  launcherView: 'list',
   statsById: {},
 
   hydrate: async () => {
@@ -115,6 +123,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((s) => ({ workspaces: mergeWorkspace(s.workspaces, ws), activeId: ws.id }));
     return ws;
   },
+
+  createNew: async (name, parentPath, initGit) => {
+    const api = workspaceApi();
+    if (!api) return null;
+    const ws = await api.createNew({ name, parentPath, initGit });
+    // Optimistically activate + reset the launcher back to the list (the launcher
+    // unmounts anyway once activeId flips the shell in).
+    set((s) => ({
+      workspaces: mergeWorkspace(s.workspaces, ws),
+      activeId: ws.id,
+      launcherView: 'list',
+    }));
+    return ws;
+  },
+
+  setLauncherView: (view) => set({ launcherView: view }),
 
   switchTo: async (id) => {
     const api = workspaceApi();

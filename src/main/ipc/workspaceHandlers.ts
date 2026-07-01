@@ -44,6 +44,42 @@ function assertValidPath(p: unknown): asserts p is string {
   }
 }
 
+/** Characters never allowed in a new workspace folder name: Windows reserved
+ *  filename characters plus ASCII control codes. */
+// eslint-disable-next-line no-control-regex
+const ILLEGAL_NAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
+/** Reserved device names Windows forbids as a directory name (case-insensitive). */
+const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/**
+ * Validate a renderer-supplied name for a *new* workspace folder. Rejects path
+ * separators, traversal, illegal characters, reserved Windows device names, and
+ * over-long input before the main process ever calls `mkdir`. The name must be a
+ * single folder segment — the parent location is validated separately.
+ */
+function assertValidWorkspaceName(name: unknown): asserts name is string {
+  if (typeof name !== 'string') {
+    throw new Error('workspace:createNew name must be a string');
+  }
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > WORKSPACE_LIMITS.nameMax) {
+    throw new Error('workspace:createNew name is empty or too long');
+  }
+  if (trimmed === '.' || trimmed === '..') {
+    throw new Error('workspace:createNew name is not a valid folder name');
+  }
+  if (ILLEGAL_NAME_CHARS.test(trimmed)) {
+    throw new Error('workspace:createNew name contains characters that are not allowed');
+  }
+  // Trailing dots/spaces are stripped by Windows and cause surprising folder names.
+  if (/[. ]$/.test(trimmed)) {
+    throw new Error('workspace:createNew name may not end with a space or dot');
+  }
+  if (RESERVED_NAMES.test(trimmed)) {
+    throw new Error('workspace:createNew name is a reserved system name');
+  }
+}
+
 /** Cap on how many ignored-dir entries a config patch may carry. */
 const MAX_IGNORED_DIRS = 200;
 /** Per-entry length cap for an ignored-dir glob/name. */
@@ -127,6 +163,34 @@ export function registerWorkspaceHandlers(workspace: WorkspaceManager): void {
       return rethrow(err);
     }
   });
+
+  handle<[{ name: string; parentPath: string; initGit: boolean }], Workspace>(
+    IpcChannels.workspaceCreateNew,
+    (_e, input) => {
+      if (!isPlainObject(input)) {
+        throw new Error('workspace:createNew expects an object payload');
+      }
+      // Keep the prototype-pollution guard consistent with updateConfig.
+      assertNoPollutingKeys(input);
+      assertValidWorkspaceName((input as { name?: unknown }).name);
+      assertValidPath((input as { parentPath?: unknown }).parentPath);
+      const initGit = (input as { initGit?: unknown }).initGit;
+      if (typeof initGit !== 'boolean') {
+        throw new Error('workspace:createNew initGit must be a boolean');
+      }
+      try {
+        return workspace.createNew({
+          name: (input as { name: string }).name.trim(),
+          parentPath: (input as { parentPath: string }).parentPath,
+          initGit,
+        });
+      } catch (err) {
+        // Log the failure without the raw path (redaction: id/paths stay out of logs).
+        logger.warn('workspace:createNew failed');
+        return rethrow(err);
+      }
+    },
+  );
 
   handle<[string], Workspace>(IpcChannels.workspaceOpen, (_e, p) => {
     assertValidPath(p);

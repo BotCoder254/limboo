@@ -33,6 +33,7 @@ export const IpcChannels = {
   workspaceGet: 'workspace:get',
   workspacePickDirectory: 'workspace:pickDirectory',
   workspaceCreate: 'workspace:create',
+  workspaceCreateNew: 'workspace:createNew',
   workspaceOpen: 'workspace:open',
   workspaceSwitch: 'workspace:switch',
   workspaceRemove: 'workspace:remove',

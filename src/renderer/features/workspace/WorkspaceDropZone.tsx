@@ -1,60 +1,83 @@
 /**
- * Drag-and-drop target for adding a workspace by dropping a project folder.
- * Doubles as the modern empty state on the launcher. Resolves the dropped
- * folder's real path through `window.limboo.system.getDroppedPath` (the
- * Electron-32+ supported replacement for `File.path`) and hands it to the
- * validated `workspace:open` IPC — the renderer never touches the filesystem.
+ * Drag-and-drop support for adding a workspace by dropping a project folder, split
+ * into two pieces:
  *
- * Marked `data-dropzone` so the global drop-navigation guard
- * (`usePreventFileDrop`) lets these events through to be handled here.
+ *  - `WorkspaceDragOverlay` — a full-area drop target that appears ONLY while a file
+ *    is being dragged over the window (no permanent dashed box at rest). It resolves
+ *    the dropped folder's real path through `window.limboo.system.getDroppedPath`
+ *    (the Electron-32+ replacement for `File.path`) and hands it to the validated
+ *    `workspace:open` IPC — the renderer never touches the filesystem.
+ *  - `WorkspaceActions` — the always-visible Open / Create buttons (no dashed
+ *    border), used by both the empty state and the populated launcher.
+ *
+ * The overlay is marked `data-dropzone` so the global drop-navigation guard
+ * (`usePreventFileDrop`) lets its events through to be handled here.
  */
-import { useRef, useState } from 'react';
-import { FolderInput, FolderOpen, FolderPlus } from 'lucide-react';
+import { FolderOpen, FolderPlus, FolderInput } from 'lucide-react';
 import { cn } from '@/renderer/lib/cn';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
+import { useFileDragActive } from '@/renderer/hooks/usePreventFileDrop';
 import { WorkspaceActionButton } from './WorkspaceActionButton';
-import type { Workspace } from '@shared/types';
 
-interface WorkspaceDropZoneProps {
-  /** Compact variant for the always-visible affordance above a populated list. */
-  compact?: boolean;
-}
-
-export function WorkspaceDropZone({ compact = false }: WorkspaceDropZoneProps) {
+/** Open / Create actions. `size='lg'` is the roomier hero variant on the empty state. */
+export function WorkspaceActions({ size = 'md' }: { size?: 'md' | 'lg' }) {
   const pickDirectory = useWorkspaceStore((s) => s.pickDirectory);
   const open = useWorkspaceStore((s) => s.open);
-  const create = useWorkspaceStore((s) => s.create);
-  const openPath = useWorkspaceStore((s) => s.openPath);
+  const setLauncherView = useWorkspaceStore((s) => s.setLauncherView);
   const addToast = useUIStore((s) => s.addToast);
 
-  const [isDragging, setIsDragging] = useState(false);
-  // Drag enter/leave fire for child elements too; count depth to know when the
-  // cursor has truly left the zone.
-  const depth = useRef(0);
-
-  const toastError = (err: unknown) =>
-    addToast({
-      title: 'Could not open workspace',
-      description: err instanceof Error ? err.message : String(err),
-      tone: 'danger',
-    });
-
-  const pickAnd = async (action: (path: string) => Promise<Workspace | null>) => {
+  const openFolder = async () => {
     try {
       const dir = await pickDirectory();
       if (!dir) return;
-      await action(dir);
+      await open(dir);
     } catch (err) {
-      toastError(err);
+      addToast({
+        title: 'Could not open workspace',
+        description: err instanceof Error ? err.message : String(err),
+        tone: 'danger',
+      });
     }
   };
+
+  return (
+    <div
+      className={cn(
+        'flex w-full flex-wrap items-center justify-center gap-2',
+        size === 'lg' && 'gap-3',
+      )}
+    >
+      <WorkspaceActionButton icon={FolderOpen} variant="secondary" size={size} onClick={openFolder}>
+        Open folder
+      </WorkspaceActionButton>
+      {/* In-app create flow — opens the Create panel, never the OS folder dialog. */}
+      <WorkspaceActionButton
+        icon={FolderPlus}
+        variant="primary"
+        size={size}
+        onClick={() => setLauncherView('create')}
+      >
+        Create workspace
+      </WorkspaceActionButton>
+    </div>
+  );
+}
+
+/**
+ * Full-area drop target, rendered only during an active file drag. Absolute-fills
+ * its positioned parent (the launcher body), so the parent must be `relative`.
+ */
+export function WorkspaceDragOverlay() {
+  const openPath = useWorkspaceStore((s) => s.openPath);
+  const addToast = useUIStore((s) => s.addToast);
+  const dragging = useFileDragActive();
+
+  if (!dragging) return null;
 
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    depth.current = 0;
-    setIsDragging(false);
 
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
@@ -75,57 +98,33 @@ export function WorkspaceDropZone({ compact = false }: WorkspaceDropZoneProps) {
       // happens in the main process via the workspace:open IPC.
       await openPath(path);
     } catch (err) {
-      toastError(err);
+      addToast({
+        title: 'Could not open workspace',
+        description: err instanceof Error ? err.message : String(err),
+        tone: 'danger',
+      });
     }
   };
 
   return (
     <div
       data-dropzone
-      onDragEnter={(e) => {
-        e.preventDefault();
-        depth.current += 1;
-        setIsDragging(true);
-      }}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
       }}
-      onDragLeave={() => {
-        depth.current = Math.max(0, depth.current - 1);
-        if (depth.current === 0) setIsDragging(false);
-      }}
       onDrop={onDrop}
       className={cn(
-        'flex flex-col items-center justify-center rounded-xl border-2 border-dashed text-center transition-colors',
-        compact ? 'gap-2 px-4 py-5' : 'gap-4 px-6 py-12',
-        isDragging
-          ? 'border-accent bg-surface-2'
-          : 'border-line-strong bg-surface/40 hover:border-line-strong',
+        'animate-fade-in absolute inset-2 z-40 flex flex-col items-center justify-center gap-4',
+        'rounded-2xl border-2 border-dashed border-accent bg-base/80 text-center backdrop-blur-sm',
       )}
     >
-      <FolderInput
-        size={compact ? 22 : 40}
-        className={cn('transition-colors', isDragging ? 'text-accent' : 'text-faint')}
-      />
+      <FolderInput size={44} className="text-accent" />
       <div className="flex flex-col gap-1">
-        <span className={cn('font-medium text-fg', compact ? 'text-[12px]' : 'text-sm')}>
-          {isDragging ? 'Drop to open as a workspace' : 'Drop a folder here'}
+        <span className="text-sm font-medium text-fg">Drop to open as a workspace</span>
+        <span className="text-[12px] text-muted">
+          Limboo profiles its languages, package managers, and git branch automatically.
         </span>
-        {!compact && (
-          <span className="max-w-[28rem] text-[12px] leading-relaxed text-muted">
-            Drag a project folder in, or browse below. Limboo profiles its languages,
-            package managers, and git branch automatically.
-          </span>
-        )}
-      </div>
-      <div className="mt-1 flex items-center justify-center gap-2">
-        <WorkspaceActionButton icon={FolderOpen} variant="secondary" onClick={() => pickAnd(open)}>
-          Open folder
-        </WorkspaceActionButton>
-        <WorkspaceActionButton icon={FolderPlus} variant="primary" onClick={() => pickAnd(create)}>
-          Create workspace
-        </WorkspaceActionButton>
       </div>
     </div>
   );
