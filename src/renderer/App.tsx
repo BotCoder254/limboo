@@ -6,6 +6,7 @@
 import { useEffect } from 'react';
 import { AppShell } from '@/renderer/app/AppShell';
 import { WorkspaceSelection } from '@/renderer/features/workspace/WorkspaceSelection';
+import { WorkspaceCreateScreen } from '@/renderer/features/workspace/WorkspaceCreateScreen';
 import { CommandPalette } from '@/renderer/features/command-palette/CommandPalette';
 import { SettingsModal } from '@/renderer/features/settings/SettingsModal';
 import { UpdateBanner } from '@/renderer/features/updates/UpdateBanner';
@@ -33,6 +34,9 @@ export function App() {
   // the persisted active workspace has loaded.
   const hydrated = useWorkspaceStore((s) => s.hydrated);
   const hasWorkspace = useWorkspaceStore((s) => s.activeId !== null);
+  // The in-app Create flow takes over the whole window (works with or without an
+  // active workspace) so the title-bar switcher can reach it too — see gating below.
+  const creating = useWorkspaceStore((s) => s.launcherView === 'create');
 
   // Load registered workspaces + sessions + connect to the coding agent once the
   // shell is up. Workspaces hydrate first so the session list can scope to the
@@ -58,7 +62,13 @@ export function App() {
 
   return (
     <>
-      {!hydrated ? null : hasWorkspace ? <AppShell /> : <WorkspaceSelection />}
+      {!hydrated ? null : creating ? (
+        <WorkspaceCreateScreen />
+      ) : hasWorkspace ? (
+        <AppShell />
+      ) : (
+        <WorkspaceSelection />
+      )}
       <CommandPalette />
       <SettingsModal />
       <UpdateBanner />

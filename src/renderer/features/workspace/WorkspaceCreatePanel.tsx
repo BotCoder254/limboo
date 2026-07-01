@@ -19,7 +19,7 @@ import { WorkspaceActionButton } from './WorkspaceActionButton';
 
 /** Mirror of the main-process name guard, for immediate inline feedback only. */
 // eslint-disable-next-line no-control-regex
-const ILLEGAL = /[<>:"/\\|?*\x00-\x1f]/;
+const ILLEGAL = /[<>:"/\\|?*\x00-\x1f\x7f]/;
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 function nameError(name: string): string | null {

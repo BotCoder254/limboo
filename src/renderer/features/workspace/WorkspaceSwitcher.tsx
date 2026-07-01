@@ -16,7 +16,7 @@ export function WorkspaceSwitcher() {
   const switchTo = useWorkspaceStore((s) => s.switchTo);
   const pickDirectory = useWorkspaceStore((s) => s.pickDirectory);
   const open = useWorkspaceStore((s) => s.open);
-  const create = useWorkspaceStore((s) => s.create);
+  const setLauncherView = useWorkspaceStore((s) => s.setLauncherView);
   const rescan = useWorkspaceStore((s) => s.rescan);
   const addToast = useUIStore((s) => s.addToast);
 
@@ -67,7 +67,7 @@ export function WorkspaceSwitcher() {
       <button
         type="button"
         onClick={() => setOpenMenu((v) => !v)}
-        className="no-drag ml-1 flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-fg"
+        className="no-drag ml-1 flex items-center gap-2 rounded-md px-2 py-1 text-[11px] text-muted transition-colors hover:text-fg"
       >
         {active ? (
           <>
@@ -139,7 +139,10 @@ export function WorkspaceSwitcher() {
           </button>
           <button
             type="button"
-            onClick={() => pickAnd(create)}
+            onClick={() => {
+              setOpenMenu(false);
+              setLauncherView('create');
+            }}
             className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[12px] text-muted transition-colors hover:bg-surface-2 hover:text-fg"
           >
             <FolderPlus size={14} />
