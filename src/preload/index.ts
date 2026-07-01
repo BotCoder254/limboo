@@ -120,6 +120,8 @@ const workspaceApi = {
     ipcRenderer.invoke(IpcChannels.workspacePickDirectory),
   create: (path: string): Promise<Workspace> =>
     ipcRenderer.invoke(IpcChannels.workspaceCreate, path),
+  createNew: (input: { name: string; parentPath: string; initGit: boolean }): Promise<Workspace> =>
+    ipcRenderer.invoke(IpcChannels.workspaceCreateNew, input),
   open: (path: string): Promise<Workspace> => ipcRenderer.invoke(IpcChannels.workspaceOpen, path),
   switch: (id: string): Promise<Workspace> => ipcRenderer.invoke(IpcChannels.workspaceSwitch, id),
   remove: (id: string, deleteFiles = false): Promise<void> =>

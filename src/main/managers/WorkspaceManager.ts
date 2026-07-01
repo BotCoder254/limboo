@@ -8,6 +8,8 @@
  * lifecycle state machine, and broadcast changes to all windows.
  */
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { BrowserWindow } from 'electron';
 import type Database from 'better-sqlite3';
 import { IpcEvents } from '@shared/ipc-channels';
@@ -26,7 +28,7 @@ import path from 'node:path';
 import { deriveIcon } from './workspace/icon';
 import { detectWorkspace } from './workspace/detect';
 import { computeStats } from './workspace/stats';
-import { validateWorkspacePath } from './workspace/validate';
+import { validateWorkspacePath, isInsideRoot } from './workspace/validate';
 
 interface WorkspaceRow {
   id: string;
@@ -115,6 +117,68 @@ export class WorkspaceManager {
   /** Register a directory as a new workspace (or open it if it already exists). */
   create(inputPath: string): Workspace {
     return this.register(inputPath, 'created');
+  }
+
+  /**
+   * Create a brand-new project directory inside `parentPath` and register it as a
+   * workspace. Unlike `create()` (which expects an already-existing folder), this
+   * makes the folder itself so the in-app "Create workspace" flow never has to pop
+   * the native OS folder dialog.
+   *
+   * Security (CLAUDE.md §6): the parent is validated through the same pipeline as
+   * an opened workspace (realpath, forbidden roots, home dir, read/write perms);
+   * the leaf name is re-checked to stay directly inside that *real* parent so a
+   * crafted name with separators or `..` can never escape the chosen location; the
+   * directory is created non-recursively and an existing non-empty folder is
+   * refused; `git init` runs argv-only (no `shell: true`) with a bounded timeout
+   * and its failure is soft (the workspace is still valid without a repo).
+   */
+  createNew(input: { name: string; parentPath: string; initGit: boolean }): Workspace {
+    const name = input.name.trim();
+
+    // Validate + canonicalize the parent directory (reuses the open-time checks).
+    const { result, realPath: parentReal } = validateWorkspacePath(input.parentPath, {
+      existingPaths: [],
+    });
+    if (!result.ok) {
+      throw new WorkspaceValidationError(result);
+    }
+
+    const target = path.join(parentReal, name);
+    // Defense in depth: after path.join, the new folder must be a *direct* child of
+    // the real parent. This rejects any name that still slipped a separator or `..`.
+    if (!isInsideRoot(parentReal, target) || path.dirname(target) !== parentReal) {
+      throw new WorkspaceValidationError({
+        ok: false,
+        errors: ['The workspace name must be a single folder name, not a path.'],
+        warnings: [],
+      });
+    }
+
+    // Create the directory. Never silently adopt a pre-existing, non-empty folder.
+    if (fs.existsSync(target)) {
+      if (fs.readdirSync(target).length > 0) {
+        throw new WorkspaceValidationError({
+          ok: false,
+          errors: ['A non-empty folder with that name already exists at this location.'],
+          warnings: [],
+        });
+      }
+    } else {
+      fs.mkdirSync(target, { recursive: false });
+    }
+
+    if (input.initGit) {
+      try {
+        execFileSync('git', ['init'], { cwd: target, timeout: 5000, stdio: 'ignore' });
+      } catch (err) {
+        logger.warn('workspace:createNew git init failed (workspace still created)', err);
+      }
+    }
+
+    // Register the freshly-created path through the shared pipeline (detect + icon +
+    // persist + set active). Logs the workspace id, not the raw path.
+    return this.register(target, 'created');
   }
 
   /** Open an existing directory as a workspace (same pipeline as create). */

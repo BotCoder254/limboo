@@ -42,14 +42,14 @@ async function reindexActiveWorkspace(): Promise<void> {
   }
 }
 
-/** Pick a directory and run a workspace action, surfacing errors as a toast. */
-async function pickWorkspace(action: 'open' | 'create'): Promise<void> {
+/** Pick a folder and open it as a workspace, surfacing errors as a toast. Creating
+ *  a *new* workspace goes through the in-app Create panel instead (no OS dialog). */
+async function openWorkspaceFolder(): Promise<void> {
   const store = useWorkspaceStore.getState();
   try {
     const dir = await store.pickDirectory();
     if (!dir) return;
-    if (action === 'open') await store.open(dir);
-    else await store.create(dir);
+    await store.open(dir);
   } catch (err) {
     useUIStore.getState().addToast({
       title: 'Could not open workspace',
@@ -78,14 +78,15 @@ export const COMMANDS: Command[] = [
     section: 'Workspace',
     keys: ['Mod', 'O'],
     inPalette: true,
-    run: () => void pickWorkspace('open'),
+    run: () => void openWorkspaceFolder(),
   },
   {
     id: 'workspace.new',
     title: 'Create workspace',
     section: 'Workspace',
     inPalette: true,
-    run: () => void pickWorkspace('create'),
+    // Open the in-app Create panel rather than firing the native folder dialog.
+    run: () => useWorkspaceStore.getState().setLauncherView('create'),
   },
   {
     id: 'session.new',

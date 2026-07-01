@@ -9,17 +9,19 @@
  * it owns the project-launcher experience that gates the rest of the shell.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { FileText, GitBranch, GitCommitHorizontal, HardDrive, Pin, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { FileText, FolderInput, GitBranch, GitCommitHorizontal, HardDrive, Pin, RefreshCw, Search, Trash2 } from 'lucide-react';
 import type { Workspace } from '@shared/types';
 import { Badge, EmptyState, IconButton } from '@/renderer/components/ui';
 import { formatBytes, formatCount, relativeTime } from '@/renderer/lib/format';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { WorkspaceIconBadge } from './WorkspaceIconBadge';
-import { WorkspaceDropZone } from './WorkspaceDropZone';
+import { WorkspaceActions } from './WorkspaceDropZone';
+import { WorkspaceCreatePanel } from './WorkspaceCreatePanel';
 import { WorkspaceRemoveDialog } from './WorkspaceRemoveDialog';
 
 export function WorkspaceLauncher() {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const launcherView = useWorkspaceStore((s) => s.launcherView);
 
   const [query, setQuery] = useState('');
   // Workspace pending safe-delete confirmation (null = dialog closed).
@@ -41,58 +43,75 @@ export function WorkspaceLauncher() {
     });
   }, [workspaces, query]);
 
+  // The in-app Create form takes over the launcher body (no native folder dialog).
+  if (launcherView === 'create') {
+    return <WorkspaceCreatePanel />;
+  }
+
+  // Empty state: a centered hero with large Open / Create actions. Dropping a
+  // folder anywhere on the window works too (handled by the drag overlay).
+  if (workspaces.length === 0) {
+    return (
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col items-center justify-center gap-7 py-8 text-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="rounded-2xl border border-line bg-surface-2 p-4">
+            <FolderInput size={40} className="text-faint" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <h1 className="text-xl font-semibold tracking-tight text-fg">Open a project to begin</h1>
+            <p className="max-w-md text-[13px] leading-relaxed text-muted">
+              Every session lives inside a workspace. Open an existing folder, create a
+              new one, or drop a folder anywhere on this window.
+            </p>
+          </div>
+        </div>
+        <WorkspaceActions size="lg" />
+      </div>
+    );
+  }
+
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-5 py-8">
-      {/* Heading */}
-      <div className="flex flex-col gap-1">
-        <h1 className="text-base font-semibold tracking-tight text-fg">Workspaces</h1>
-        <p className="text-[12px] text-muted">
-          Open a project folder to begin. Every session lives inside a workspace.
-        </p>
+    <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-4 py-8">
+      {/* Heading + primary actions */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-base font-semibold tracking-tight text-fg">Workspaces</h1>
+          <p className="text-[12px] text-muted">
+            Open a project folder to begin. Every session lives inside a workspace.
+          </p>
+        </div>
+        <WorkspaceActions />
       </div>
 
-      {workspaces.length === 0 ? (
-        // Modern empty state: the drop zone IS the primary affordance.
-        <WorkspaceDropZone />
-      ) : (
-        <>
-          {/* Always-visible compact drop zone + actions above the list. */}
-          <WorkspaceDropZone compact />
+      <div className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5">
+        <Search size={14} className="text-faint" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter workspaces…"
+          className="flex-1 bg-transparent py-2 text-[12px] text-fg placeholder:text-faint focus:outline-none"
+        />
+      </div>
 
-          <div className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5">
-            <Search size={14} className="text-faint" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter workspaces…"
-              className="flex-1 bg-transparent py-2 text-[12px] text-fg placeholder:text-faint focus:outline-none"
-            />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <EmptyState
-                compact
-                icon={Search}
-                title="No matches"
-                description="No workspaces match your filter."
-              />
-            ) : (
-              <ul className="flex flex-col gap-2">
-                {filtered.map((ws) => (
-                  <WorkspaceCard key={ws.id} ws={ws} onRequestRemove={() => setPendingRemove(ws)} />
-                ))}
-              </ul>
-            )}
-          </div>
-        </>
-      )}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+        {filtered.length === 0 ? (
+          <EmptyState
+            compact
+            icon={Search}
+            title="No matches"
+            description="No workspaces match your filter."
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {filtered.map((ws) => (
+              <WorkspaceCard key={ws.id} ws={ws} onRequestRemove={() => setPendingRemove(ws)} />
+            ))}
+          </ul>
+        )}
+      </div>
 
       {pendingRemove && (
-        <WorkspaceRemoveDialog
-          workspace={pendingRemove}
-          onClose={() => setPendingRemove(null)}
-        />
+        <WorkspaceRemoveDialog workspace={pendingRemove} onClose={() => setPendingRemove(null)} />
       )}
     </div>
   );
