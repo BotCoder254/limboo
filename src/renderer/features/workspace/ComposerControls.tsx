@@ -11,14 +11,17 @@ import { cn } from '@/renderer/lib/cn';
 import { ProviderIcon } from '@/renderer/components/brand/ProviderIcon';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 
-interface Option<T extends string> {
+export interface Option<T extends string> {
   value: T;
   label: string;
   /** Optional leading glyph rendered in the menu + trigger. */
   glyph?: React.ReactNode;
 }
 
-function MiniSelect<T extends string>({
+/** A compact popover select used across the composer footer (model / thinking /
+ *  approval — and the Plan/Build mode switch). Exported so every composer control
+ *  reads and behaves identically (same trigger, popover, click-outside, Esc). */
+export function MiniSelect<T extends string>({
   value,
   options,
   onChange,
@@ -57,14 +60,14 @@ function MiniSelect<T extends string>({
   }, [open]);
 
   return (
-    <div ref={ref} className="relative no-drag">
+    <div ref={ref} className="relative no-drag min-w-0">
       <button
         type="button"
         title={title}
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50',
+          'flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50',
           open && 'bg-elevated text-fg',
         )}
       >
@@ -103,7 +106,7 @@ export function ComposerControls({ disabled = false }: { disabled?: boolean }) {
   const update = useSettingsStore((s) => s.update);
 
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="flex min-w-0 items-center gap-0.5">
       <MiniSelect
         title="Model"
         value={agent.model}

@@ -13,7 +13,7 @@
  * full-width Markdown (with streaming-aware highlighted code blocks); the user's
  * turn renders as a compact right-aligned bubble.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Check,
   ChevronRight,
@@ -238,7 +238,11 @@ function findScrollParent(node: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-function TurnView({
+// Memoized so a streaming delta (which re-renders ConversationView every frame)
+// only re-renders the in-flight turn: settled turns receive referentially-stable
+// props (their `turn` object keeps identity across rebuilds, and approval/waiting/
+// thinking are only truthy for the last turn) and skip re-rendering entirely.
+const TurnView = memo(function TurnView({
   turn,
   approval,
   waiting,
@@ -266,6 +270,38 @@ function TurnView({
       {showAssistant && <AssistantBlock blocks={turn.blocks} trailing={trailing} />}
     </div>
   );
+}, turnsEqual);
+
+/** The payload behind a block (message / tool call / activity item). Blocks are
+ *  rebuilt (fresh wrappers) on every event, but the underlying entities keep their
+ *  identity unless they actually changed — so a settled turn compares equal and a
+ *  streaming turn (whose message object is replaced each frame) does not. */
+function blockPayload(b: Block): unknown {
+  return b.kind === 'text' ? b.message : b.kind === 'tool' ? b.call : b.item;
+}
+
+function sameBlocks(a: Block[], b: Block[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].kind !== b[i].kind || blockPayload(a[i]) !== blockPayload(b[i])) return false;
+  }
+  return true;
+}
+
+/** memo comparator for {@link TurnView}: skip re-render when nothing this turn
+ *  depends on changed by identity. This is what keeps streaming cheap. */
+function turnsEqual(
+  prev: { turn: Turn; approval: PermissionRequest | null; waiting?: boolean; thinking?: boolean },
+  next: { turn: Turn; approval: PermissionRequest | null; waiting?: boolean; thinking?: boolean },
+): boolean {
+  return (
+    prev.approval === next.approval &&
+    prev.waiting === next.waiting &&
+    prev.thinking === next.thinking &&
+    prev.turn.key === next.turn.key &&
+    prev.turn.user === next.turn.user &&
+    sameBlocks(prev.turn.blocks, next.turn.blocks)
+  );
 }
 
 /** Lightweight inline status while the run is paused on an AskUserQuestion. The
@@ -282,7 +318,7 @@ function WaitingForDecision() {
 function UserBubble({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-md bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md border border-line bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
         {message.text}
       </div>
     </div>
@@ -292,7 +328,13 @@ function UserBubble({ message }: { message: ChatMessage }) {
 /** The assistant's response for a turn: a single avatar plus a vertical flow of
  *  chronologically-interleaved sub-items (text, tool rows, status markers, and an
  *  optional trailing approval). */
-function AssistantBlock({ blocks, trailing }: { blocks: Block[]; trailing?: ReactNode }) {
+const AssistantBlock = memo(function AssistantBlock({
+  blocks,
+  trailing,
+}: {
+  blocks: Block[];
+  trailing?: ReactNode;
+}) {
   const streaming = blocks.some((b) => b.kind === 'text' && b.message.streaming);
   return (
     <div className="flex gap-3 animate-fade-in">
@@ -309,7 +351,7 @@ function AssistantBlock({ blocks, trailing }: { blocks: Block[]; trailing?: Reac
       </div>
     </div>
   );
-}
+});
 
 function AssistantText({ message }: { message: ChatMessage }) {
   // A streaming message with no text yet is the pre-first-token moment — reserve
