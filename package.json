@@ -12,6 +12,7 @@
     "publish": "electron-forge publish",
     "dist": "electron-forge package && node scripts/dist.mjs",
     "dist:publish": "electron-forge package && node scripts/dist.mjs --publish always",
+    "gen:icons": "node scripts/gen-icons.mjs",
     "lint": "eslint --ext .ts,.tsx ."
   },
   "engines": {
@@ -45,6 +46,7 @@
     "electron-builder": "^26.15.3",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.3.1",
     "typescript": "~4.5.4",
     "vite": "^5.4.21"

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # Regenerate the branded Windows-installer art from the single source of truth,
-# assets/icon.svg (the lucide "Orbit" mark, stroke #6e9bff on transparent).
+# assets/icon.svg (the Limboo pink "blob" mark, fill #ff0066 on transparent).
 #
 # Mirrors the rsvg-convert workflow already documented in CLAUDE.md for the app
 # icon. Everything the NSIS wizard shows is derived here so the installer reads as
-# the same product as the app: pure-black (#000000) canvas, #6e9bff accent, the
+# the same product as the app: pure-black (#000000) canvas, #ff0066 brand mark, the
 # #ededed wordmark. Run after editing assets/icon.svg:
 #
 #   bash scripts/gen-installer-assets.sh
@@ -36,7 +36,7 @@ FONT_BOLD="$(fc-match -f '%{file}' 'sans-serif:bold' 2>/dev/null || echo "$FONT"
 
 mkdir -p "$OUT"
 
-echo "[assets] rasterizing orbit mark from $SRC"
+echo "[assets] rasterizing brand mark from $SRC"
 for s in 16 24 32 48 64 128 256 512; do
   rsvg-convert -w "$s" -h "$s" "$SRC" -o "$TMP/orbit-$s.png"
 done

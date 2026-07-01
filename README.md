@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/icon.png" width="120" alt="Limboo logo" />
+
 # Limboo
 
 **The operating system for AI software development.**
