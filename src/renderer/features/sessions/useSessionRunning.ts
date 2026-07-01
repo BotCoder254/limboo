@@ -7,7 +7,8 @@
 import type { RequestPhase } from '@shared/types';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 
-const RUNNING_PHASES = new Set<RequestPhase>([
+/** Phases in which a session's run counts as "in flight" (busy/disabled UI). */
+export const RUNNING_PHASES = new Set<RequestPhase>([
   'submitting',
   'connecting',
   'streaming',
@@ -15,14 +16,22 @@ const RUNNING_PHASES = new Set<RequestPhase>([
   'awaiting-permission',
 ]);
 
-/** The id of the session whose agent run is currently in flight, or null. */
-export function useRunningSessionId(): string | null {
-  return useAgentStore((s) =>
-    RUNNING_PHASES.has(s.request.phase) ? s.request.sessionId : null,
-  );
+/**
+ * Whether a specific session's agent run is currently in flight. Reads the
+ * per-session phase map — sessions can run concurrently, so a single global
+ * "running session id" can't correctly represent more than one at a time (that
+ * mismatch used to hide a session's `awaiting-permission` pause the moment any
+ * other session started or finished a run).
+ */
+export function useIsSessionRunning(sessionId: string): boolean {
+  return useAgentStore((s) => {
+    const phase = s.requestsBySession[sessionId]?.phase;
+    return !!phase && RUNNING_PHASES.has(phase);
+  });
 }
 
-/** Whether a specific session is the one currently running. */
-export function useIsSessionRunning(sessionId: string): boolean {
-  return useRunningSessionId() === sessionId;
+/** Whether a specific session is paused on a tool approval or AskUserQuestion,
+ *  needing the user's input to resume — distinct from merely "running". */
+export function useSessionAwaitingInput(sessionId: string): boolean {
+  return useAgentStore((s) => s.requestsBySession[sessionId]?.phase === 'awaiting-permission');
 }

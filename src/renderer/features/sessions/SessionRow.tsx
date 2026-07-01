@@ -3,9 +3,13 @@
  * meta), not a card. The active row gets a left accent bar + raised surface.
  *
  * While the session's agent run is in flight the status dot is replaced by the
- * modern `Spinner`. Hovering reveals a `⋯` actions button; right-clicking the
- * row opens the same menu at the cursor. The title becomes an inline input
- * during rename (commit on Enter/blur, cancel on Escape).
+ * modern `Spinner`. When the run is specifically paused waiting on the user —
+ * a tool approval or an `AskUserQuestion` clarification — the dot becomes a
+ * pulsing accent dot instead, so a session that needs YOUR input is never
+ * mistaken for one that's merely streaming, no matter which session is
+ * currently open in the center pane. Hovering reveals a `⋯` actions button;
+ * right-clicking the row opens the same menu at the cursor. The title becomes
+ * an inline input during rename (commit on Enter/blur, cancel on Escape).
  */
 import { useEffect, useRef, useState } from 'react';
 import { CircleDot, GitBranch, Pin, Archive, MoreHorizontal } from 'lucide-react';
@@ -14,7 +18,7 @@ import { Badge, DiffStat, IconButton, Spinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { relativeTime } from '@/renderer/lib/format';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
-import { useIsSessionRunning } from './useSessionRunning';
+import { useIsSessionRunning, useSessionAwaitingInput } from './useSessionRunning';
 import { SessionRowMenu } from './SessionRowMenu';
 
 const STATUS_COLOR: Record<SessionStatus, string> = {
@@ -33,6 +37,7 @@ export function SessionRow({
   onSelect: () => void;
 }) {
   const running = useIsSessionRunning(session.id);
+  const awaitingInput = useSessionAwaitingInput(session.id);
   const rename = useSessionStore((s) => s.rename);
 
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -85,8 +90,12 @@ export function SessionRow({
         active ? 'border-accent bg-surface-2' : 'border-transparent hover:bg-surface-2',
       )}
     >
-      <span className="mt-0.5 shrink-0">
-        {running ? (
+      <span className="mt-0.5 shrink-0" title={awaitingInput ? 'Waiting for your input' : undefined}>
+        {awaitingInput ? (
+          <span className="flex h-[13px] w-[13px] items-center justify-center">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+          </span>
+        ) : running ? (
           <Spinner size={13} />
         ) : (
           <CircleDot size={13} className={STATUS_COLOR[session.status]} />

@@ -21,7 +21,8 @@ import { Spinner } from '@/renderer/components/ui';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
-import { BUSY_LIFECYCLES, lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
+import { lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
+import { RUNNING_PHASES } from '@/renderer/features/sessions/useSessionRunning';
 import { ComposerControls } from './ComposerControls';
 import { ComposerModeSwitch } from './ComposerModeSwitch';
 import { ComposerBanner } from './ComposerBanner';
@@ -35,10 +36,14 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
 
   const sessionId = useSessionStore((s) => s.selectedId);
   const lifecycle = useAgentStore((s) => s.lifecycle);
-  const phase = useAgentStore((s) => s.request.phase);
+  // This session's own run phase — sessions can run concurrently, so "is THIS
+  // composer's session busy" must never be read off a single global field (that
+  // mismatch used to make one session's composer look idle/ready while it was
+  // actually still streaming or awaiting a decision, simply because a different
+  // session had more recently touched the shared state).
+  const phase = useAgentStore((s) => (sessionId ? s.requestsBySession[sessionId]?.phase : undefined));
   const installed = useAgentStore((s) => s.install.installed);
   const installError = useAgentStore((s) => s.install.error);
-  const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const runningTool = useAgentStore((s) =>
     sessionId ? s.bySession[sessionId]?.toolCalls.find((c) => c.status === 'running')?.name : undefined,
   );
@@ -53,7 +58,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
     setMode(defaultMode);
   }, [sessionId, defaultMode]);
 
-  const busy = activeSessionId === sessionId && BUSY_LIFECYCLES.has(lifecycle);
+  const busy = !!phase && RUNNING_PHASES.has(phase);
   const restricted = lifecycle === 'rate-limited' || lifecycle === 'auth-required';
   const blocked = disabled || !installed || busy || restricted;
 
@@ -189,7 +194,8 @@ function StatusHint({
   installError?: string;
   busy: boolean;
   lifecycle: ReturnType<typeof useAgentStore.getState>['lifecycle'];
-  phase: ReturnType<typeof useAgentStore.getState>['request']['phase'];
+  /** This session's own phase (per-session — see the `phase` selector above). */
+  phase: ReturnType<typeof useAgentStore.getState>['request']['phase'] | undefined;
   toolName?: string;
 }) {
   const meta = lifecycleMeta(lifecycle, installed);
@@ -205,7 +211,8 @@ function StatusHint({
     return (
       <span className="flex min-w-0 items-center gap-1.5 text-muted">
         <Spinner size={11} />
-        <span className="truncate">{phaseLabel(phase, toolName)}</span>
+        {/* `busy` implies `phase` is set (see the busy derivation above). */}
+        <span className="truncate">{phaseLabel(phase ?? 'streaming', toolName)}</span>
       </span>
     );
   }

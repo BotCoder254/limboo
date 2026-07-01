@@ -35,8 +35,8 @@ export function InlineApproval({ request }: { request: PermissionRequest }) {
   // Keyboard: Ctrl/Cmd+Enter allows, Esc denies — matches the button order.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') respond('deny');
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) respond('allow');
+      if (e.key === 'Escape') respond(request.id, 'deny');
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) respond(request.id, 'allow');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -70,21 +70,21 @@ export function InlineApproval({ request }: { request: PermissionRequest }) {
       <div className="flex items-center gap-3 pt-0.5">
         <button
           type="button"
-          onClick={() => respond('allow')}
+          onClick={() => respond(request.id, 'allow')}
           className="rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90"
         >
           Allow
         </button>
         <button
           type="button"
-          onClick={() => respond('deny')}
+          onClick={() => respond(request.id, 'deny')}
           className="rounded-md border border-line px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-elevated hover:text-fg"
         >
           Deny
         </button>
         <button
           type="button"
-          onClick={() => respond('allow', true)}
+          onClick={() => respond(request.id, 'allow', true)}
           className="ml-auto text-[11.5px] text-faint transition-colors hover:text-fg"
         >
           Always allow this session

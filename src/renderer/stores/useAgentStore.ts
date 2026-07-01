@@ -47,15 +47,22 @@ const MAX_DIAGNOSTICS = 500;
 interface AgentStoreState {
   install: AgentInstall;
   lifecycle: AgentLifecycleStatus;
+  /** @deprecated legacy single-session mirror — use {@link requestsBySession}. */
   request: RequestState;
+  /** Per-session run phase. Sessions can run concurrently, so this (not the
+   *  single `request` field) is the source of truth for "is THIS session busy
+   *  / streaming / awaiting-permission". */
+  requestsBySession: Record<string, RequestState>;
   rateLimit?: RateLimitInfo;
   heartbeat: { lastOkAt: number | null; consecutiveFailures: number };
   activeSessionId: string | null;
   bySession: Record<string, AgentSessionSnapshot>;
   diagnostics: AgentDiagnostic[];
-  pending: PermissionRequest | null;
-  /** A pending AskUserQuestion clarification awaiting the user's answers. */
-  pendingClarification: ClarificationRequest | null;
+  /** Pending tool approvals, keyed by sessionId — a second session's request
+   *  must never clobber a first session's still-unanswered one. */
+  pendingBySession: Record<string, PermissionRequest>;
+  /** Pending AskUserQuestion clarifications, keyed by sessionId (same reasoning). */
+  pendingClarificationBySession: Record<string, ClarificationRequest>;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -66,8 +73,12 @@ interface AgentStoreState {
   clear: (sessionId: string) => void;
   clearRateLimit: () => void;
   retryAuth: () => void;
-  respond: (behavior: 'allow' | 'deny', remember?: boolean) => void;
-  respondClarification: (answers: Record<string, string | string[]>, response?: string) => void;
+  respond: (id: string, behavior: 'allow' | 'deny', remember?: boolean) => void;
+  respondClarification: (
+    id: string,
+    answers: Record<string, string | string[]>,
+    response?: string,
+  ) => void;
   approvePlan: (sessionId: string) => void;
   rejectPlan: (sessionId: string) => void;
   regeneratePlan: (sessionId: string, extra?: string) => void;
@@ -78,7 +89,12 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
   function apply(event: AgentEvent): void {
     // Global (session-less) events first.
     if (event.kind === 'request-state') {
-      set({ request: event.request });
+      // Merge into the per-session map — never overwrite other sessions'
+      // in-flight phases (see requestsBySession doc comment).
+      set((state) => ({
+        request: event.request,
+        requestsBySession: { ...state.requestsBySession, [event.sessionId]: event.request },
+      }));
       return;
     }
     if (event.kind === 'diagnostic') {
@@ -151,13 +167,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     install: { installed: false },
     lifecycle: 'starting',
     request: IDLE_REQUEST,
+    requestsBySession: {},
     rateLimit: undefined,
     heartbeat: { lastOkAt: null, consecutiveFailures: 0 },
     activeSessionId: null,
     bySession: {},
     diagnostics: [],
-    pending: null,
-    pendingClarification: null,
+    pendingBySession: {},
+    pendingClarificationBySession: {},
     hydrated: false,
 
     hydrate: async () => {
@@ -174,9 +191,20 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         install,
         lifecycle: agentState.lifecycle,
         request: agentState.request,
+        requestsBySession: agentState.requestsBySession ?? {},
         rateLimit: agentState.rateLimit,
         heartbeat: agentState.heartbeat,
         activeSessionId: agentState.activeSessionId,
+        // Replay any requests that were already pending before this window
+        // hydrated (e.g. a reload while another session is paused) — the
+        // discrete onPermissionRequest/onClarificationRequest events below
+        // only fire for NEW requests going forward.
+        pendingBySession: Object.fromEntries(
+          (agentState.pendingPermissions ?? []).map((r) => [r.sessionId, r]),
+        ),
+        pendingClarificationBySession: Object.fromEntries(
+          (agentState.pendingClarifications ?? []).map((r) => [r.sessionId, r]),
+        ),
       });
 
       api.onStateChanged((s) =>
@@ -190,8 +218,21 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         }),
       );
       api.onEvent((event) => apply(event));
-      api.onPermissionRequest((request) => set({ pending: request }));
-      api.onClarificationRequest?.((request) => set({ pendingClarification: request }));
+      // Merge, never overwrite — a second session's request must not hide a
+      // first session's still-unanswered one (see pendingBySession doc comment).
+      api.onPermissionRequest((request) =>
+        set((state) => ({
+          pendingBySession: { ...state.pendingBySession, [request.sessionId]: request },
+        })),
+      );
+      api.onClarificationRequest?.((request) =>
+        set((state) => ({
+          pendingClarificationBySession: {
+            ...state.pendingClarificationBySession,
+            [request.sessionId]: request,
+          },
+        })),
+      );
 
       // Seed the diagnostics console with recent history.
       void get().loadDiagnostics();
@@ -255,22 +296,20 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
 
     stop: (sessionId) => {
       void window.limboo?.agent?.stop(sessionId);
-      // Stopping aborts any paused clarification for this session (main resolves
-      // the canUseTool promise via the abort signal) — drop the card too.
-      const { pendingClarification } = get();
-      if (pendingClarification?.sessionId === sessionId) {
-        set({ pendingClarification: null });
-      }
+      // Stopping aborts any paused request/clarification for this session (main
+      // resolves the canUseTool promise via the abort signal) — drop the cards
+      // for THIS session only, leaving any other session's cards untouched.
+      set((state) => ({
+        pendingBySession: omitKey(state.pendingBySession, sessionId),
+        pendingClarificationBySession: omitKey(state.pendingClarificationBySession, sessionId),
+      }));
     },
 
     clear: (sessionId) => {
       void window.limboo?.agent?.clearSession(sessionId);
       set((state) => ({
         bySession: { ...state.bySession, [sessionId]: emptySnapshot() },
-        pendingClarification:
-          state.pendingClarification?.sessionId === sessionId
-            ? null
-            : state.pendingClarification,
+        pendingClarificationBySession: omitKey(state.pendingClarificationBySession, sessionId),
       }));
     },
 
@@ -282,22 +321,26 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       void window.limboo?.agent?.retryAuth?.();
     },
 
-    respond: (behavior, remember) => {
-      const { pending } = get();
-      if (!pending) return;
-      void window.limboo?.agent?.respondPermission({ id: pending.id, behavior, remember });
-      set({ pending: null });
+    respond: (id, behavior, remember) => {
+      const { pendingBySession } = get();
+      const entry = Object.values(pendingBySession).find((r) => r.id === id);
+      if (!entry) return;
+      void window.limboo?.agent?.respondPermission({ id, behavior, remember });
+      set((state) => ({ pendingBySession: omitKey(state.pendingBySession, entry.sessionId) }));
     },
 
-    respondClarification: (answers, response) => {
-      const { pendingClarification } = get();
-      if (!pendingClarification) return;
+    respondClarification: (id, answers, response) => {
+      const { pendingClarificationBySession } = get();
+      const entry = Object.values(pendingClarificationBySession).find((r) => r.id === id);
+      if (!entry) return;
       void window.limboo?.agent?.respondClarification?.({
-        id: pendingClarification.id,
+        id,
         answers,
         response,
       });
-      set({ pendingClarification: null });
+      set((state) => ({
+        pendingClarificationBySession: omitKey(state.pendingClarificationBySession, entry.sessionId),
+      }));
     },
 
     approvePlan: (sessionId) => {
@@ -330,6 +373,14 @@ function upsertMessage(messages: ChatMessage[], message: ChatMessage): ChatMessa
 function upsertChange(changes: FileChange[], change: FileChange): FileChange[] {
   const rest = changes.filter((c) => c.path !== change.path);
   return [...rest, change];
+}
+
+/** Return a copy of `record` with `key` removed, without mutating the input. */
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const rest = { ...record };
+  delete rest[key];
+  return rest;
 }
 
 /** Stable empty snapshot so selectors don't churn when a session has no data. */

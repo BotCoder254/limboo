@@ -97,6 +97,15 @@ const TODO_TOOL = 'TodoWrite';
 /** The SDK tool the agent uses to ask the user clarifying questions. */
 const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
 
+/** Default per-session request state before a session has ever run. */
+const IDLE_REQUEST: RequestState = {
+  sessionId: null,
+  phase: 'idle',
+  outcome: null,
+  attempt: 0,
+  maxAttempts: 0,
+};
+
 /**
  * Streamed text is coalesced before it crosses IPC: rather than one
  * `message-delta` per token (which floods IPC and forces a React render +
@@ -264,8 +273,11 @@ export class AgentManager {
   private state: AgentState = {
     lifecycle: 'starting',
     install: { installed: false },
-    request: { sessionId: null, phase: 'idle', outcome: null, attempt: 0, maxAttempts: 0 },
+    request: IDLE_REQUEST,
     activeSessionId: null,
+    requestsBySession: {},
+    pendingPermissions: [],
+    pendingClarifications: [],
     heartbeat: { lastOkAt: null, consecutiveFailures: 0 },
   };
 
@@ -275,10 +287,24 @@ export class AgentManager {
   private idleTimer: NodeJS.Timeout | null = null;
   private readonly runtimes = new Map<string, SessionRuntime>();
   private readonly runs = new Map<string, ActiveRun>();
-  /** Pending permission prompts awaiting a renderer decision. */
+  /**
+   * Per-session run phase. Sessions can run concurrently (see {@link runs}), so
+   * this MUST be keyed by sessionId rather than a single shared value — a
+   * single global field would let one session's phase transition silently
+   * overwrite another's, hiding e.g. an `awaiting-permission` pause behind
+   * whichever session most recently touched the state.
+   */
+  private readonly requests = new Map<string, RequestState>();
+  /** Pending permission prompts awaiting a renderer decision, keyed by request id. */
   private readonly pending = new Map<
     string,
-    { resolve: (r: PermissionResult) => void; sessionId: string; input: Record<string, unknown> }
+    {
+      resolve: (r: PermissionResult) => void;
+      sessionId: string;
+      input: Record<string, unknown>;
+      /** The full request, kept so a fresh renderer hydration can replay it via {@link getState}. */
+      request: PermissionRequest;
+    }
   >();
   /**
    * Pending AskUserQuestion clarifications awaiting renderer answers. Kept apart
@@ -294,6 +320,8 @@ export class AgentManager {
       input: Record<string, unknown>;
       /** The normalized questions, used to key answers and summarize the result. */
       questions: ClarificationQuestion[];
+      /** The full request, kept so a fresh renderer hydration can replay it via {@link getState}. */
+      request: ClarificationRequest;
     }
   >();
   /** Remembered "always allow" choices, keyed `sessionId:risk`. */
@@ -405,8 +433,19 @@ export class AgentManager {
   /* Public API (reached via IPC)                                     */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * A fresh snapshot including live per-session data, so a renderer hydrating
+   * after a reload (or a second window opening) can rebuild every session's
+   * pending request/clarification/phase — not just whatever `agentStateChanged`
+   * last broadcast, which only carries the fields in {@link setState} patches.
+   */
   getState(): AgentState {
-    return this.state;
+    return {
+      ...this.state,
+      requestsBySession: Object.fromEntries(this.requests),
+      pendingPermissions: [...this.pending.values()].map((p) => p.request),
+      pendingClarifications: [...this.pendingClarifications.values()].map((p) => p.request),
+    };
   }
 
   /**
@@ -567,7 +606,7 @@ export class AgentManager {
       this.runs.has(entry.sessionId)
     ) {
       this.setLifecycle('streaming');
-      this.setRequest({ phase: 'streaming' });
+      this.setRequest(entry.sessionId, { phase: 'streaming' });
     }
   }
 
@@ -602,7 +641,7 @@ export class AgentManager {
     // resolving records the answered summary. This avoids a duplicate marker.
     this.diag('tool', 'info', 'Clarification requested', headers, sessionId);
     this.setLifecycle('awaiting-permission');
-    this.setRequest({ phase: 'awaiting-permission' });
+    this.setRequest(sessionId, { phase: 'awaiting-permission' });
     this.broadcastChannel(IpcEvents.agentClarificationRequest, request);
 
     return new Promise<PermissionResult>((resolve) => {
@@ -616,6 +655,7 @@ export class AgentManager {
         sessionId,
         input,
         questions,
+        request,
         resolve: (r) => {
           signal.removeEventListener('abort', onAbort);
           resolve(r);
@@ -666,7 +706,7 @@ export class AgentManager {
       this.runs.has(entry.sessionId)
     ) {
       this.setLifecycle('streaming');
-      this.setRequest({ phase: 'streaming' });
+      this.setRequest(entry.sessionId, { phase: 'streaming' });
     }
   }
 
@@ -770,8 +810,7 @@ export class AgentManager {
     const abort = new AbortController();
     this.runs.set(sessionId, { abort, query: null, mode });
     this.clearIdleTimer();
-    this.setRequest({
-      sessionId,
+    this.setRequest(sessionId, {
       phase: 'submitting',
       outcome: null,
       attempt: 0,
@@ -865,7 +904,7 @@ export class AgentManager {
         if (cls.recoverable && cfg.maxRecoveryAttempts > 0 && attempt < cfg.maxRecoveryAttempts) {
           attempt += 1;
           this.setLifecycle('reconnecting');
-          this.setRequest({ phase: 'recovering', attempt });
+          this.setRequest(sessionId, { phase: 'recovering', attempt });
           this.diag('recovery', 'info', `Reconnect attempt ${attempt}/${cfg.maxRecoveryAttempts}`, undefined, sessionId);
           const ok = await this.abortableDelay(backoff(cfg.reconnectDelay, attempt), abort);
           if (!ok) {
@@ -961,7 +1000,7 @@ export class AgentManager {
 
     const run = this.runs.get(sessionId);
     if (run) run.result = undefined;
-    this.setRequest({ phase: 'connecting' });
+    this.setRequest(sessionId, { phase: 'connecting' });
 
     try {
       const sdk = await loadSdk();
@@ -983,7 +1022,7 @@ export class AgentManager {
       };
       if (run) run.query = q;
       this.setLifecycle('streaming');
-      this.setRequest({ phase: 'streaming' });
+      this.setRequest(sessionId, { phase: 'streaming' });
       this.diag('stream', 'debug', 'Streaming response', undefined, sessionId);
 
       for await (const msg of q) {
@@ -1547,7 +1586,7 @@ export class AgentManager {
       this.pushActivity(sessionId, 'permission', `Asked to ${request.summary}`, undefined, 'warning');
       this.diag('tool', 'warning', `Approval requested: ${request.summary}`, request.detail, sessionId);
       this.setLifecycle('awaiting-permission');
-      this.setRequest({ phase: 'awaiting-permission' });
+      this.setRequest(sessionId, { phase: 'awaiting-permission' });
       this.broadcastChannel(IpcEvents.agentPermissionRequest, request);
 
       return new Promise<PermissionResult>((resolve) => {
@@ -1560,6 +1599,7 @@ export class AgentManager {
         this.pending.set(request.id, {
           sessionId,
           input,
+          request,
           resolve: (r) => {
             signal.removeEventListener('abort', onAbort);
             resolve(r);
@@ -1670,14 +1710,24 @@ export class AgentManager {
     this.setState({ lifecycle, ...patch });
   }
 
-  private setRequest(patch: Partial<RequestState>): void {
-    const request = { ...this.state.request, ...patch };
+  /**
+   * Patch ONE session's run phase. Kept per-session (see {@link requests}) so
+   * two concurrent runs can never clobber each other's phase — the bug that
+   * made an `awaiting-permission` pause on one session vanish whenever another
+   * session started or finished a run in the meantime.
+   */
+  private setRequest(sessionId: string, patch: Partial<RequestState>): void {
+    const current = this.requests.get(sessionId) ?? { ...IDLE_REQUEST, sessionId };
+    const request = { ...current, ...patch, sessionId };
+    this.requests.set(sessionId, request);
+    // Also mirror onto the legacy single-session field for any remaining
+    // back-compat reader — multi-session-aware UI must read `requestsBySession`.
     this.setState({ request });
-    this.pushEvent({ kind: 'request-state', sessionId: request.sessionId ?? '', request });
+    this.pushEvent({ kind: 'request-state', sessionId, request });
   }
 
   private completeRequest(sessionId: string, outcome: RequestOutcome, detail?: string): void {
-    this.setRequest({ sessionId, phase: 'done', outcome, detail, attempt: 0 });
+    this.setRequest(sessionId, { phase: 'done', outcome, detail, attempt: 0 });
   }
 
   /** True when the capability itself is degraded (not just the last request). */
