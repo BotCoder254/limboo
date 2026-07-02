@@ -16,7 +16,9 @@ Forge; releases are driven from the `main` branch.
 2. **Update the changelog.** Move the `Unreleased` items in
    [CHANGELOG.md](../../CHANGELOG.md) into a new version section with the date, and
    refresh the compare links.
-3. **Commit and tag.** Commit the version and changelog, then tag `vX.Y.Z`.
+3. **Commit and tag.** Commit the version and changelog, then tag `vX.Y.Z` and
+   `git push origin vX.Y.Z` (fans out to GitLab — the source of truth — and the
+   GitHub mirror). The tag triggers the GitLab release pipeline.
 4. **Build artifacts.**
    ```bash
    npm run package   # runnable bundle (no installers)
@@ -27,10 +29,13 @@ Forge; releases are driven from the `main` branch.
    `latest*.yml` auto-update metadata. See
    [installer and updates](installer-and-updates.md) and
    [packaging and signing](packaging-and-signing.md).
-5. **Publish.** CI publishes automatically on a `v*` tag. For a manual release use
+5. **Publish.** The GitLab pipeline publishes automatically on a `v*` tag — an
+   identical GitLab Release and GitHub Release (see
+   [release-process](../ci/release-process.md)). For a manual fallback use
    `npm run dist:publish` (with `GH_TOKEN` set) or attach `dist/*` — installers,
    `latest*.yml`, and `*.blockmap` — to the GitHub release with the `gh` CLI.
-6. **Verify the release.** Download an artifact and confirm it launches.
+6. **Verify the release.** Download an artifact from both hosts and confirm it
+   launches.
 
 ## Release checklist
 
@@ -39,7 +44,7 @@ Forge; releases are driven from the `main` branch.
 - [ ] `CHANGELOG.md` updated with date and compare links.
 - [ ] Tag `vX.Y.Z` created.
 - [ ] Artifacts built (`npm run dist`) and smoke-tested.
-- [ ] GitHub release published with notes and artifacts.
+- [ ] GitLab + GitHub releases published with notes and artifacts.
 
 ## Notes
 

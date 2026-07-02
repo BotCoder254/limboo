@@ -13,17 +13,17 @@ provider-neutral scripts under [`ci/scripts/`](../../ci/scripts) rather than in 
 | ----- | ------- | -------------- | ---------- |
 | **CI** | every push / PR | validate -> build -> test | no |
 | **CD** | manual / pre-release | package, SBOM, checksums, signing | no |
-| **Release** | `v*` tag | notes, GitHub Release (+ optional GitLab) | yes |
+| **Release** | `v*` tag | notes, GitLab Release **and** GitHub Release | yes |
 
-In this repo's current implementation, **CircleCI runs all three layers and is the
-primary release publisher**: its `release` workflow triggers on every `v*` tag,
-packages installers on Linux, Windows, and macOS, and publishes the GitHub Release
-(credentialed via the `limboo-release` context — see [circleci.md](circleci.md)).
+In this repo's current implementation, **GitLab runs all three layers and is the
+primary release publisher — the single source of truth**: its `release` stage
+triggers on every `v*` tag, packages installers on Linux (shared runner) plus
+Windows/macOS (SaaS runners), and publishes the **same build** to both a GitLab
+Release and a GitHub Release (credentialed via the masked+protected `GH_TOKEN`
+variable — see [gitlab-ci.md](gitlab-ci.md)). The GitHub repository is kept in sync
+by GitLab push mirroring, and GitHub Releases still host the electron-updater feed.
 **GitHub Actions** retains the CI/Security/CodeQL layers plus a **manual-dispatch
-release fallback** ([github-actions.md](github-actions.md)); note that Actions on
-this private repo is currently blocked at the account level (billing/spending
-limit), so nothing GH-side runs until that is resolved. **GitLab CI runs CI-only**
-here; its `package`/`release` stages are documented but not wired to a credential.
+release fallback** ([github-actions.md](github-actions.md)).
 
 ## Stage order (every provider, fail-fast)
 
@@ -36,9 +36,8 @@ standards.
 
 ## Provider guides
 
-- [github-actions.md](github-actions.md) — primary implementation
-- [gitlab-ci.md](gitlab-ci.md)
-- [circleci.md](circleci.md)
+- [gitlab-ci.md](gitlab-ci.md) — **primary** pipeline and release publisher
+- [github-actions.md](github-actions.md) — CI/Security/CodeQL + manual release fallback
 
 ## Process guides
 

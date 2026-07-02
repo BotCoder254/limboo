@@ -7,8 +7,8 @@ prints "signing not configured" and exits 0, so dev/PR builds never fail.
 
 ## macOS
 
-Required secrets (GitHub Actions names; the GitLab/CircleCI equivalents are the same
-variable names):
+Required secrets (GitLab masked+protected CI/CD variable names; the GitHub Actions
+equivalents are the same variable names):
 
 | Secret | Description |
 | ------ | ----------- |
