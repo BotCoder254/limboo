@@ -25,13 +25,15 @@ const DEFAULT_ALLOWED = [
 
 // Packages whose license is non-SPDX ("SEE LICENSE IN ...") or otherwise needs a
 // reviewed, name-scoped exception. The Anthropic Agent SDK is a first-party
-// dependency the whole app is built around. Extend via PACKAGE_EXCEPTIONS env.
+// dependency the whole app is built around; it ships one optional native package
+// per platform (`-linux-x64`, `-linux-x64-musl`, `-linux-arm64`,
+// `-linux-arm64-musl`, `-darwin-x64`, `-darwin-arm64`, `-win32-x64`, …) that npm
+// installs selectively, so we except the whole family by PREFIX rather than
+// enumerating every OS/libc/arch combo (which drifts as new variants ship).
+// Each entry matches the package itself and any `<entry>-*` platform variant.
+// Extend via PACKAGE_EXCEPTIONS env.
 const DEFAULT_PACKAGE_EXCEPTIONS = [
   '@anthropic-ai/claude-agent-sdk',
-  '@anthropic-ai/claude-agent-sdk-linux-x64',
-  '@anthropic-ai/claude-agent-sdk-darwin-x64',
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64',
-  '@anthropic-ai/claude-agent-sdk-win32-x64',
 ];
 
 const allowed = new Set(
@@ -41,6 +43,18 @@ const packageExceptions = new Set([
   ...DEFAULT_PACKAGE_EXCEPTIONS,
   ...(process.env.PACKAGE_EXCEPTIONS?.split(',').map((s) => s.trim()).filter(Boolean) ?? []),
 ]);
+
+/**
+ * A package is excepted if its name equals an exception entry OR is a platform
+ * variant of one (`<entry>-*`) — e.g. `@anthropic-ai/claude-agent-sdk-linux-x64-musl`
+ * matches the `@anthropic-ai/claude-agent-sdk` entry.
+ */
+function isExcepted(name) {
+  for (const ex of packageExceptions) {
+    if (name === ex || name.startsWith(`${ex}-`)) return true;
+  }
+  return false;
+}
 
 /** Pull a comparable license string out of a package.json `license`/`licenses`. */
 function licenseOf(pkg) {
@@ -89,7 +103,7 @@ async function main() {
   let count = 0;
   for await (const pkg of packages('node_modules')) {
     count++;
-    if (packageExceptions.has(pkg.name)) continue;
+    if (isExcepted(pkg.name)) continue;
     const lic = licenseOf(pkg);
     if (lic === 'UNKNOWN' || !isAllowed(lic)) {
       violations.push(`${pkg.name}@${pkg.version ?? '?'}: ${lic}`);
