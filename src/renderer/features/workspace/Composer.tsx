@@ -91,9 +91,9 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
     if (blocked || !sessionId) return;
     if (!voiceReady) {
       useUIStore.getState().addToast({
-        title: voiceEnabled ? 'Speech models not installed' : 'Voice is disabled',
+        title: voiceEnabled ? 'Speech recognition not installed' : 'Voice is disabled',
         description: voiceEnabled
-          ? 'Download the local speech models in Settings › Voice.'
+          ? 'Install the speech-recognition + voice-activity models in Settings › Voice to talk.'
           : 'Enable voice in Settings › Voice.',
         tone: 'warning',
       });

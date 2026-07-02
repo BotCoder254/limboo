@@ -178,7 +178,11 @@ export class VoiceManager {
   /** Speak arbitrary text (speaker test / notifications). Not session-bound. */
   async speak(text: string): Promise<void> {
     const voice = this.settings.getAll().voice;
-    if (!voice.enabled || !voice.output.enabled) return;
+    // Gate on `voice.enabled` only — NOT `output.enabled`. This is the explicit
+    // speaker-test / notification path: the Settings "Play sample" button must
+    // preview the voice even when "Speak responses" is off. The one other caller,
+    // `speakNotification()`, checks `output.enabled` itself before calling here.
+    if (!voice.enabled) return;
     this.refreshModelsReady();
     if (!this.state.modelsReady.tts) {
       throw new Error('The speech model is not installed — download it in Settings › Voice');
@@ -526,7 +530,11 @@ export class VoiceManager {
           utteranceId: msg.id,
           sessionId: job?.sessionId ?? '',
           sampleRate: msg.sampleRate,
-          pcm: msg.pcm,
+          // Copy before the SECOND hop (main → renderer via webContents.send).
+          // The buffer that arrived from the worker is external memory in main,
+          // and Electron blocks re-serializing external buffers; `.slice()` makes
+          // an owned copy so TTS audio reaches the renderer instead of throwing.
+          pcm: msg.pcm.slice(0),
           seq: msg.seq,
           last: msg.last,
         };

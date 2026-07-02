@@ -272,15 +272,35 @@ function hardenSession(): void {
   // Camera, geolocation, USB, notifications-via-web, etc. all stay denied.
   // (OS notifications go through the NotificationManager, not this API.)
   const isOwnOrigin = (origin: string | undefined): boolean => {
-    if (!origin) return false;
+    // Dev: the renderer is served from the Vite dev-server origin. Normalize
+    // BOTH sides through `URL` before comparing — Electron 42 hands the check
+    // handler the origin as `http://localhost:5173/` (with a trailing slash),
+    // while `new URL(devUrl).origin` yields `http://localhost:5173` (no slash),
+    // so a strict `===` silently denied the mic in dev. Parsing both to their
+    // canonical `.origin` makes the trailing-slash (and any other serialization)
+    // form match, and keeps this consistent with the request handler below.
     if (devUrl) {
+      if (!origin) return false;
+      if (origin.startsWith('file:')) return true;
       try {
-        if (origin === new URL(devUrl).origin) return true;
+        return new URL(origin).origin === new URL(devUrl).origin;
       } catch {
-        /* fall through */
+        return false;
       }
     }
-    return origin === 'file://' || origin === 'file:///';
+    // Packaged: the renderer is the ONLY content that can ever load — every
+    // navigation, redirect, window.open and <webview> is blocked in
+    // createWindow.ts — and it loads over file://. Chromium serializes a
+    // sandboxed file:// page's origin inconsistently across platforms/versions:
+    // it can arrive as 'file://', 'file:///…', a full 'file:///C:/…' URL, the
+    // opaque 'null', an empty string, or undefined. In dev these all matched a
+    // real origin; in a packaged build none of them matched, so the permission
+    // CHECK handler silently denied the mic (this was the "works in dev, not in
+    // the built app" bug). Accept every file-protocol / opaque form here; the
+    // request handler still gates on audio-only + the main-window webContents
+    // identity, which is what keeps this safe.
+    if (origin === undefined || origin === '' || origin === 'null') return true;
+    return origin.startsWith('file:');
   };
 
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
@@ -307,6 +327,11 @@ function hardenSession(): void {
     if (permission !== 'media') return false;
     const mediaType = (details as { mediaType?: string }).mediaType;
     if (mediaType === 'video') return false;
-    return isOwnOrigin(requestingOrigin);
+    const ok = isOwnOrigin(requestingOrigin);
+    // This handler is consulted synchronously before getUserMedia's request
+    // handler; returning false rejects the mic outright. It used to be silent —
+    // log denials so a future permission mismatch is diagnosable from the main log.
+    if (!ok) logger.warn('Denied media permission check', { requestingOrigin, mediaType });
+    return ok;
   });
 }

@@ -70,8 +70,19 @@ function MicTest({ deviceId }: { deviceId: string }) {
         h.stop();
         setHandle(null);
       }, 3000);
-    } catch {
-      setError('Microphone unavailable');
+    } catch (err) {
+      // Surface the real reason instead of a blanket message — this is how we
+      // tell a permission denial (NotAllowedError) apart from a missing device
+      // (NotFoundError) or a worklet that failed to load in a packaged build.
+      const name = err instanceof DOMException ? err.name : '';
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(
+        name === 'NotAllowedError'
+          ? 'Microphone access was denied'
+          : name === 'NotFoundError'
+            ? 'No microphone found'
+            : msg || 'Microphone unavailable',
+      );
     }
   };
 
@@ -108,6 +119,16 @@ export function VoicePanel() {
 
   const anyInstalled = models.some((m) => m.phase === 'installed');
   const allInstalled = models.length > 0 && models.every((m) => m.phase === 'installed');
+  // The speaker test synthesizes speech, so it needs the text-to-speech (tts)
+  // model specifically — not just "any model installed" (which would be true with
+  // only the stt/vad input models present, leaving the button enabled but mute).
+  const ttsInstalled = models.some((m) => m.kind === 'tts' && m.phase === 'installed');
+  // Voice INPUT needs speech-recognition (stt) + voice-activity (vad); the tts
+  // model only powers spoken replies. Report readiness against the input models
+  // so the hint tells the user exactly what to install to start talking.
+  const inputReady =
+    models.some((m) => m.kind === 'stt' && m.phase === 'installed') &&
+    models.some((m) => m.kind === 'vad' && m.phase === 'installed');
 
   const deviceOptions = (
     list: { id: string; label: string }[],
@@ -146,7 +167,9 @@ export function VoicePanel() {
         hint={
           allInstalled
             ? 'All local speech models are installed. Speech recognition and synthesis run fully offline.'
-            : 'Voice needs local speech models (a one-time download). After installing, no audio or text ever leaves this machine — speech works offline.'
+            : inputReady
+              ? 'Voice input is ready. The optional text-to-speech model adds spoken replies.'
+              : 'To talk to Limboo, install the speech-recognition and voice-activity models below (a one-time download). Text-to-speech is optional. After installing, no audio or text ever leaves this machine — speech works offline.'
         }
       >
         <div data-field-id="voiceModels" className="flex flex-col divide-y divide-line/60">
@@ -315,7 +338,7 @@ export function VoicePanel() {
         <Field id="voiceSpeakerTest" label="Speaker test">
           <ActionButton
             label="Play sample"
-            disabled={!anyInstalled}
+            disabled={!ttsInstalled}
             onClick={() => void speak('This is Limboo speaking. Your local voice is ready.')}
           />
         </Field>
