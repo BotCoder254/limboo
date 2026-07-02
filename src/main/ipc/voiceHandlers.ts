@@ -102,7 +102,13 @@ export function registerVoiceHandlers(
   // size-capped before they reach the manager.
   on<[ArrayBuffer | Uint8Array]>(IpcSends.voiceAudioChunk, (_event, chunk) => {
     let pcm: ArrayBuffer | null = null;
-    if (chunk instanceof ArrayBuffer) pcm = chunk;
+    // Copy into a fresh V8-owned buffer before it crosses the SECOND hop
+    // (main → voice worker via utilityProcess.postMessage). The ArrayBuffer that
+    // arrives here over IPC is backed by *external* memory, and Electron's
+    // serializer refuses to re-serialize external buffers ("External buffers are
+    // not allowed"), which was crashing the worker. `.slice()` allocates an owned
+    // buffer and memcpy's the bytes, stripping the external flag.
+    if (chunk instanceof ArrayBuffer) pcm = chunk.slice(0);
     else if (ArrayBuffer.isView(chunk)) {
       pcm = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
     }

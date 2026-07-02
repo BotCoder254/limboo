@@ -166,7 +166,12 @@ function transcribe(samples: Float32Array): void {
 function drainVadSegments(): void {
   if (!vad) return;
   while (!vad.isEmpty()) {
-    const segment = vad.front();
+    // `enableExternalBuffer: false` — return the segment samples in a
+    // V8-managed (cage-internal) Float32Array instead of one backed by external
+    // C++ memory. Electron's V8 sandbox forbids external ArrayBuffers
+    // ("External buffers are not allowed"), which was crashing this worker on the
+    // first VAD segment. sherpa copies into the cage when this flag is false.
+    const segment = vad.front(false);
     vad.pop();
     if (speechActive) {
       speechActive = false;
@@ -289,6 +294,10 @@ async function runTtsJob(job: TtsJob): Promise<void> {
       text: job.text,
       sid: job.sid,
       speed: job.speed,
+      // Return synthesized samples in cage-internal buffers (see VAD note above).
+      // Governs both the streamed onProgress chunks and the final result samples;
+      // without it Kokoro's external buffers crash the worker under the V8 cage.
+      enableExternalBuffer: false,
       onProgress: (info) => {
         if (ttsCancelled.has(job.id)) return 0;
         buffered.push(info.samples.slice());
