@@ -8,7 +8,8 @@ CircleCI. The full, provider-specific documentation lives in
 [`ci/pipeline.yml`](../../ci/pipeline.yml). The pipeline is layered:
 **CI** (validate -> build -> test on every push/PR) ->
 **CD** (package + SBOM + checksums + signing) ->
-**Release** (tag-triggered notes + GitHub Release with provenance attestations).
+**Release** (tag-triggered notes + GitHub Release; published by CircleCI, with
+provenance attestations available on the GitHub Actions fallback path).
 
 ## Workflows
 
@@ -23,7 +24,7 @@ Runs on pushes and pull requests to `main` as three fail-fast jobs:
 
 It does **not** run `tsc`, by design (TypeScript is ~4.5; the renderer is
 esbuild-bundled). The reusable logic lives in [`ci/scripts/`](../../ci/scripts) so all
-three providers run identical behavior. Node 20, npm caching, in-progress cancellation
+three providers run identical behavior. Node 22, npm caching, in-progress cancellation
 per ref. See [docs/ci/local-testing.md](../ci/local-testing.md) to reproduce locally.
 
 ### Security (`.github/workflows/security.yml`)
@@ -31,12 +32,16 @@ per ref. See [docs/ci/local-testing.md](../ci/local-testing.md) to reproduce loc
 Secret scanning (gitleaks), dependency review on PRs, `npm audit`, and a CycloneDX SBOM
 artifact — on push/PR plus a weekly schedule. See [docs/ci/security.md](../ci/security.md).
 
-### CD and Release (`cd.yml`, `release.yml`, `_package.yml`)
+### CD and Release
 
-`_package.yml` is the reusable build (matrix make, SBOM, checksums, signing
-verification, provenance/SBOM attestations). `cd.yml` invokes it as a manual dry-run;
-`release.yml` invokes it on a `v*` tag and then publishes a GitHub Release with all
-installers, `SHA256SUMS` and the SBOM. See
+**CircleCI is the primary release pipeline**: the `release` workflow in
+[`.circleci/config.yml`](../../.circleci/config.yml) triggers on every `v*` tag,
+packages installers on Linux, Windows and macOS, and publishes the GitHub Release
+(installers, `latest*.yml` + `*.blockmap` auto-update metadata, `SHA256SUMS`,
+SBOM). On the GitHub Actions side, `_package.yml` is the reusable build (matrix,
+SBOM, checksums, signing verification, provenance/SBOM attestations); `cd.yml`
+invokes it as a manual dry-run and `release.yml` is a **manual-dispatch fallback
+publisher** (no tag trigger, so it can never race CircleCI). See
 [docs/ci/release-process.md](../ci/release-process.md).
 
 ### CodeQL (`.github/workflows/codeql.yml`)

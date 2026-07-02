@@ -9,7 +9,7 @@
 # that reason there is deliberately no `electronFuses`, `files`, or `asar*` block
 # here: the app directory is taken as-is.
 #
-# Regenerate the branded art with: bash scripts/gen-installer-assets.sh
+# Regenerate the branded art with: npm run gen:installer
 
 appId: dev.limboo.app
 productName: Limboo

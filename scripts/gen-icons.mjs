@@ -6,8 +6,8 @@
  * Cross-platform (uses `sharp`, which ships prebuilt binaries), so it works on the
  * Windows dev box where rsvg-convert / ImageMagick are unavailable. It only
  * produces the runtime app/tray/notification icons — the Windows *installer* art
- * (.ico, NSIS sidebars) is still built by scripts/gen-installer-assets.sh, which
- * needs rsvg-convert + ImageMagick.
+ * (.ico, NSIS sidebars) is built by the equally cross-platform
+ * scripts/gen-installer-assets.mjs (`npm run gen:installer`).
  *
  *   node scripts/gen-icons.mjs
  *

@@ -1,6 +1,8 @@
 # GitHub Actions
 
-The primary implementation. Five workflows under [`.github/workflows`](../../.github/workflows):
+Runs the CI/security/SAST layers plus a **manual release fallback** — the primary
+release publisher is CircleCI (see [circleci.md](circleci.md)). Workflows under
+[`.github/workflows`](../../.github/workflows):
 
 | Workflow | Trigger | Purpose |
 | -------- | ------- | ------- |
@@ -8,8 +10,13 @@ The primary implementation. Five workflows under [`.github/workflows`](../../.gi
 | `security.yml` | push / PR / weekly | secret scan, dependency review, audit, SBOM |
 | `codeql.yml` | push / PR / weekly | SAST (JavaScript/TypeScript) |
 | `cd.yml` | manual dispatch | package + SBOM + checksums (no publish) |
-| `release.yml` | `v*` tag | package (attested) + GitHub Release |
+| `release.yml` | manual dispatch (`tag` input) | fallback publisher (primary: CircleCI) |
 | `_package.yml` | reusable (`workflow_call`) | the shared packaging build |
+
+> **Account-level block (current):** this private repo's Actions runs all end in
+> `startup_failure` because of a GitHub billing/spending-limit block on the
+> account — no workflow here executes until that is fixed in **Settings ->
+> Billing** (or the repo is made public). CircleCI is unaffected.
 
 `cd.yml` and `release.yml` both call `_package.yml`, so the build instructions exist in
 exactly one place. A single reusable build is also the path to SLSA Build L3.

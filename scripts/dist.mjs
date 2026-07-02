@@ -38,7 +38,19 @@ if (!existsSync(prepackaged)) {
 const platformFlag =
   process.platform === 'win32' ? '--win' : process.platform === 'darwin' ? '--mac' : '--linux';
 
-const args = ['electron-builder', platformFlag, '--prepackaged', prepackaged, ...process.argv.slice(2)];
+// Pin the arch to the one Forge just packaged: electron-builder.yml lists both
+// mac arches, but a --prepackaged dir contains exactly one, and the CLI arch
+// flag overrides the config so electron-builder never attempts the other.
+const archFlag = process.arch === 'arm64' ? '--arm64' : '--x64';
+
+const args = [
+  'electron-builder',
+  platformFlag,
+  archFlag,
+  '--prepackaged',
+  prepackaged,
+  ...process.argv.slice(2),
+];
 
 console.log(`[dist] electron-builder ${args.slice(1).join(' ')}`);
 

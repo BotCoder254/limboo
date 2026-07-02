@@ -10,10 +10,10 @@ on:
   workflow_call:
     inputs:
       ref:
-        description: Git ref to build
+        description: Git ref to build (empty = the caller's own ref)
         type: string
         required: false
-        default: ${{ github.ref }}
+        default: ""
       attest:
         description: Generate provenance/SBOM attestations
         type: boolean
@@ -39,7 +39,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
