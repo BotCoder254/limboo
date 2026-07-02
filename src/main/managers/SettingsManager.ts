@@ -17,6 +17,7 @@ import {
   MEMORY_LIMITS,
   SEARCH_LIMITS,
   SETTINGS_VERSION,
+  VOICE_LIMITS,
   clamp,
 } from '@shared/constants';
 import { IpcEvents } from '@shared/ipc-channels';
@@ -171,6 +172,43 @@ export class SettingsManager {
 
     merged.updates.autoCheck = !!merged.updates.autoCheck;
     merged.updates.autoDownload = !!merged.updates.autoDownload;
+
+    // Voice — clamp the numeric tuning knobs, whitelist the enums, and coerce
+    // the boolean toggles (renderer-supplied strings must never reach the
+    // speech worker or the download pipeline unchecked).
+    const voice = merged.voice;
+    const V = VOICE_LIMITS;
+    voice.enabled = !!voice.enabled;
+    voice.input.sensitivity = clamp(voice.input.sensitivity, V.sensitivity.min, V.sensitivity.max);
+    voice.input.silenceMs = Math.round(
+      clamp(voice.input.silenceMs, V.silenceMs.min, V.silenceMs.max),
+    );
+    if (!['push-to-talk', 'toggle', 'auto'].includes(voice.input.activation)) {
+      voice.input.activation = 'auto';
+    }
+    voice.input.autoPunctuation = !!voice.input.autoPunctuation;
+    voice.input.deviceId = String(voice.input.deviceId ?? '').slice(0, 256);
+    voice.input.language = String(voice.input.language ?? 'en').slice(0, 16);
+    voice.output.enabled = !!voice.output.enabled;
+    voice.output.deviceId = String(voice.output.deviceId ?? '').slice(0, 256);
+    voice.output.speakerId = Math.round(
+      clamp(voice.output.speakerId, V.speakerId.min, V.speakerId.max),
+    );
+    voice.output.speed = clamp(voice.output.speed, V.speed.min, V.speed.max);
+    voice.output.volume = clamp(voice.output.volume, V.volume.min, V.volume.max);
+    voice.output.streamWhileGenerating = !!voice.output.streamWhileGenerating;
+    if (!['voice-initiated', 'always'].includes(voice.output.speakWhen)) {
+      voice.output.speakWhen = 'voice-initiated';
+    }
+    for (const key of Object.keys(voice.playbackEvents) as (keyof typeof voice.playbackEvents)[]) {
+      voice.playbackEvents[key] = !!voice.playbackEvents[key];
+    }
+    if (!['stop', 'pause', 'ignore'].includes(voice.interruption)) {
+      voice.interruption = 'stop';
+    }
+    voice.models.autoDownload = !!voice.models.autoDownload;
+    voice.models.autoUpdate = !!voice.models.autoUpdate;
+    voice.models.offlineOnly = !!voice.models.offlineOnly;
 
     return merged;
   }

@@ -14,10 +14,19 @@ export interface NotifyOptions {
 }
 
 export class NotificationManager {
+  /** Optional voice hook — set by the VoiceManager to speak notifications. */
+  private speaker: ((text: string) => void) | null = null;
+
   constructor(private readonly settings: SettingsManager) {}
+
+  /** Wire the voice subsystem's spoken-notification hook (gated there). */
+  setSpeaker(speaker: (text: string) => void): void {
+    this.speaker = speaker;
+  }
 
   notify(options: NotifyOptions): void {
     if (!this.settings.getAll().behavior.notifications) return;
+    this.speaker?.([options.title, options.body].filter(Boolean).join('. '));
     if (!Notification.isSupported()) return;
 
     new Notification({

@@ -29,12 +29,19 @@ export default defineConfig({
       // native-ish behavior) that Rollup cannot trace, and it must resolve from
       // node_modules at runtime. Keep it external (plain runtime `require`) like
       // the native modules below.
+      // `sherpa-onnx-node` (voice worker runtime) is a native Node-API addon —
+      // external for the same reason as node-pty. `tar-fs` / `unbzip2-stream`
+      // (voice model archive extraction) stay external too: plain runtime
+      // `require()`s resolved from the pruned production node_modules.
       external: [
         'better-sqlite3',
         'bindings',
         '@anthropic-ai/claude-agent-sdk',
         'node-pty',
         'electron-updater',
+        'sherpa-onnx-node',
+        'tar-fs',
+        'unbzip2-stream',
       ],
     },
   },

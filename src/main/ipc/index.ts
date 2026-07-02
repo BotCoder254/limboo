@@ -12,6 +12,8 @@ import type { GitManager } from '../managers/GitManager';
 import type { MemoryManager } from '../managers/memory/MemoryManager';
 import type { SearchManager } from '../managers/search/SearchManager';
 import type { AutoUpdateManager } from '../managers/AutoUpdateManager';
+import type { VoiceManager } from '../managers/voice/VoiceManager';
+import type { VoiceModelManager } from '../managers/voice/VoiceModelManager';
 import { registerWindowHandlers } from './windowHandlers';
 import { registerSettingsHandlers } from './settingsHandlers';
 import { registerSystemHandlers } from './systemHandlers';
@@ -24,6 +26,7 @@ import { registerGitHandlers } from './gitHandlers';
 import { registerMemoryHandlers } from './memoryHandlers';
 import { registerSearchHandlers } from './searchHandlers';
 import { registerUpdateHandlers } from './updateHandlers';
+import { registerVoiceHandlers } from './voiceHandlers';
 
 export interface IpcDeps {
   settings: SettingsManager;
@@ -37,6 +40,8 @@ export interface IpcDeps {
   memory: MemoryManager;
   search: SearchManager;
   updates: AutoUpdateManager;
+  voice: VoiceManager;
+  voiceModels: VoiceModelManager;
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -52,4 +57,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerMemoryHandlers(deps.memory);
   registerSearchHandlers(deps.search);
   registerUpdateHandlers(deps.updates);
+  registerVoiceHandlers(deps.voice, deps.voiceModels, deps.settings);
 }

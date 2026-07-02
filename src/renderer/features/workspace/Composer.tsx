@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { ArrowUp, CircleStop, Paperclip, Sparkles } from 'lucide-react';
+import { ArrowUp, CircleStop, Mic, Paperclip, Sparkles, Volume2 } from 'lucide-react';
 import type { SessionPermissionMode } from '@shared/types';
 import { cn } from '@/renderer/lib/cn';
 import { Spinner } from '@/renderer/components/ui';
@@ -22,11 +22,17 @@ import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
+import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
+import { useUIStore } from '@/renderer/stores/useUIStore';
 import { lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
 import { RUNNING_PHASES } from '@/renderer/features/sessions/useSessionRunning';
 import { ComposerControls } from './ComposerControls';
 import { ComposerModeSwitch } from './ComposerModeSwitch';
 import { ComposerBanner } from './ComposerBanner';
+import { ComposerVoiceOverlay } from './ComposerVoiceOverlay';
+
+/** Voice phases during which the composer shows the recording overlay. */
+const VOICE_CAPTURE_PHASES = new Set(['starting', 'listening', 'recording', 'transcribing']);
 
 /** Max grow height before the editor scrolls internally (~40vh). */
 const MAX_HEIGHT = 320;
@@ -69,6 +75,40 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   const restricted = lifecycle === 'rate-limited' || lifecycle === 'auth-required';
   const blocked = disabled || !installed || busy || restricted;
 
+  // Voice — speech is another input for the SAME session (never a separate
+  // conversation). The mic is the DEFAULT primary button while the textarea is
+  // empty; typing morphs it into the send arrow (ChatGPT-style).
+  const voicePhase = useVoiceStore((s) => s.state.phase);
+  const voiceSessionId = useVoiceStore((s) => s.state.sessionId);
+  const modelsReady = useVoiceStore((s) => s.state.modelsReady);
+  const startVoice = useVoiceStore((s) => s.startVoice);
+  const stopSpeaking = useVoiceStore((s) => s.stopSpeaking);
+  const voiceEnabled = useSettingsStore((s) => s.settings.voice.enabled);
+  const voiceReady = voiceEnabled && modelsReady.stt && modelsReady.vad;
+  const voiceCapturing = VOICE_CAPTURE_PHASES.has(voicePhase) && voiceSessionId === sessionId;
+
+  const beginVoice = () => {
+    if (blocked || !sessionId) return;
+    if (!voiceReady) {
+      useUIStore.getState().addToast({
+        title: voiceEnabled ? 'Speech models not installed' : 'Voice is disabled',
+        description: voiceEnabled
+          ? 'Download the local speech models in Settings › Voice.'
+          : 'Enable voice in Settings › Voice.',
+        tone: 'warning',
+      });
+      useUIStore.getState().openModal('settings');
+      return;
+    }
+    void startVoice(sessionId, mode).catch((err) => {
+      useUIStore.getState().addToast({
+        title: 'Voice input failed',
+        description: err instanceof Error ? err.message : String(err),
+        tone: 'danger',
+      });
+    });
+  };
+
   const autoGrow = () => {
     const el = ref.current;
     if (!el) return;
@@ -106,52 +146,82 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
         <ComposerBanner />
         <div className="flex flex-col gap-2">
           <div className="flex items-end gap-2 rounded-3xl border border-line bg-surface-2 px-4 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors focus-within:border-line-strong">
-            <button
-              type="button"
-              className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="Attach"
-              disabled={blocked}
-            >
-              <Paperclip size={15} />
-            </button>
-            <textarea
-              ref={ref}
-              rows={1}
-              value={value}
-              disabled={disabled || !installed}
-              onChange={(e) => {
-                setValue(e.target.value);
-                autoGrow();
-              }}
-              onKeyDown={onKeyDown}
-              placeholder={composerPlaceholder(disabled, installed, restricted, mode)}
-              className="flex-1 resize-none bg-transparent py-1 text-[13px] leading-relaxed text-fg placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
-              style={{ maxHeight: MAX_HEIGHT }}
-            />
-            {busy ? (
-              <button
-                type="button"
-                onClick={() => sessionId && stop(sessionId)}
-                className="mb-0.5 flex h-7 items-center gap-1.5 rounded-full bg-surface px-2.5 text-[12px] font-semibold text-fg transition-colors hover:bg-elevated"
-              >
-                <CircleStop size={14} />
-                Stop
-              </button>
+            {voiceCapturing ? (
+              <ComposerVoiceOverlay phase={voicePhase} />
             ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={blocked || value.trim().length === 0}
-                className={cn(
-                  'mb-0.5 flex h-7 w-7 items-center justify-center rounded-full transition-opacity',
-                  blocked || value.trim().length === 0
-                    ? 'cursor-not-allowed bg-surface text-faint'
-                    : 'bg-accent text-base hover:opacity-90',
+              <>
+                <button
+                  type="button"
+                  className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Attach"
+                  disabled={blocked}
+                >
+                  <Paperclip size={15} />
+                </button>
+                <textarea
+                  ref={ref}
+                  rows={1}
+                  value={value}
+                  disabled={disabled || !installed}
+                  onChange={(e) => {
+                    setValue(e.target.value);
+                    autoGrow();
+                  }}
+                  onKeyDown={onKeyDown}
+                  placeholder={composerPlaceholder(disabled, installed, restricted, mode)}
+                  className="flex-1 resize-none bg-transparent py-1 text-[13px] leading-relaxed text-fg placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
+                  style={{ maxHeight: MAX_HEIGHT }}
+                />
+                {busy ? (
+                  <button
+                    type="button"
+                    onClick={() => sessionId && stop(sessionId)}
+                    className="mb-0.5 flex h-7 items-center gap-1.5 rounded-full bg-surface px-2.5 text-[12px] font-semibold text-fg transition-colors hover:bg-elevated"
+                  >
+                    <CircleStop size={14} />
+                    Stop
+                  </button>
+                ) : value.trim().length === 0 ? (
+                  /* Default (empty) state: the voice button — typing morphs it
+                     into the send arrow, ChatGPT-style. */
+                  <button
+                    type="button"
+                    onClick={beginVoice}
+                    disabled={blocked}
+                    title={
+                      voiceReady
+                        ? 'Voice input'
+                        : 'Install the local speech models in Settings › Voice'
+                    }
+                    className={cn(
+                      'mb-0.5 flex h-7 w-7 items-center justify-center rounded-full transition-opacity',
+                      blocked
+                        ? 'cursor-not-allowed bg-surface text-faint'
+                        : voiceReady
+                          ? 'bg-accent text-base hover:opacity-90'
+                          : 'bg-surface text-muted hover:text-fg',
+                    )}
+                    aria-label="Voice input"
+                  >
+                    <Mic size={15} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={submit}
+                    disabled={blocked}
+                    className={cn(
+                      'mb-0.5 flex h-7 w-7 items-center justify-center rounded-full transition-opacity',
+                      blocked
+                        ? 'cursor-not-allowed bg-surface text-faint'
+                        : 'bg-accent text-base hover:opacity-90',
+                    )}
+                    aria-label="Send"
+                  >
+                    <ArrowUp size={15} />
+                  </button>
                 )}
-                aria-label="Send"
-              >
-                <ArrowUp size={15} />
-              </button>
+              </>
             )}
           </div>
 
@@ -165,6 +235,17 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
             <span className="hidden h-3.5 w-px shrink-0 bg-line sm:block" />
             <ComposerControls disabled={disabled || !installed} />
             <span className="ml-auto flex min-w-0 shrink items-center gap-2 text-[11px] text-faint">
+              {voicePhase === 'speaking' && (
+                <button
+                  type="button"
+                  onClick={() => void stopSpeaking()}
+                  className="flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-accent transition-colors hover:bg-elevated"
+                  title="Stop speaking"
+                >
+                  <Volume2 size={11} />
+                  Speaking — tap to stop
+                </button>
+              )}
               <StatusHint
                 installed={installed}
                 installError={installError}

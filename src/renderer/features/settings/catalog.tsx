@@ -16,6 +16,7 @@ import {
   Keyboard,
   Info,
   ListTodo,
+  Mic,
   TerminalSquare,
   ArrowUpCircle,
   type LucideIcon,
@@ -29,6 +30,7 @@ import { PlanTasksPanel } from './panels/PlanTasksPanel';
 import { TerminalPanel } from './panels/TerminalPanel';
 import { GitPanel } from './panels/GitPanel';
 import { MemoryPanel } from './panels/MemoryPanel';
+import { VoicePanel } from './panels/VoicePanel';
 import { ShortcutsPanel } from './panels/ShortcutsPanel';
 import { UpdatesPanel } from './panels/UpdatesPanel';
 import { AboutPanel } from './panels/AboutPanel';
@@ -162,6 +164,44 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
       { id: 'terminalMirrorAgent', label: 'Mirror agent commands', keywords: ['agent', 'mirror', 'command'] },
     ],
     Panel: TerminalPanel,
+  },
+  {
+    id: 'voice',
+    label: 'Voice',
+    icon: Mic,
+    keywords: ['voice', 'speech', 'microphone', 'mic', 'speak', 'talk', 'dictation', 'tts', 'stt', 'audio', 'kokoro', 'parakeet', 'whisper', 'vad', 'offline', 'models', 'text to speech', 'speech recognition'],
+    fields: [
+      { id: 'voiceEnabled', label: 'Enable voice', keywords: ['on', 'off', 'toggle', 'master'] },
+      { id: 'voiceModels', label: 'Speech models', keywords: ['download', 'install', 'kokoro', 'parakeet', 'model', 'offline'] },
+      { id: 'voiceInputDevice', label: 'Microphone', keywords: ['device', 'input', 'mic'] },
+      { id: 'voiceActivation', label: 'Activation', keywords: ['push to talk', 'toggle', 'automatic', 'vad', 'hands free'] },
+      { id: 'voiceSensitivity', label: 'Input sensitivity', keywords: ['threshold', 'noise', 'detection'] },
+      { id: 'voiceSilence', label: 'End of speech after', keywords: ['silence', 'pause', 'endpoint'] },
+      { id: 'voiceLanguage', label: 'Language', keywords: ['english', 'locale'] },
+      { id: 'voicePunctuation', label: 'Automatic punctuation', keywords: ['punctuation', 'commas'] },
+      { id: 'voiceMicTest', label: 'Microphone test', keywords: ['test', 'levels', 'diagnostics'] },
+      { id: 'voiceOutputEnabled', label: 'Speak responses', keywords: ['tts', 'playback', 'speak'] },
+      { id: 'voiceOutputDevice', label: 'Speaker', keywords: ['device', 'output', 'headphones'] },
+      { id: 'voiceSpeaker', label: 'Voice', keywords: ['speaker', 'voice selection', 'kokoro'] },
+      { id: 'voiceSpeed', label: 'Speech speed', keywords: ['rate', 'faster', 'slower'] },
+      { id: 'voiceVolume', label: 'Volume', keywords: ['loudness', 'gain'] },
+      { id: 'voiceStreaming', label: 'Speak while generating', keywords: ['streaming', 'progressive', 'sentences'] },
+      { id: 'voiceSpeakWhen', label: 'Speak replies to', keywords: ['voice initiated', 'always', 'gating'] },
+      { id: 'voiceSpeakerTest', label: 'Speaker test', keywords: ['test', 'sample', 'diagnostics'] },
+      { id: 'voiceGateFinal', label: 'Speak final answers', keywords: ['playback', 'gating', 'answers'] },
+      { id: 'voiceGateTools', label: 'Speak while tools run', keywords: ['playback', 'gating', 'tools'] },
+      { id: 'voiceGatePlanning', label: 'Speak planning updates', keywords: ['playback', 'gating', 'plan'] },
+      { id: 'voiceGateCompletion', label: 'Speak task completion', keywords: ['playback', 'gating', 'done'] },
+      { id: 'voiceGateNotifications', label: 'Speak notifications', keywords: ['playback', 'gating', 'notify'] },
+      { id: 'voiceInterruption', label: 'When you interrupt', keywords: ['barge in', 'stop', 'pause'] },
+      { id: 'voiceShortcutToggle', label: 'Toggle voice input shortcut', keywords: ['keyboard', 'hotkey', 'shortcut'] },
+      { id: 'voiceAutoDownload', label: 'Download models automatically', keywords: ['auto', 'download', 'network'] },
+      { id: 'voiceAutoUpdate', label: 'Update models automatically', keywords: ['auto', 'update', 'revision'] },
+      { id: 'voiceOfflineOnly', label: 'Offline only', keywords: ['network', 'privacy', 'no internet'] },
+      { id: 'voiceStorage', label: 'Model storage', keywords: ['folder', 'disk', 'location', 'reveal'] },
+      { id: 'voiceCache', label: 'Remove all voice models', keywords: ['cache', 'disk space', 'delete', 'cleanup'] },
+    ],
+    Panel: VoicePanel,
   },
   {
     id: 'git',

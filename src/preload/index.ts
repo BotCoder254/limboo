@@ -9,7 +9,7 @@
  * See: https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import { IpcChannels, IpcEvents } from '@shared/ipc-channels';
+import { IpcChannels, IpcEvents, IpcSends } from '@shared/ipc-channels';
 import type {
   AgentDiagnostic,
   AgentEvent,
@@ -64,6 +64,10 @@ import type {
   TerminalExit,
   TerminalSession,
   UpdateStatus,
+  VoiceModelState,
+  VoiceState,
+  VoiceTranscript,
+  VoiceTtsChunk,
   Workspace,
   WorkspaceConfig,
   WorkspaceStats,
@@ -426,6 +430,51 @@ const updatesApi = {
     subscribe<UpdateStatus>(IpcEvents.updateStatus, cb),
 };
 
+const voiceApi = {
+  /** Current voice runtime state (for hydration on mount). */
+  getState: (): Promise<VoiceState> => ipcRenderer.invoke(IpcChannels.voiceGetState),
+  /** Begin a capture session bound to a session (same mode as a typed send). */
+  start: (sessionId: string, mode: SessionPermissionMode): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.voiceStart, sessionId, mode),
+  /** End the capture and transcribe what was heard (toggle off / PTT release). */
+  stop: (): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceStop),
+  /** Abandon the capture without transcribing. */
+  cancel: (): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceCancel),
+  /** Stop all speech playback immediately. */
+  stopSpeaking: (): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceStopSpeaking),
+  /** Speak arbitrary text (speaker test). */
+  speak: (text: string): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceSpeak, text),
+  /**
+   * One mic PCM chunk (16 kHz mono Int16). Fire-and-forget — high-frequency
+   * audio must not pay the invoke round-trip.
+   */
+  pushAudio: (pcm: ArrayBuffer): void => ipcRenderer.send(IpcSends.voiceAudioChunk, pcm),
+  models: {
+    list: (): Promise<VoiceModelState[]> => ipcRenderer.invoke(IpcChannels.voiceModelsList),
+    download: (id: string): Promise<void> =>
+      ipcRenderer.invoke(IpcChannels.voiceModelDownload, id),
+    pause: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceModelPause, id),
+    resume: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceModelResume, id),
+    cancel: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceModelCancel, id),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceModelRemove, id),
+    verify: (id: string): Promise<boolean> =>
+      ipcRenderer.invoke(IpcChannels.voiceModelVerify, id),
+    reveal: (): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceModelsReveal),
+  },
+  onState: (cb: (state: VoiceState) => void): (() => void) =>
+    subscribe<VoiceState>(IpcEvents.voiceState, cb),
+  onTranscript: (cb: (transcript: VoiceTranscript) => void): (() => void) =>
+    subscribe<VoiceTranscript>(IpcEvents.voiceTranscript, cb),
+  onTtsChunk: (cb: (chunk: VoiceTtsChunk) => void): (() => void) =>
+    subscribe<VoiceTtsChunk>(IpcEvents.voiceTtsChunk, cb),
+  onPlaybackCancel: (cb: (payload: { sessionId: string | null }) => void): (() => void) =>
+    subscribe<{ sessionId: string | null }>(IpcEvents.voicePlaybackCancel, cb),
+  onModelProgress: (cb: (state: VoiceModelState) => void): (() => void) =>
+    subscribe<VoiceModelState>(IpcEvents.voiceModelProgress, cb),
+  onModelsChanged: (cb: (models: VoiceModelState[]) => void): (() => void) =>
+    subscribe<VoiceModelState[]>(IpcEvents.voiceModelsChanged, cb),
+};
+
 const limbooApi = {
   window: windowApi,
   settings: settingsApi,
@@ -441,6 +490,7 @@ const limbooApi = {
   memory: memoryApi,
   search: searchApi,
   updates: updatesApi,
+  voice: voiceApi,
 };
 
 contextBridge.exposeInMainWorld('limboo', limbooApi);
