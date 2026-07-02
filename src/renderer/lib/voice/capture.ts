@@ -41,7 +41,10 @@ export async function startCapture(options: {
   };
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
   const ctx = new AudioContext();
-  await ctx.audioWorklet.addModule(workletUrl);
+  // Vite emits `workletUrl` relative to the app base (`./assets/…`). Resolve it
+  // against the document base URL so it loads under the `file://` protocol used
+  // by the packaged app, not just the dev server's http origin.
+  await ctx.audioWorklet.addModule(new URL(workletUrl, document.baseURI).href);
 
   const source = ctx.createMediaStreamSource(stream);
   const worklet = new AudioWorkletNode(ctx, 'limboo-pcm-capture', {
