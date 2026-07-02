@@ -7,7 +7,7 @@
  * Also exposes the live AnalyserNode so the composer Waveform can render real
  * mic levels without a second audio graph.
  */
-import workletUrl from './pcmWorklet.js?url';
+import workletSource from './pcmWorklet.js?raw';
 
 export interface CaptureHandle {
   /** Live frequency/time-domain analyser for the waveform visualization. */
@@ -41,10 +41,18 @@ export async function startCapture(options: {
   };
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
   const ctx = new AudioContext();
-  // Vite emits `workletUrl` relative to the app base (`./assets/…`). Resolve it
-  // against the document base URL so it loads under the `file://` protocol used
-  // by the packaged app, not just the dev server's http origin.
-  await ctx.audioWorklet.addModule(new URL(workletUrl, document.baseURI).href);
+  // Load the worklet from an inlined Blob rather than a `?url` asset. `?raw`
+  // bundles the processor source straight into the JS chunk, so there is no
+  // separate asset file to emit and no base/`file://` path resolution to get
+  // wrong — it behaves identically under the dev server and the packaged app.
+  // (The production CSP allows this via `worker-src 'self' blob:`.)
+  const blob = new Blob([workletSource], { type: 'application/javascript' });
+  const workletUrl = URL.createObjectURL(blob);
+  try {
+    await ctx.audioWorklet.addModule(workletUrl);
+  } finally {
+    URL.revokeObjectURL(workletUrl);
+  }
 
   const source = ctx.createMediaStreamSource(stream);
   const worklet = new AudioWorkletNode(ctx, 'limboo-pcm-capture', {

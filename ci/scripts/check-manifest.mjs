@@ -46,6 +46,28 @@ async function main() {
   if (/^\d+\.\d+\.\d+/.test(pkg.version ?? '')) ok(`version: ${pkg.version}`);
   else fail(`package.json version is not semver: ${pkg.version}`);
 
+  // On a release (v* tag) pipeline, the build derives every artifact — the app's
+  // app.getVersion() and electron-builder's latest.yml — from package.json, while
+  // the GitHub/GitLab Release is tagged from the git tag. If the two disagree the
+  // Release ships mislabeled binaries and electron-updater never detects the new
+  // version. Fail fast here (validate stage, before the expensive package stage).
+  // Only enforced when a release tag is present, so ordinary commit pipelines are
+  // unaffected. Reads either CI's tag env (GitLab: CI_COMMIT_TAG; GitHub Actions:
+  // GITHUB_REF_NAME when GITHUB_REF_TYPE=tag).
+  const releaseTag =
+    process.env.CI_COMMIT_TAG ||
+    (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : '') ||
+    '';
+  if (releaseTag) {
+    const tagVersion = releaseTag.replace(/^v/, '');
+    if (tagVersion === pkg.version) ok(`release tag ${releaseTag} matches package.json version`);
+    else
+      fail(
+        `release tag ${releaseTag} (=${tagVersion}) does not match package.json version ` +
+          `${pkg.version} — bump package.json (and commit) before tagging`,
+      );
+  }
+
   for (const s of ['start', 'package', 'make', 'lint']) {
     if (pkg.scripts?.[s]) ok(`script "${s}" present`);
     else fail(`package.json is missing the "${s}" script`);

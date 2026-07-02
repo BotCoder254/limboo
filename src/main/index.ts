@@ -244,12 +244,20 @@ function hardenSession(): void {
   const isDev = !!devUrl || !app.isPackaged;
   const policy = isDev
     ? "default-src 'self' 'unsafe-inline' data: blob:; " +
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; " +
       "style-src 'self' 'unsafe-inline'; " +
+      "worker-src 'self' blob:; " +
       "connect-src 'self' ws: http: https:; img-src 'self' data: blob:;"
     : "default-src 'self'; " +
-      "script-src 'self'; " +
+      // blob: on script-src is what actually permits the voice capture
+      // AudioWorklet: Chromium checks worklet module loads against
+      // script-src-elem, which falls back to script-src. The worklet source is
+      // inlined (see capture.ts) and loaded from a same-origin Blob URL; page/
+      // script loading otherwise stays locked to 'self'. worker-src is kept as
+      // defensive, spec-compliant coverage.
+      "script-src 'self' blob:; " +
       "style-src 'self' 'unsafe-inline'; " +
+      "worker-src 'self' blob:; " +
       // media-src is defensive: voice playback uses Web Audio AudioBuffers (no
       // <audio> element), but a blob-backed fallback must never be CSP-broken.
       "img-src 'self' data:; media-src 'self' blob:; connect-src 'self';";
