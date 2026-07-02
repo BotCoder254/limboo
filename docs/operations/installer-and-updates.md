@@ -70,13 +70,13 @@ ever stored.
 
 ## Release authentication: GH_TOKEN vs the `gh` CLI
 
-- **Automated CI releases** use **`GH_TOKEN`**. On CircleCI (the primary
-  publisher — the `release` workflow in `.circleci/config.yml`), store a
-  fine-grained PAT with `contents:write` as `GH_TOKEN` in the `limboo-release`
-  **Context** (never in the config file); the `publish-release` job feeds it to a
-  pinned `gh` CLI. On the GitHub Actions fallback (`release.yml`, manual
-  dispatch), the built-in `GITHUB_TOKEN` (with `contents: write`) is sufficient
-  via `softprops/action-gh-release`.
+- **Automated CI releases** use **`GH_TOKEN`**. On GitLab (the primary publisher —
+  the `release:github` job in `.gitlab-ci.yml`), store a fine-grained PAT with
+  `contents:write` as a **Masked + Protected** CI/CD variable named `GH_TOKEN`
+  (never in the YAML); the job feeds it to a pinned `gh` CLI. The GitLab Release
+  itself (`release:gitlab`) uses the built-in `CI_JOB_TOKEN`. On the GitHub Actions
+  fallback (`release.yml`, manual dispatch), the built-in `GITHUB_TOKEN` (with
+  `contents: write`) is sufficient via `softprops/action-gh-release`.
 - **Manual / local releases** use your authenticated **`gh` CLI**:
 
   ```bash
@@ -90,18 +90,12 @@ ever stored.
   The `latest*.yml` and `*.blockmap` files **must** be attached or auto-update will
   not detect/verify new versions.
 
-CI never uses the local `gh` login; it always uses the token from the secret/context.
+CI never uses the local `gh` login; it always uses the token from the CI/CD variable.
 
-## Deploy markers (CircleCI)
+## Release environments (GitLab)
 
-The CircleCI `release` job logs a deploy marker so the release shows up in the
-Deploys UI and can drive rollback/deploy pipelines (auto-generated markers were
-sunset 2025-06, so they are created explicitly):
-
-```
-circleci run release plan "limboo-$CIRCLE_TAG" --environment-name=production \
-  --component-name=limboo-desktop --target-version="$CIRCLE_TAG" --namespace=default
-circleci run release update "limboo-$CIRCLE_TAG" --status=running
-# ... publish ...
-circleci run release update "limboo-$CIRCLE_TAG" --status=SUCCESS    # or FAILED on_fail
-```
+The GitLab pipeline publishes to both hosts from a single tagged build. Track and
+gate releases with **Settings -> CI/CD -> Environments** (optionally requiring a
+protected environment / manual approval on the release jobs) rather than CI-specific
+deploy markers. The `v*` tag must be a **Protected tag** so the protected `GH_TOKEN`
+variable is exposed to `release:github`.

@@ -5,7 +5,8 @@ name: CI
 #   validate  ->  build  ->  test (cross-platform).
 # TypeScript is ~4.5 and the renderer is esbuild-bundled, so `tsc --noEmit` is
 # intentionally NOT used (CLAUDE.md §2/§9). All reusable logic lives in
-# ci/scripts/*.mjs so GitLab CI and CircleCI run identical behavior.
+# ci/scripts/*.mjs so GitLab CI (the primary pipeline) and GitHub Actions run
+# identical behavior.
 
 on:
   push:

@@ -1,7 +1,7 @@
 # GitHub Actions
 
 Runs the CI/security/SAST layers plus a **manual release fallback** — the primary
-release publisher is CircleCI (see [circleci.md](circleci.md)). Workflows under
+release publisher is GitLab (see [gitlab-ci.md](gitlab-ci.md)). Workflows under
 [`.github/workflows`](../../.github/workflows):
 
 | Workflow | Trigger | Purpose |
@@ -10,13 +10,14 @@ release publisher is CircleCI (see [circleci.md](circleci.md)). Workflows under
 | `security.yml` | push / PR / weekly | secret scan, dependency review, audit, SBOM |
 | `codeql.yml` | push / PR / weekly | SAST (JavaScript/TypeScript) |
 | `cd.yml` | manual dispatch | package + SBOM + checksums (no publish) |
-| `release.yml` | manual dispatch (`tag` input) | fallback publisher (primary: CircleCI) |
+| `release.yml` | manual dispatch (`tag` input) | fallback publisher (primary: GitLab) |
 | `_package.yml` | reusable (`workflow_call`) | the shared packaging build |
 
-> **Account-level block (current):** this private repo's Actions runs all end in
-> `startup_failure` because of a GitHub billing/spending-limit block on the
-> account — no workflow here executes until that is fixed in **Settings ->
-> Billing** (or the repo is made public). CircleCI is unaffected.
+> The GitHub repository is a **push mirror** of GitLab (the source of truth). These
+> Actions run on the mirrored commits and serve as CI + the manual release fallback;
+> the primary release publish happens in GitLab. If Actions is blocked at the account
+> level (billing/spending limit), fix it in **Settings -> Billing** — the GitLab
+> pipeline is unaffected.
 
 `cd.yml` and `release.yml` both call `_package.yml`, so the build instructions exist in
 exactly one place. A single reusable build is also the path to SLSA Build L3.

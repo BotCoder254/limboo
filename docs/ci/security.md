@@ -7,7 +7,7 @@ CLAUDE.md §6 and modern supply-chain guidance (GitHub Artifact Attestations / S
 
 | Control | Where |
 | ------- | ----- |
-| Secret scanning | `security.yml` (gitleaks) / GitLab `secret-scan` / CircleCI |
+| Secret scanning | GitLab `secret-scan` (gitleaks) / `security.yml` (gitleaks) |
 | Dependency audit | `npm audit --audit-level=high` in `validate` |
 | Dependency review (PRs) | `actions/dependency-review-action` |
 | License compliance | [`check-licenses.mjs`](../../ci/scripts/check-licenses.mjs) |
@@ -41,8 +41,8 @@ verification in **audit mode** first (log, don't block), then enforce.
 - Least privilege: workflows default to `permissions: contents: read`; jobs widen only
   what they need.
 - Prefer the built-in `GITHUB_TOKEN` + OIDC over long-lived credentials.
-- Secrets live ONLY in the provider secret store (GitHub Secrets, GitLab masked+protected
-  variables, CircleCI Contexts) — never in the repo or in YAML.
+- Secrets live ONLY in the provider secret store (GitLab masked+protected variables —
+  primary; GitHub Secrets for the Actions fallback) — never in the repo or in YAML.
 - Developer `gh` authentication is for manual workflows; it is never wired into automation.
 - Pin third-party actions to a commit SHA where practical; protect release environments.
 

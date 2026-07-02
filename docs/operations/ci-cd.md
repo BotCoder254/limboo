@@ -1,15 +1,18 @@
 # CI/CD
 
-This page is the operations-level overview of the repository automation under
-[`.github/`](../../.github). Limboo now runs a **provider-agnostic CI/CD platform** —
-one logical pipeline implemented identically for GitHub Actions, GitLab CI and
-CircleCI. The full, provider-specific documentation lives in
+This page is the operations-level overview of the repository automation. Limboo runs
+a **provider-agnostic CI/CD platform** — one logical pipeline whose logic lives in
+provider-neutral scripts — but **GitLab is the single source of truth and primary
+release publisher** ([`.gitlab-ci.yml`](../../.gitlab-ci.yml)); GitHub Actions under
+[`.github/`](../../.github) provides the CI/Security/CodeQL layers plus a
+manual-dispatch release fallback. The full, provider-specific documentation lives in
 [`docs/ci/`](../ci/README.md); the canonical pipeline contract is
 [`ci/pipeline.yml`](../../ci/pipeline.yml). The pipeline is layered:
 **CI** (validate -> build -> test on every push/PR) ->
 **CD** (package + SBOM + checksums + signing) ->
-**Release** (tag-triggered notes + GitHub Release; published by CircleCI, with
-provenance attestations available on the GitHub Actions fallback path).
+**Release** (tag-triggered notes + GitLab Release + an identical GitHub Release,
+published by GitLab, with provenance attestations available on the GitHub Actions
+fallback path).
 
 ## Workflows
 
@@ -34,14 +37,16 @@ artifact — on push/PR plus a weekly schedule. See [docs/ci/security.md](../ci/
 
 ### CD and Release
 
-**CircleCI is the primary release pipeline**: the `release` workflow in
-[`.circleci/config.yml`](../../.circleci/config.yml) triggers on every `v*` tag,
-packages installers on Linux, Windows and macOS, and publishes the GitHub Release
-(installers, `latest*.yml` + `*.blockmap` auto-update metadata, `SHA256SUMS`,
-SBOM). On the GitHub Actions side, `_package.yml` is the reusable build (matrix,
-SBOM, checksums, signing verification, provenance/SBOM attestations); `cd.yml`
-invokes it as a manual dry-run and `release.yml` is a **manual-dispatch fallback
-publisher** (no tag trigger, so it can never race CircleCI). See
+**GitLab is the primary release pipeline**: the `release` stage in
+[`.gitlab-ci.yml`](../../.gitlab-ci.yml) triggers on every `v*` tag, packages
+installers on Linux (shared runner) plus Windows/macOS (SaaS runners), and publishes
+the **same build** to both a GitLab Release and a GitHub Release (installers,
+`latest*.yml` + `*.blockmap` auto-update metadata, `SHA256SUMS`, SBOM). The GitHub
+repo is kept in sync by GitLab push mirroring. On the GitHub Actions side,
+`_package.yml` is the reusable build (matrix, SBOM, checksums, signing verification,
+provenance/SBOM attestations); `cd.yml` invokes it as a manual dry-run and
+`release.yml` is a **manual-dispatch fallback publisher** (no tag trigger, so it can
+never race the GitLab pipeline). See
 [docs/ci/release-process.md](../ci/release-process.md).
 
 ### CodeQL (`.github/workflows/codeql.yml`)
@@ -72,7 +77,8 @@ pinned and bumped deliberately because of the toolchain coupling documented in
 
 ## Planned
 
-A documentation link-check, a release-on-tag pipeline, and a multi-OS installer
-matrix (with code signing) are natural future additions once signing material exists;
-see [packaging and signing](packaging-and-signing.md) and
+A documentation link-check is a natural future addition. The release-on-tag pipeline
+and multi-OS installer matrix now ship in [`.gitlab-ci.yml`](../../.gitlab-ci.yml)
+(code signing activates when signing material is added); see
+[packaging and signing](packaging-and-signing.md) and
 [ROADMAP.md](../../ROADMAP.md).
