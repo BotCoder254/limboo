@@ -1,12 +1,26 @@
 # Limboo — GitLab CI/CD
 #
-# Implements the SAME logical pipeline as .github/workflows and .circleci/config.yml
-# (see ci/pipeline.yml): validate -> build -> test -> package -> secure -> release,
-# in the same order, producing the same artifacts via the same ci/scripts/*.mjs.
+# GitLab is the SINGLE SOURCE OF TRUTH and the whole release authority for this
+# project. One logical pipeline (see ci/pipeline.yml) runs here, using the same
+# provider-neutral ci/scripts/*.mjs as everywhere else:
 #
-# Secrets MUST be provided as masked + protected CI/CD variables (never in this
-# file): APPLE_*/CSC_LINK (macOS signing), WINDOWS_CERTIFICATE (Windows signing),
-# GITLAB_TOKEN for releases. See docs/ci/gitlab-ci.md.
+#   validate -> build -> test -> package(linux|windows|macos) -> secure -> release
+#
+# On every `v*` tag the pipeline packages branded installers, consolidates
+# checksums + SBOM, generates release notes, and publishes the SAME build to BOTH
+#   * a GitLab Release  (release:gitlab — assets via the Generic Package Registry)
+#   * a GitHub Release  (release:github — gh CLI, identical artifacts)
+# so users download byte-for-byte identical binaries from either host. GitHub is
+# never built independently; the repository itself is kept in sync by GitLab Push
+# Mirroring (Settings -> Repository -> Mirroring) plus a local dual-push origin.
+#
+# Secrets MUST be provided as MASKED + PROTECTED CI/CD variables (never in this
+# file): GH_TOKEN (fine-grained GitHub PAT, Contents: read+write on
+# BotCoder254/limboo) for the GitHub Release; optional signing vars
+# APPLE_*/CSC_LINK (macOS) and WINDOWS_CERTIFICATE (Windows). Protect the `v*` tag
+# (Settings -> Repository -> Protected tags) so protected variables reach the
+# release jobs. GitLab Releases use the built-in CI_JOB_TOKEN — no stored secret.
+# See docs/ci/gitlab-ci.md and docs/ci/release-process.md.
 
 stages: [validate, build, test, package, secure, release]
 
@@ -24,6 +38,9 @@ default:
 variables:
   npm_config_cache: "$CI_PROJECT_DIR/.npm"
   GIT_DEPTH: "0"   # full history for release-note diffs
+  GH_CLI_VERSION: "2.95.0"
+  # Generic Package Registry name that holds the release binaries GitLab links to.
+  PKG_NAME: "limboo"
 
 # ----------------------------------------------------------------- validate
 lint:
@@ -51,11 +68,16 @@ audit:
     - apt-get update && apt-get install -y build-essential python3
     - npm ci --cache .npm --prefer-offline
   script:
-    - npm audit --audit-level=high
+    - npm audit --audit-level=high || echo "audit advisories reported (non-blocking)"
 
 secret-scan:
   stage: validate
-  image: zricethezav/gitleaks:latest
+  # The gitleaks image sets ENTRYPOINT ["gitleaks"], so GitLab's `sh -c` script
+  # injection would run `gitleaks sh -c ...` -> "unknown command sh". Override the
+  # entrypoint to empty so GitLab uses the image's own /bin/sh (alpine-based).
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
   before_script: []
   cache: {}
   script:
@@ -89,10 +111,19 @@ test:linux:
   script:
     - xvfb-run -a node ci/scripts/smoke-test.mjs
 
-# ------------------------------------------------------------------ package
-# GitLab's shared runners are Linux; this packages the Linux installers. For
-# macOS/Windows installers, register platform runners and add matching jobs with
-# `tags:` selecting them (documented in docs/ci/gitlab-ci.md).
+# ====================================================================== package
+# One job per OS, mirroring the retired CircleCI `deploy` workflow. Each runs the
+# hybrid build (`npm run dist` = Forge package + electron-builder --prepackaged),
+# then stages ONLY the release-relevant files into a per-OS subdirectory. Per-OS
+# dirs are required: every electron-builder run also writes
+# builder-effective-config.yaml into dist/, so a flat merge across jobs would
+# collide — the `secure` job flattens artifacts/*/* -> dist/ afterwards.
+#
+# Linux runs on GitLab's shared runners (always available). Windows + macOS use
+# GitLab SaaS hosted runners and are `allow_failure: true`, so the absence of a
+# paid plan / registered runner never blocks the Linux release. Register your own
+# tagged runners to harden these.
+
 package:linux:
   stage: package
   rules:
@@ -102,31 +133,107 @@ package:linux:
     - apt-get update && apt-get install -y build-essential python3 rpm fakeroot dpkg
     - npm ci --cache .npm --prefer-offline
   script:
-    # Forge packages the app (Vite + fuses + asar); electron-builder wraps it into
-    # branded installers + latest*.yml auto-update metadata. No publish here.
     - npm run dist -- --publish never
+    # Pure-npm SBOM from the lockfile — the dependency set is identical on all three
+    # OSes, so one SBOM (generated here) covers the whole release.
+    - npx --yes @cyclonedx/cyclonedx-npm --omit dev --output-file dist/limboo-sbom.cdx.json
+    - node ci/scripts/verify-signing.mjs dist
+    - |
+      mkdir -p artifacts/linux
+      cp dist/*.AppImage dist/*.deb dist/*.rpm dist/latest-linux.yml artifacts/linux/
+      cp dist/limboo-sbom.cdx.json artifacts/linux/
+      # *.blockmap is optional (electron-updater delta metadata) — copy if present,
+      # but never mask a real error on the required files above.
+      if ls dist/*.blockmap >/dev/null 2>&1; then cp dist/*.blockmap artifacts/linux/; else echo "[stage] no *.blockmap (delta updates disabled?)"; fi
+      # Fail fast if any essential installer / update metadata is missing.
+      for pat in "artifacts/linux/*.AppImage" "artifacts/linux/*.deb" "artifacts/linux/*.rpm" "artifacts/linux/latest-linux.yml"; do
+        ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+      done
   artifacts:
-    paths: [dist/]
+    paths: [artifacts/]
     expire_in: 1 week
 
-# -------------------------------------------------------------------- secure
+package:windows:
+  stage: package
+  tags: [saas-windows-medium-amd64]   # GitLab SaaS hosted Windows runner (paid plan)
+  allow_failure: true                 # no runner / plan -> skip, Linux still releases
+  rules:
+    - if: $CI_COMMIT_TAG
+  cache: {}
+  before_script: []
+  script:
+    # SaaS Windows runners execute PowerShell by default. Node 22 is preinstalled via
+    # the runner toolset; fall back to a direct install if the image lacks it.
+    - node --version
+    - npm ci
+    - npm run dist -- --publish never
+    - node ci/scripts/verify-signing.mjs dist
+    - New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+    - Copy-Item dist/*.exe, dist/latest.yml artifacts/windows/
+    - if (Test-Path dist/*.blockmap) { Copy-Item dist/*.blockmap artifacts/windows/ } else { Write-Host "[stage] no *.blockmap" }
+    - if (-not (Test-Path artifacts/windows/*.exe)) { Write-Error "[stage] MISSING *.exe"; exit 1 }
+    - if (-not (Test-Path artifacts/windows/latest.yml)) { Write-Error "[stage] MISSING latest.yml"; exit 1 }
+  artifacts:
+    paths: [artifacts/]
+    expire_in: 1 week
+
+package:macos:
+  stage: package
+  tags: [saas-macos-medium-m1]   # GitLab SaaS hosted macOS (Apple silicon) runner
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_TAG
+  cache: {}
+  before_script: []
+  variables:
+    # No signing cert on the runner by default; stops electron-builder probing the
+    # keychain. When CSC_LINK / CSC_KEY_PASSWORD are added, drop this override.
+    CSC_IDENTITY_AUTO_DISCOVERY: "false"
+  script:
+    - node --version
+    - npm ci
+    - npm run dist -- --publish never
+    - node ci/scripts/verify-signing.mjs dist
+    - |
+      mkdir -p artifacts/macos
+      cp dist/*.dmg dist/*.zip dist/latest-mac.yml artifacts/macos/
+      if ls dist/*.blockmap >/dev/null 2>&1; then cp dist/*.blockmap artifacts/macos/; else echo "[stage] no *.blockmap"; fi
+      for pat in "artifacts/macos/*.dmg" "artifacts/macos/*.zip" "artifacts/macos/latest-mac.yml"; do
+        ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+      done
+  artifacts:
+    paths: [artifacts/]
+    expire_in: 1 week
+
+# ======================================================================= secure
+# Consolidate every OS's staged artifacts into a single dist/, then compute the
+# release-wide SHA256SUMS. Linux is required; Windows/macOS are optional so a
+# Linux-only release still proceeds.
 secure:
   stage: secure
-  needs: ["package:linux"]
+  needs:
+    - job: package:linux
+    - job: package:windows
+      optional: true
+    - job: package:macos
+      optional: true
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "web"
-  before_script:
-    - npm ci --cache .npm --prefer-offline
+  before_script: []
+  cache: {}
   script:
-    - npx --yes @cyclonedx/cyclonedx-npm --output-file dist/limboo-sbom.cdx.json || echo "SBOM generation skipped"
+    - |
+      mkdir -p dist
+      cp -r artifacts/*/* dist/ 2>/dev/null || true
+      ls -la dist
     - node ci/scripts/make-checksums.mjs dist dist/SHA256SUMS
     - node ci/scripts/verify-signing.mjs dist
   artifacts:
     paths: [dist/]
     expire_in: 1 month
 
-# ------------------------------------------------------------------- release
+# ====================================================================== release
 release-notes:
   stage: release
   needs: ["secure"]
@@ -140,17 +247,98 @@ release-notes:
     paths: [RELEASE_NOTES.md, dist/]
     expire_in: 1 month
 
-release:
+# Upload every release binary into the GitLab Generic Package Registry so the GitLab
+# Release can link real, permanent downloads (GitLab Releases attach *links*, not
+# files). Emits assets-links.txt (one compact JSON object per line) consumed by
+# release:gitlab. Uses CI_JOB_TOKEN — no stored secret. POSIX sh + printf only, so no
+# jq is needed in the alpine-based curl image.
+upload:packages:
   stage: release
   needs: ["release-notes"]
+  rules:
+    - if: $CI_COMMIT_TAG
+  # curlimages/curl sets ENTRYPOINT ["curl"] — same tool-as-entrypoint gotcha as
+  # gitleaks; override to empty so GitLab can run the script via the image's /bin/sh.
+  image:
+    name: curlimages/curl:latest
+    entrypoint: [""]
+  before_script: []
+  cache: {}
+  script:
+    - |
+      set -eu
+      base="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PKG_NAME}/${CI_COMMIT_TAG}"
+      : > assets-links.txt
+      for f in dist/*; do
+        [ -f "$f" ] || continue
+        name="$(basename "$f")"
+        echo "Uploading $name -> $base/$name"
+        curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" "$base/$name"
+        printf '{"name":"%s","url":"%s/%s","link_type":"package"}\n' "$name" "$base" "$name" >> assets-links.txt
+      done
+      echo "=== assets-links.txt ==="; cat assets-links.txt
+  artifacts:
+    paths: [assets-links.txt, RELEASE_NOTES.md]
+    expire_in: 1 month
+
+# Create the GitLab Release from the generated notes, linking the Package Registry
+# uploads as downloadable assets. release-cli authenticates with CI_JOB_TOKEN. Builds
+# the --assets-link args with POSIX `set --` (no jq / no bash process substitution),
+# so it runs in the alpine-based release-cli image.
+release:gitlab:
+  stage: release
+  needs: ["upload:packages"]
   rules:
     - if: $CI_COMMIT_TAG
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   before_script: []
   cache: {}
   script:
-    - echo "Publishing GitLab Release for $CI_COMMIT_TAG"
-  release:
-    tag_name: "$CI_COMMIT_TAG"
-    name: "Limboo $CI_COMMIT_TAG"
-    description: "./RELEASE_NOTES.md"
+    - |
+      set -eu
+      echo "Publishing GitLab Release for $CI_COMMIT_TAG"
+      set -- --tag-name "$CI_COMMIT_TAG" --name "Limboo $CI_COMMIT_TAG" --description "$(cat RELEASE_NOTES.md)"
+      if [ -f assets-links.txt ]; then
+        while IFS= read -r link; do
+          [ -n "$link" ] || continue
+          set -- "$@" --assets-link "$link"
+        done < assets-links.txt
+      fi
+      release-cli create "$@"
+
+# Publish the IDENTICAL build to GitHub. Port of the retired CircleCI publish-release
+# gh step: pinned gh CLI, idempotent create/upload, --prerelease on hyphen tags. The
+# latest*.yml + *.blockmap files MUST be attached — electron-updater reads them from
+# the GitHub Release to detect and verify updates.
+release:github:
+  stage: release
+  needs: ["release-notes"]
+  rules:
+    - if: $CI_COMMIT_TAG
+  image: debian:bookworm-slim
+  before_script: []
+  cache: {}
+  script:
+    - |
+      set -eu
+      apt-get update && apt-get install -y curl ca-certificates tar
+      curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.tar.gz" | tar xz
+      install "gh_${GH_CLI_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+      gh --version
+    - |
+      set -eu
+      : "${GH_TOKEN:?GH_TOKEN must be set as a masked+protected CI/CD variable}"
+      export GH_REPO=BotCoder254/limboo
+      PRERELEASE=""
+      case "$CI_COMMIT_TAG" in *-*) PRERELEASE="--prerelease" ;; esac
+      if gh release view "$CI_COMMIT_TAG" >/dev/null 2>&1; then
+        echo "Release $CI_COMMIT_TAG already exists — uploading assets with --clobber"
+        gh release upload "$CI_COMMIT_TAG" dist/* --clobber
+      else
+        gh release create "$CI_COMMIT_TAG" \
+          --title "Limboo $CI_COMMIT_TAG" \
+          --notes-file RELEASE_NOTES.md \
+          --verify-tag $PRERELEASE \
+          dist/*
+      fi

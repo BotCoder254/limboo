@@ -2,8 +2,8 @@
 /**
  * make-checksums.mjs — produce a SHA256SUMS manifest for release artifacts.
  *
- * Provider-neutral (Node builtins only) so GitHub Actions, GitLab CI and CircleCI
- * all generate byte-identical checksum files. Walks a directory, hashes every
+ * Provider-neutral (Node builtins only) so GitLab CI and GitHub Actions all
+ * generate byte-identical checksum files. Walks a directory, hashes every
  * regular file (excluding any pre-existing SHA256SUMS), and writes a manifest in
  * the standard `<hex>␠␠<relative-path>` format consumable by `sha256sum -c`.
  *

@@ -311,12 +311,17 @@ npm run dist           # package + electron-builder → branded installers in di
 npm run gen:icons      # regenerate runtime PNG icons from assets/icon.svg
 npm run gen:installer  # regenerate Windows installer art (.ico + NSIS BMPs)
 npm run make           # legacy Forge makers (unused — makers: [] in forge.config.ts)
-npm run publish        # legacy Forge publish (unused; releases ship via CircleCI)
+npm run publish        # legacy Forge publish (unused; releases ship via GitLab CI)
 ```
 
 There is **no `npm run dev`** — use `npm start` (Electron Forge drives Vite).
-Releases: pushing a `v*` tag triggers the CircleCI `release` workflow (all-OS
-installers → GitHub Release); see `docs/ci/release-process.md`.
+Releases: **GitLab is the single source of truth and primary publisher.** Pushing a
+`v*` tag triggers the GitLab `release` stage (`.gitlab-ci.yml`), which packages all-OS
+installers and publishes the same build to **both** a GitLab Release and a GitHub
+Release. The GitHub repo is kept in sync by GitLab push mirroring, and `git push
+origin` is configured to fan out to both `github.com` and
+`gitlab.com/BotCoder254/limboo`. GitHub Actions' `release.yml` is a manual fallback
+only. See `docs/ci/release-process.md` and `docs/ci/gitlab-ci.md`.
 
 ---
 

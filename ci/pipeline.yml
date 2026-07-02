@@ -1,22 +1,23 @@
 # Limboo — canonical pipeline specification
 #
 # This file is the SINGLE SOURCE OF TRUTH for the logical CI/CD pipeline. It is
-# provider-agnostic by design: GitHub Actions (.github/workflows), GitLab CI
-# (.gitlab-ci.yml) and CircleCI (.circleci/config.yml) all implement the `validate ->
-# build -> test` (ci) layer identically, in this exact order, via the same
-# ci/scripts/*.mjs, so any provider can be adopted for ordinary commit validation.
+# provider-agnostic by design: GitLab CI (.gitlab-ci.yml) and GitHub Actions
+# (.github/workflows) both implement the `validate -> build -> test` (ci) layer
+# identically, in this exact order, via the same ci/scripts/*.mjs, so any provider
+# can be adopted for ordinary commit validation.
 #
-# The `package`/`secure`/`release` (cd + release) layers are wired up in CircleCI,
-# the PRIMARY release publisher for this repo: its `release` workflow triggers on
-# every v* tag, packages all 3 OSes (Linux docker / Windows orb / macOS Apple
-# silicon) and publishes the GitHub Release using GH_TOKEN from the `limboo-release`
-# context (see docs/ci/circleci.md). GitHub Actions keeps an equivalent, manually
+# The `package`/`secure`/`release` (cd + release) layers are wired up in GitLab, the
+# PRIMARY release publisher and the single source of truth for this repo: its
+# `release` stage triggers on every v* tag, packages all 3 OSes (Linux shared runner
+# / Windows + macOS SaaS runners) and publishes the SAME build to BOTH a GitLab
+# Release (CI_JOB_TOKEN) and a GitHub Release (gh CLI + GH_TOKEN from a
+# masked+protected CI/CD variable — see docs/ci/gitlab-ci.md). The GitHub repo is
+# kept in sync by GitLab push mirroring. GitHub Actions keeps an equivalent, manually
 # dispatched fallback (release.yml + _package.yml — the only path that mints
-# build-provenance/SBOM attestations; CircleCI generates its SBOM via
-# @cyclonedx/cyclonedx-npm instead). GitLab CI documents an equivalent
-# package/release path but isn't credentialed. When you change the pipeline, change
-# THIS file first, then update the CircleCI implementation (and any other provider
-# you've wired up release credentials for) to match.
+# build-provenance/SBOM attestations; GitLab generates its SBOM via
+# @cyclonedx/cyclonedx-npm instead). When you change the pipeline, change THIS file
+# first, then update the GitLab implementation (and any other provider you've wired
+# up release credentials for) to match.
 #
 # It is documentation, not an executable config — no provider reads it directly.
 # The reusable logic lives in ci/scripts/*.mjs so every provider runs byte-for-byte
@@ -95,8 +96,8 @@ stages:
       - Compute SHA-256 checksums (ci/scripts/make-checksums.mjs  ->  SHA256SUMS).
       - Verify code signing where signing credentials are configured
         (ci/scripts/verify-signing.mjs); skip cleanly when unsigned.
-      - Generate build-provenance + SBOM attestations (GitHub artifact attestations;
-        GitLab/CircleCI document the equivalent / cosign path).
+      - Generate build-provenance + SBOM attestations (GitHub artifact attestations
+        on the Actions fallback; GitLab documents the equivalent / cosign path).
 
   - id: release
     layer: release
@@ -105,15 +106,15 @@ stages:
     steps:
       - Generate categorized release notes (ci/scripts/generate-release-notes.mjs)
         from conventional commits + merged-PR labels between the previous tag and HEAD.
-      - Publish a GitHub Release with installers + SHA256SUMS + attestations.
-      - Optionally mirror the release to GitLab Releases.
+      - Publish a GitLab Release (assets via the Generic Package Registry) AND an
+        identical GitHub Release with installers + SHA256SUMS + auto-update metadata.
 
 # Security is a first-class, every-commit concern — never a post-release afterthought.
 security_invariants:
   - "Least-privilege tokens; default `permissions: contents: read`, widen per-job only."
   - Prefer the built-in GITHUB_TOKEN + OIDC over long-lived credentials.
-  - Secrets live ONLY in the provider's secret store (GH secrets / GitLab masked+protected
-    vars / CircleCI contexts) — never in the repo or in YAML.
+  - Secrets live ONLY in the provider's secret store (GitLab masked+protected vars —
+    primary; GH secrets for the Actions fallback) — never in the repo or in YAML.
   - Pin third-party actions to a commit SHA where practical.
   - Provenance/SBOM attestation on every release; start in audit mode, then enforce.
   - Any git automation uses `--force-with-lease`, never a bare `--force`.

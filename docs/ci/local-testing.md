@@ -59,7 +59,9 @@ act pull_request -W .github/workflows/ci.yml
 
 Note that attestation, signing, and `download-artifact` cross-job steps behave
 differently under `act`; use it for the `validate`/`build` jobs and rely on a real branch
-push to exercise `cd.yml` / `release.yml`.
+push to exercise `cd.yml` / `release.yml`. The primary release path is the GitLab
+pipeline (`.gitlab-ci.yml`); validate it with `glab ci lint` or GitLab's Pipeline
+editor / CI Lint.
 
 ## Linting the workflows
 

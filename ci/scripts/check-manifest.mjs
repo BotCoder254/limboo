@@ -74,7 +74,7 @@ async function main() {
   // Docs integrity: index should link the guides that exist.
   if (await exists('docs/ci/README.md')) {
     const idx = await readFile('docs/ci/README.md', 'utf8');
-    for (const g of ['github-actions', 'gitlab-ci', 'circleci', 'release-process', 'security']) {
+    for (const g of ['github-actions', 'gitlab-ci', 'release-process', 'security']) {
       if (await exists(`docs/ci/${g}.md`)) {
         if (idx.includes(`${g}.md`)) ok(`docs index links ${g}.md`);
         else fail(`docs/ci/README.md does not link ${g}.md`);

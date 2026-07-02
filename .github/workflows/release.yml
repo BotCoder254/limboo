@@ -1,11 +1,11 @@
 name: Release (manual fallback)
 
-# Manual FALLBACK release publisher. CircleCI (.circleci/config.yml, `deploy`
-# workflow) is the primary publisher and runs automatically on every `v*` tag —
-# this workflow deliberately has NO tag trigger so the two can never both publish
-# the same release. Dispatch it only when CircleCI is unavailable: it reuses the
-# CD packaging workflow (with attestations enabled), generates categorized release
-# notes, and publishes a GitHub Release with installers + SHA256SUMS + SBOM.
+# Manual FALLBACK release publisher. The GitLab pipeline (.gitlab-ci.yml, `release`
+# stage) is the primary publisher and runs automatically on every `v*` tag — this
+# workflow deliberately has NO tag trigger so the two can never both publish the same
+# release. Dispatch it only when GitLab is unavailable: it reuses the CD packaging
+# workflow (with attestations enabled), generates categorized release notes, and
+# publishes a GitHub Release with installers + SHA256SUMS + SBOM.
 
 on:
   workflow_dispatch:
