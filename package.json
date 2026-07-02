@@ -39,6 +39,7 @@
     "@types/electron-squirrel-startup": "^1.0.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/tar-fs": "^2.0.4",
     "@typescript-eslint/eslint-plugin": "^5.62.0",
     "@typescript-eslint/parser": "^5.62.0",
     "@vitejs/plugin-react": "^4.7.0",
@@ -67,7 +68,10 @@
     "react-markdown": "^9.1.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "sherpa-onnx-node": "1.13.3",
     "shiki": "^1.29.2",
+    "tar-fs": "3.1.3",
+    "unbzip2-stream": "1.4.3",
     "zod": "^4.4.3",
     "zustand": "^5.0.14"
   }

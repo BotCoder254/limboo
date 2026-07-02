@@ -24,6 +24,7 @@ import { useGitStore } from '@/renderer/stores/useGitStore';
 import { useMemoryStore } from '@/renderer/stores/useMemoryStore';
 import { useSearchStore } from '@/renderer/stores/useSearchStore';
 import { useUpdateStore } from '@/renderer/stores/useUpdateStore';
+import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -62,6 +63,8 @@ export function App() {
     useSearchStore.getState().hydrate();
     // Subscribe to the in-app updater's lifecycle (drives the UpdateBanner).
     useUpdateStore.getState().hydrate();
+    // Subscribe to voice state / model progress / TTS playback pushes.
+    void useVoiceStore.getState().hydrate();
   }, []);
 
   return (

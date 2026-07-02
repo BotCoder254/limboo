@@ -14,6 +14,6 @@
   ],
   "parser": "@typescript-eslint/parser",
   "rules": {
-    "import/no-unresolved": ["error", { "ignore": ["^@/", "^@shared/"] }]
+    "import/no-unresolved": ["error", { "ignore": ["^@/", "^@shared/", "\\?url$"] }]
   }
 }

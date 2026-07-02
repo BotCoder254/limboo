@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 9;
+export const SETTINGS_VERSION = 10;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -136,6 +136,32 @@ export const SEARCH_LIMITS = {
   gitCacheTtlMs: 15_000,
 } as const;
 
+/** Bounds + caps for the Voice subsystem (main + renderer both clamp). */
+export const VOICE_LIMITS = {
+  /** VAD speech-probability threshold. */
+  sensitivity: { min: 0.1, max: 0.95, default: 0.5 },
+  /** Trailing silence (ms) ending an utterance in auto mode. */
+  silenceMs: { min: 300, max: 5_000, default: 1_200 },
+  /** TTS speech-rate multiplier. */
+  speed: { min: 0.5, max: 2, default: 1 },
+  /** Playback volume (renderer gain). */
+  volume: { min: 0, max: 1, default: 1 },
+  /** Kokoro speaker id (kokoro-en-v0_19 ships 11 voices). */
+  speakerId: { min: 0, max: 10, default: 0 },
+  /** Max bytes accepted per `voice:audio-chunk` message from the renderer. */
+  audioChunkBytesMax: 16_384,
+  /** Max buffered utterance audio (bytes of 16 kHz Int16 ≈ 5 minutes). */
+  utteranceBytesMax: 9_600_000,
+  /** Text cap for a single TTS synthesis job (one sentence/segment). */
+  ttsTextMax: 2_000,
+  /** Hard ceiling on a model archive download (bytes). */
+  downloadBytesMax: 2_147_483_648,
+  /** Max entries accepted while extracting a model archive. */
+  extractEntryMax: 4_096,
+  /** Min interval (ms) between download-progress pushes to the renderer. */
+  progressThrottleMs: 150,
+} as const;
+
 export const FONT_SCALE_LIMITS = { min: 0.85, max: 1.3, default: 1 } as const;
 
 /** Minimum window size enforced by the main process. */
@@ -267,6 +293,43 @@ export const DEFAULT_SETTINGS: AppSettings = {
   updates: {
     autoCheck: true,
     autoDownload: true,
+  },
+  voice: {
+    enabled: true,
+    input: {
+      deviceId: '',
+      activation: 'auto',
+      sensitivity: VOICE_LIMITS.sensitivity.default,
+      silenceMs: VOICE_LIMITS.silenceMs.default,
+      language: 'en',
+      autoPunctuation: true,
+    },
+    output: {
+      enabled: true,
+      deviceId: '',
+      speakerId: VOICE_LIMITS.speakerId.default,
+      speed: VOICE_LIMITS.speed.default,
+      volume: VOICE_LIMITS.volume.default,
+      streamWhileGenerating: true,
+      speakWhen: 'voice-initiated',
+    },
+    playbackEvents: {
+      finalAnswers: true,
+      whileToolsRun: false,
+      planningUpdates: false,
+      taskCompletion: true,
+      notifications: false,
+    },
+    interruption: 'stop',
+    shortcuts: {
+      toggle: 'Mod+Shift+M',
+      pushToTalk: 'Mod+Space',
+    },
+    models: {
+      autoDownload: false,
+      autoUpdate: false,
+      offlineOnly: false,
+    },
   },
 };
 

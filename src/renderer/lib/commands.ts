@@ -14,6 +14,7 @@ import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useFileSystemStore } from '@/renderer/stores/useFileSystemStore';
 import { useTerminalStore } from '@/renderer/stores/useTerminalStore';
+import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
 
 /** Set the composer's default permission mode (Plan / Ask before edits / Accept edits). */
 function setDefaultMode(defaultMode: SessionPermissionMode): void {
@@ -218,6 +219,38 @@ export const COMMANDS: Command[] = [
     section: 'View',
     inPalette: true,
     run: () => useLayoutStore.getState().toggleTab('activity'),
+  },
+  {
+    id: 'voice.toggle',
+    title: 'Toggle voice input',
+    section: 'Agent',
+    keys: ['Mod', 'Shift', 'M'],
+    inPalette: true,
+    run: () => {
+      const voice = useVoiceStore.getState();
+      const phase = voice.state.phase;
+      if (phase === 'listening' || phase === 'recording') {
+        void voice.stopVoice();
+        return;
+      }
+      if (phase === 'speaking') {
+        void voice.stopSpeaking();
+        return;
+      }
+      const sessionId = useSessionStore.getState().selectedId;
+      if (!sessionId) {
+        useUIStore.getState().addToast({ title: 'No active session', tone: 'warning' });
+        return;
+      }
+      const mode = useSettingsStore.getState().settings.agent.plan.defaultMode;
+      void voice.startVoice(sessionId, mode).catch((err) => {
+        useUIStore.getState().addToast({
+          title: 'Voice unavailable',
+          description: err instanceof Error ? err.message : String(err),
+          tone: 'warning',
+        });
+      });
+    },
   },
   {
     id: 'search.open',

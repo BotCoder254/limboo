@@ -319,6 +319,76 @@ export interface AppSettings {
     /** Download an available update automatically (else wait for the user). */
     autoDownload: boolean;
   };
+  /**
+   * Voice subsystem — speech is another input/output modality for the SAME
+   * agent session (never a separate conversation). Speech processing is fully
+   * local (sherpa-onnx: Kokoro TTS, Parakeet STT, Silero VAD); models are
+   * downloaded on demand into userData. Workspace-independent: speech
+   * preferences belong to the user, not a repository.
+   */
+  voice: {
+    /** Master switch for the voice subsystem (capture + playback + UI). */
+    enabled: boolean;
+    input: {
+      /** Microphone device id ('' = system default). */
+      deviceId: string;
+      /**
+       * How recording starts/stops:
+       * - `push-to-talk`: record only while the hotkey/button is held.
+       * - `toggle`:       click to start, click to stop (manual endpoint).
+       * - `auto`:         click to start; VAD silence detection auto-stops.
+       */
+      activation: 'push-to-talk' | 'toggle' | 'auto';
+      /** VAD speech-probability threshold (higher = less sensitive). */
+      sensitivity: number;
+      /** Trailing silence (ms) that ends an utterance in `auto` mode. */
+      silenceMs: number;
+      /** Spoken language hint (Parakeet v2 is English-only). */
+      language: string;
+      /** Keep the model's automatic punctuation in transcripts. */
+      autoPunctuation: boolean;
+    };
+    output: {
+      /** Speak agent responses at all. */
+      enabled: boolean;
+      /** Speaker/output device id ('' = system default). */
+      deviceId: string;
+      /** Kokoro speaker id (0–10). */
+      speakerId: number;
+      /** Speech rate multiplier. */
+      speed: number;
+      /** Playback volume (0–1, renderer gain). */
+      volume: number;
+      /** Begin speaking sentences while the response is still streaming. */
+      streamWhileGenerating: boolean;
+      /** Speak only replies to spoken prompts, or every agent reply. */
+      speakWhen: 'voice-initiated' | 'always';
+    };
+    /** Which streamed content is eligible for speech. */
+    playbackEvents: {
+      finalAnswers: boolean;
+      whileToolsRun: boolean;
+      planningUpdates: boolean;
+      taskCompletion: boolean;
+      notifications: boolean;
+    };
+    /** What a new voice input does to in-flight speech playback. */
+    interruption: 'stop' | 'pause' | 'ignore';
+    shortcuts: {
+      /** Toggle voice capture (combo, `Mod` = Cmd/Ctrl). */
+      toggle: string;
+      /** Push-to-talk hold combo. */
+      pushToTalk: string;
+    };
+    models: {
+      /** Download missing speech models automatically (opt-in; default off). */
+      autoDownload: boolean;
+      /** Re-download a model when the app ships a newer pinned revision. */
+      autoUpdate: boolean;
+      /** Never touch the network for voice (also blocks manual downloads). */
+      offlineOnly: boolean;
+    };
+  };
 }
 
 /** A dotted-path key into {@link AppSettings} (kept loose for ergonomics). */
@@ -1502,6 +1572,107 @@ export type AgentEvent =
   | { kind: 'diagnostic'; diagnostic: AgentDiagnostic };
 
 /* ------------------------------------------------------------------ */
+/* Voice subsystem — local STT/TTS as a modality of the agent session  */
+/* ------------------------------------------------------------------ */
+
+/** Registry ids of the downloadable local speech models. */
+export type VoiceModelId = 'kokoro-en-v0_19' | 'parakeet-tdt-0.6b-v2-int8' | 'silero-vad';
+
+/** What a speech model does. */
+export type VoiceModelKind = 'tts' | 'stt' | 'vad';
+
+/** Install/download lifecycle of one local speech model. */
+export type VoiceModelPhase =
+  | 'not-installed'
+  | 'downloading'
+  | 'paused'
+  | 'verifying'
+  | 'extracting'
+  | 'installed'
+  | 'error';
+
+/**
+ * Live state of one downloadable speech model, pushed to the renderer while a
+ * download/verify/extract is in flight and after install-state changes.
+ */
+export interface VoiceModelState {
+  id: VoiceModelId;
+  kind: VoiceModelKind;
+  label: string;
+  description: string;
+  phase: VoiceModelPhase;
+  /** Total archive size in bytes (registry estimate until headers arrive). */
+  totalBytes: number;
+  /** Bytes received so far (downloading / paused). */
+  receivedBytes?: number;
+  /** Overall progress 0–100 (download 0–95, verify 95–98, extract 98–100). */
+  percent?: number;
+  /** Current transfer speed (bytes/sec, smoothed). */
+  bytesPerSec?: number;
+  /** Estimated seconds remaining for the download. */
+  etaSec?: number;
+  /** Epoch ms the model finished installing. */
+  installedAt?: number;
+  /** Size on disk of the installed model. */
+  installedBytes?: number;
+  /** Pinned registry revision installed (for auto-update checks). */
+  rev?: number;
+  /** A newer pinned revision is available. */
+  updateAvailable?: boolean;
+  /** Human-readable failure (phase === 'error'). */
+  error?: string;
+}
+
+/** Runtime phase of the voice orchestrator. */
+export type VoicePhase =
+  | 'idle' // nothing active
+  | 'unavailable' // required models missing or the speech worker failed
+  | 'starting' // worker fork / model warm-up in flight
+  | 'listening' // mic open, waiting for speech (VAD auto mode)
+  | 'recording' // speech in progress (or toggle/PTT active)
+  | 'transcribing' // utterance ended, STT running
+  | 'speaking'; // TTS playback in flight
+
+/** The voice runtime state, broadcast to the renderer on every transition. */
+export interface VoiceState {
+  phase: VoicePhase;
+  /** Session the capture / playback is bound to, or null when idle. */
+  sessionId: string | null;
+  /** Which required models are installed and loadable. */
+  modelsReady: { stt: boolean; tts: boolean; vad: boolean };
+  /** Human-readable failure detail (phase === 'unavailable'). */
+  error?: string;
+}
+
+/** A finished utterance transcript, pushed just before it goes to the agent. */
+export interface VoiceTranscript {
+  sessionId: string;
+  text: string;
+  /**
+   * Whether this is the final transcript for the utterance. Offline models
+   * always emit final=true; the field future-proofs streaming STT.
+   */
+  final: boolean;
+  /** Length of the recognized audio (ms). */
+  durationMs: number;
+}
+
+/** One synthesized PCM chunk pushed to the renderer for Web Audio playback. */
+export interface VoiceTtsChunk {
+  /** Groups the chunks of one spoken sentence/utterance. */
+  utteranceId: string;
+  sessionId: string;
+  /** Sample rate of the PCM (24000 for Kokoro). */
+  sampleRate: number;
+  /** Mono Int16 PCM samples. */
+  pcm: ArrayBuffer;
+  /** Chunk ordinal within the utterance. */
+  seq: number;
+  /** True on the final chunk of the utterance. */
+  last: boolean;
+}
+
+/* ------------------------------------------------------------------ */
 /* Commands (palette + shortcuts + native menu)                        */
 /* ------------------------------------------------------------------ */
 
@@ -1532,4 +1703,5 @@ export type CommandId =
   | 'agent.implementMode'
   | 'plan.approve'
   | 'terminal.toggle'
-  | 'terminal.new';
+  | 'terminal.new'
+  | 'voice.toggle';

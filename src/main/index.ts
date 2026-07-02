@@ -25,6 +25,8 @@ import { GitManager } from './managers/GitManager';
 import { MemoryManager } from './managers/memory/MemoryManager';
 import { SearchManager } from './managers/search/SearchManager';
 import { AutoUpdateManager } from './managers/AutoUpdateManager';
+import { VoiceManager } from './managers/voice/VoiceManager';
+import { VoiceModelManager } from './managers/voice/VoiceModelManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -78,6 +80,8 @@ function bootstrap(): void {
   let memory: MemoryManager;
   let search: SearchManager;
   let updates: AutoUpdateManager;
+  let voiceModels: VoiceModelManager;
+  let voice: VoiceManager;
   let memorySweepTimer: ReturnType<typeof setInterval> | undefined;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
@@ -136,6 +140,13 @@ function bootstrap(): void {
     fileSystem.setGitManager(git);
     // The File System Layer drives incremental search reindexing on tree changes.
     fileSystem.setSearchManager(search);
+    // The Voice subsystem — local speech (sherpa-onnx) as another input/output
+    // modality of the SAME agent session. The model store owns downloads; the
+    // manager orchestrates capture/TTS and taps the agent event stream.
+    voiceModels = new VoiceModelManager();
+    voice = new VoiceManager(settings, agent, voiceModels);
+    // Spoken desktop notifications (gated by voice.playbackEvents.notifications).
+    notifications.setSpeaker((text) => voice.speakNotification(text));
 
     hardenSession();
     registerAllIpc({
@@ -150,9 +161,13 @@ function bootstrap(): void {
       memory,
       search,
       updates,
+      voice,
+      voiceModels,
     });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();
+    // Wire the voice agent-event tap + honor the auto-download preference.
+    voice.start();
     // Begin the auto-update check + hourly poll (packaged builds only).
     updates.start();
 
@@ -204,6 +219,8 @@ function bootstrap(): void {
     void fileSystem?.dispose();
     terminal?.dispose();
     updates?.dispose();
+    voice?.dispose();
+    voiceModels?.dispose();
     if (memorySweepTimer) clearInterval(memorySweepTimer);
     tray.destroy();
     closeDb();
@@ -233,7 +250,9 @@ function hardenSession(): void {
     : "default-src 'self'; " +
       "script-src 'self'; " +
       "style-src 'self' 'unsafe-inline'; " +
-      "img-src 'self' data:; connect-src 'self';";
+      // media-src is defensive: voice playback uses Web Audio AudioBuffers (no
+      // <audio> element), but a blob-backed fallback must never be CSP-broken.
+      "img-src 'self' data:; media-src 'self' blob:; connect-src 'self';";
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
@@ -244,11 +263,50 @@ function hardenSession(): void {
     });
   });
 
-  // Deny every web-platform permission request. This is a local-only app — it
-  // needs no camera, microphone, geolocation, USB, notifications-via-web, etc.
+  // Deny every web-platform permission with ONE narrow exception: the Voice
+  // subsystem needs the microphone, so `media` is granted only when ALL hold —
+  //   1. the request comes from our own renderer origin (dev server / file://),
+  //   2. it comes from the main window's webContents (never a webview/popup;
+  //      those are already blocked in createWindow.ts, this is defense in depth),
+  //   3. it asks for AUDIO only — any request including video is refused.
+  // Camera, geolocation, USB, notifications-via-web, etc. all stay denied.
   // (OS notifications go through the NotificationManager, not this API.)
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
+  const isOwnOrigin = (origin: string | undefined): boolean => {
+    if (!origin) return false;
+    if (devUrl) {
+      try {
+        if (origin === new URL(devUrl).origin) return true;
+      } catch {
+        /* fall through */
+      }
+    }
+    return origin === 'file://' || origin === 'file:///';
+  };
+
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission === 'media') {
+      const requestOrigin = (() => {
+        try {
+          const raw = details.requestingUrl ?? wc.getURL();
+          return raw.startsWith('file:') ? 'file://' : new URL(raw).origin;
+        } catch {
+          return undefined;
+        }
+      })();
+      const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes ?? [];
+      const audioOnly = mediaTypes.length > 0 && mediaTypes.every((t) => t === 'audio');
+      if (audioOnly && isOwnOrigin(requestOrigin) && wc === getMainWindow()?.webContents) {
+        callback(true);
+        return;
+      }
+      logger.warn('Denied media permission request', { requestOrigin, mediaTypes });
+    }
     callback(false);
   });
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
+    if (permission !== 'media') return false;
+    const mediaType = (details as { mediaType?: string }).mediaType;
+    if (mediaType === 'video') return false;
+    return isOwnOrigin(requestingOrigin);
+  });
 }

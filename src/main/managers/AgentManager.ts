@@ -2126,8 +2126,28 @@ export class AgentManager {
     });
   }
 
+  /**
+   * In-process subscribers to the same structured event stream the renderer
+   * receives (e.g. the VoiceManager's sentence segmenter). Listener failures
+   * are swallowed — a consumer must never be able to break a run.
+   */
+  private readonly eventListeners = new Set<(event: AgentEvent) => void>();
+
+  /** Subscribe to the agent event stream. Returns an unsubscribe function. */
+  onEvent(listener: (event: AgentEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
+  }
+
   private pushEvent(event: AgentEvent): void {
     this.broadcastChannel(IpcEvents.agentEvent, event);
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        logger.warn('agent event listener failed', err);
+      }
+    }
   }
 
   private broadcastChannel(channel: string, payload: unknown): void {

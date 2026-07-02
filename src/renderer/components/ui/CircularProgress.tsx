@@ -14,6 +14,7 @@ export function CircularProgress({
   size = 16,
   showLabel = false,
   className,
+  children,
 }: {
   /** Progress 0–100. Values are clamped. */
   value: number;
@@ -21,6 +22,8 @@ export function CircularProgress({
   /** Render the rounded percentage in the center (best at size ≥ 32). */
   showLabel?: boolean;
   className?: string;
+  /** Custom centered content (e.g. a phase icon) — overrides `showLabel`. */
+  children?: React.ReactNode;
 }) {
   const pct = Math.max(0, Math.min(100, value));
   const stroke = Math.max(2, Math.round(size / 9));
@@ -53,10 +56,14 @@ export function CircularProgress({
           style={{ transition: 'stroke-dasharray 120ms ease-out' }}
         />
       </svg>
-      {showLabel && (
-        <span className="absolute font-mono text-[9px] font-semibold text-muted">
-          {Math.round(pct)}
-        </span>
+      {children != null ? (
+        <span className="absolute inline-flex items-center justify-center">{children}</span>
+      ) : (
+        showLabel && (
+          <span className="absolute font-mono text-[9px] font-semibold text-muted">
+            {Math.round(pct)}
+          </span>
+        )
       )}
     </span>
   );
