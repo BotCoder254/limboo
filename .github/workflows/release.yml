@@ -1,27 +1,62 @@
-name: Release
+name: Release (manual fallback)
 
-# Release orchestration — runs ONLY for an approved version tag. Reuses the CD
-# packaging workflow (with attestations enabled), generates categorized release
+# Manual FALLBACK release publisher. CircleCI (.circleci/config.yml, `deploy`
+# workflow) is the primary publisher and runs automatically on every `v*` tag —
+# this workflow deliberately has NO tag trigger so the two can never both publish
+# the same release. Dispatch it only when CircleCI is unavailable: it reuses the
+# CD packaging workflow (with attestations enabled), generates categorized release
 # notes, and publishes a GitHub Release with installers + SHA256SUMS + SBOM.
-# Failures here never touch CI or CD for ordinary commits.
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to build and publish (e.g. v1.2.3)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  validate:
+    name: Validate tag
+    # Fail fast before the multi-OS package matrix: the dispatched tag must look
+    # like a version tag AND actually exist on the remote. Skipping this wastes an
+    # entire package run on a typo or a not-yet-pushed tag.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check tag format
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::inputs.tag is empty." ; exit 1
+          fi
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag '$TAG' is malformed — expected vMAJOR.MINOR.PATCH[-prerelease]." ; exit 1
+          fi
+      - name: Check tag exists on remote
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag '$TAG' does not exist in ${GITHUB_REPOSITORY}. Push it first." ; exit 1
+          fi
+          echo "Validated $TAG"
+
   package:
     name: Package + attest
+    needs: [validate]
     uses: ./.github/workflows/_package.yml
     permissions:
       contents: read
       id-token: write
       attestations: write
     with:
-      ref: ${{ github.ref }}
+      ref: ${{ inputs.tag }}
       attest: true
 
   publish:
@@ -33,6 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0   # full history so release notes can diff from the prev tag
 
       - name: Download all packaged artifacts
@@ -46,15 +82,16 @@ jobs:
         run: node ci/scripts/make-checksums.mjs dist SHA256SUMS
 
       - name: Generate release notes
-        run: node ci/scripts/generate-release-notes.mjs "${GITHUB_REF_NAME}" RELEASE_NOTES.md
+        run: node ci/scripts/generate-release-notes.mjs "${{ inputs.tag }}" RELEASE_NOTES.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: Limboo ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag }}
+          name: Limboo ${{ inputs.tag }}
           body_path: RELEASE_NOTES.md
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(inputs.tag, '-') }}
           # The *.yml + *.blockmap files are electron-builder's auto-update metadata
           # — electron-updater reads latest.yml / latest-mac.yml / latest-linux.yml
           # from the Release to detect and verify new versions. They MUST be attached.

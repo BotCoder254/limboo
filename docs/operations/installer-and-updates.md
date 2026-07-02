@@ -2,8 +2,9 @@
 
 Limboo treats installation as the first screen of the app: a branded, multi-page
 Windows installer that reuses the app's pure-black (`#000000`) theme and the
-`#6e9bff` Orbit mark, plus in-app auto-update. This document explains the hybrid
-build flow, how to regenerate the installer art, and how releases authenticate.
+`#ff0066` pink blob brand mark, plus in-app auto-update. This document explains the
+hybrid build flow, how to regenerate the installer art, and how releases
+authenticate.
 
 ## Hybrid build flow (Forge + electron-builder)
 
@@ -37,14 +38,18 @@ Targets (see `electron-builder.yml`):
 All NSIS art derives from `assets/icon.svg`. After editing the SVG, regenerate:
 
 ```bash
-bash scripts/gen-installer-assets.sh   # needs rsvg-convert + ImageMagick
+npm run gen:installer   # cross-platform Node (sharp + resvg + opentype.js)
 ```
 
-Outputs to `assets/installer/`: `icon.ico` (multi-res 16→256), `installerSidebar.bmp`
-and `uninstallerSidebar.bmp` (164×314, BMP3), and `installerHeader.bmp` (150×57,
-BMP3) — all on the black/`#6e9bff` palette. `assets/installer/installer.nsh` layers
-on brand identity (finish-page text, brand registry key) and is referenced from the
-`nsis.include` option.
+The generator ([`scripts/gen-installer-assets.mjs`](../../scripts/gen-installer-assets.mjs))
+works on Windows/macOS/Linux with no system tools: wordmark text is outlined into
+SVG paths from the vendored Inter TTFs (`assets/installer/fonts/`, SIL OFL), so the
+output is byte-deterministic on any machine. Outputs to `assets/installer/`:
+`icon.ico` (multi-res 16→256), `installerSidebar.bmp` and `uninstallerSidebar.bmp`
+(164×314, BMP3), and `installerHeader.bmp` (150×57, BMP3) — pure-black canvas,
+`#ff0066` brand mark, `#ededed` wordmark, `#9a9a9a` tagline.
+`assets/installer/installer.nsh` layers on brand identity (finish-page text, brand
+registry key) and is referenced from the `nsis.include` option.
 
 The NSIS wizard is configured for a guided experience: license page, custom install
 directory, desktop + Start Menu shortcuts, run-after-finish, and — importantly —
@@ -65,11 +70,13 @@ ever stored.
 
 ## Release authentication: GH_TOKEN vs the `gh` CLI
 
-- **Automated CI releases** use **`GH_TOKEN`**. On GitHub Actions the built-in
-  `GITHUB_TOKEN` (with `contents: write`) is sufficient for same-repo releases — the
-  `publish` job in `release.yml` uses it via `softprops/action-gh-release`. On
-  CircleCI, store a fine-grained PAT with `contents:write` as `GH_TOKEN` in the
-  `limboo-release` **Context** (never in the config file).
+- **Automated CI releases** use **`GH_TOKEN`**. On CircleCI (the primary
+  publisher — the `release` workflow in `.circleci/config.yml`), store a
+  fine-grained PAT with `contents:write` as `GH_TOKEN` in the `limboo-release`
+  **Context** (never in the config file); the `publish-release` job feeds it to a
+  pinned `gh` CLI. On the GitHub Actions fallback (`release.yml`, manual
+  dispatch), the built-in `GITHUB_TOKEN` (with `contents: write`) is sufficient
+  via `softprops/action-gh-release`.
 - **Manual / local releases** use your authenticated **`gh` CLI**:
 
   ```bash

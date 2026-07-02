@@ -13,7 +13,12 @@
     "dist": "electron-forge package && node scripts/dist.mjs",
     "dist:publish": "electron-forge package && node scripts/dist.mjs --publish always",
     "gen:icons": "node scripts/gen-icons.mjs",
+    "gen:installer": "node scripts/gen-installer-assets.mjs",
     "lint": "eslint --ext .ts,.tsx ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BotCoder254/limboo.git"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -35,6 +40,7 @@
     "@electron-forge/plugin-vite": "^7.11.2",
     "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.0.6",
+    "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.3.1",
     "@types/electron-squirrel-startup": "^1.0.2",
     "@types/react": "^19.2.17",
@@ -47,6 +53,8 @@
     "electron-builder": "^26.15.3",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
+    "opentype.js": "^1.3.4",
+    "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "tailwindcss": "^4.3.1",
     "typescript": "~4.5.4",

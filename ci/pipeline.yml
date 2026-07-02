@@ -2,19 +2,21 @@
 #
 # This file is the SINGLE SOURCE OF TRUTH for the logical CI/CD pipeline. It is
 # provider-agnostic by design: GitHub Actions (.github/workflows), GitLab CI
-# (.gitlab-ci.yml) and CircleCI (.circleci/deploy.yml) all implement the `validate ->
+# (.gitlab-ci.yml) and CircleCI (.circleci/config.yml) all implement the `validate ->
 # build -> test` (ci) layer identically, in this exact order, via the same
 # ci/scripts/*.mjs, so any provider can be adopted for ordinary commit validation.
 #
-# The `package`/`secure`/`release` (cd + release) layers are currently wired up only
-# in GitHub Actions, which is the sole, canonical release publisher for this repo (it
-# builds all 3 OSes via _package.yml's matrix and needs no manually-managed token —
-# see docs/ci/github-actions.md). GitLab CI documents an equivalent package/release
-# path but isn't credentialed; CircleCI is intentionally CI-only here (see
-# docs/ci/circleci.md for why, and how to add release parity if ever needed). When
-# you change the pipeline, change THIS file first, then update the GitHub Actions
-# implementation (and any other provider you've wired up release credentials for) to
-# match.
+# The `package`/`secure`/`release` (cd + release) layers are wired up in CircleCI,
+# the PRIMARY release publisher for this repo: its `release` workflow triggers on
+# every v* tag, packages all 3 OSes (Linux docker / Windows orb / macOS Apple
+# silicon) and publishes the GitHub Release using GH_TOKEN from the `limboo-release`
+# context (see docs/ci/circleci.md). GitHub Actions keeps an equivalent, manually
+# dispatched fallback (release.yml + _package.yml — the only path that mints
+# build-provenance/SBOM attestations; CircleCI generates its SBOM via
+# @cyclonedx/cyclonedx-npm instead). GitLab CI documents an equivalent
+# package/release path but isn't credentialed. When you change the pipeline, change
+# THIS file first, then update the CircleCI implementation (and any other provider
+# you've wired up release credentials for) to match.
 #
 # It is documentation, not an executable config — no provider reads it directly.
 # The reusable logic lives in ci/scripts/*.mjs so every provider runs byte-for-byte

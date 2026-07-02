@@ -15,12 +15,15 @@ provider-neutral scripts under [`ci/scripts/`](../../ci/scripts) rather than in 
 | **CD** | manual / pre-release | package, SBOM, checksums, signing | no |
 | **Release** | `v*` tag | notes, GitHub Release (+ optional GitLab) | yes |
 
-In this repo's current implementation, **GitHub Actions runs all three layers** and is
-the sole release publisher (it needs no manually-managed token — see
-[github-actions.md](github-actions.md)). **CircleCI and GitLab CI run CI-only**
-(`validate -> build -> test`) here; their `package`/`release` stages are documented
-but not wired to a credential, so don't expect a release from either without first
-following the "if you want parity" steps in their respective guides.
+In this repo's current implementation, **CircleCI runs all three layers and is the
+primary release publisher**: its `release` workflow triggers on every `v*` tag,
+packages installers on Linux, Windows, and macOS, and publishes the GitHub Release
+(credentialed via the `limboo-release` context — see [circleci.md](circleci.md)).
+**GitHub Actions** retains the CI/Security/CodeQL layers plus a **manual-dispatch
+release fallback** ([github-actions.md](github-actions.md)); note that Actions on
+this private repo is currently blocked at the account level (billing/spending
+limit), so nothing GH-side runs until that is resolved. **GitLab CI runs CI-only**
+here; its `package`/`release` stages are documented but not wired to a credential.
 
 ## Stage order (every provider, fail-fast)
 

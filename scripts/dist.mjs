@@ -35,10 +35,39 @@ if (!existsSync(prepackaged)) {
 
 // Map the current platform to electron-builder's target flag so each CI runner
 // builds only its own OS's installers (the release matrix covers all three).
-const platformFlag =
-  process.platform === 'win32' ? '--win' : process.platform === 'darwin' ? '--mac' : '--linux';
+const PLATFORM_FLAGS = { win32: '--win', darwin: '--mac', linux: '--linux' };
+const platformFlag = PLATFORM_FLAGS[process.platform];
+if (!platformFlag) {
+  console.error(
+    `[dist] Unsupported platform "${process.platform}". Expected one of: ` +
+      `${Object.keys(PLATFORM_FLAGS).join(', ')}.`,
+  );
+  process.exit(1);
+}
 
-const args = ['electron-builder', platformFlag, '--prepackaged', prepackaged, ...process.argv.slice(2)];
+// Pin the arch to the one Forge just packaged: electron-builder.yml lists both
+// mac arches, but a --prepackaged dir contains exactly one, and the CLI arch
+// flag overrides the config so electron-builder never attempts the other. Map
+// explicitly and fail on anything unexpected — silently defaulting to --x64 would
+// mis-package (e.g. an ia32 dir built as x64) and break electron-builder.
+const ARCH_FLAGS = { arm64: '--arm64', x64: '--x64', ia32: '--ia32' };
+const archFlag = ARCH_FLAGS[process.arch];
+if (!archFlag) {
+  console.error(
+    `[dist] Unsupported architecture "${process.arch}". Expected one of: ` +
+      `${Object.keys(ARCH_FLAGS).join(', ')}.`,
+  );
+  process.exit(1);
+}
+
+const args = [
+  'electron-builder',
+  platformFlag,
+  archFlag,
+  '--prepackaged',
+  prepackaged,
+  ...process.argv.slice(2),
+];
 
 console.log(`[dist] electron-builder ${args.slice(1).join(' ')}`);
 

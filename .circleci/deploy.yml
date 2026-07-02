@@ -2,12 +2,29 @@ version: 2.1
 
 # Limboo — CircleCI
 #
-# CI-only: validate -> build -> test, on every push, the same logical stages as
-# ci/pipeline.yml's `ci` layer, via the same ci/scripts/*.mjs. CircleCI does not
-# package, sign, or publish releases in this repo — GitHub Actions' release.yml is
-# the sole release publisher (it builds all 3 OSes and needs zero manual token
-# setup via the workflow's built-in GITHUB_TOKEN). See docs/ci/circleci.md and
-# docs/ci/release-process.md.
+# Two workflows:
+#   ci      — validate -> build -> test on every branch push (same logical stages
+#             as ci/pipeline.yml, via the same ci/scripts/*.mjs).
+#   deploy  — on every `v*` tag: package branded installers on ALL THREE OSes
+#             (Linux docker, Windows orb, macOS Apple-silicon) and publish a
+#             GitHub Release with the installers + SHA256SUMS + SBOM + the
+#             latest*.yml / *.blockmap metadata electron-updater reads.
+#
+# CircleCI is the PRIMARY release publisher for this repo. GitHub Actions'
+# release.yml remains as a manually-dispatched fallback only. See
+# docs/ci/circleci.md and docs/ci/release-process.md.
+#
+# Secrets: the `limboo-release` Context must define GH_TOKEN (fine-grained PAT,
+# Contents: read+write on BotCoder254/limboo). Optional: CIRCLECI_CLI_TOKEN for
+# deploy markers. Never put tokens in this file.
+#
+# Tag-filter rule: CircleCI never runs a job for a tag unless the job (and every
+# job it `requires`) declares a tags filter — hence the filters on every deploy
+# job. Conversely the ci jobs carry no tag filters, so they run on branches only.
+
+orbs:
+  win: circleci/windows@5.1.1 # windows-server-2022 machine executor (x64, VS2022)
+  node: circleci/node@7.2.1 # used only for node/install on the macOS executor
 
 executors:
   node-linux:
@@ -78,6 +95,239 @@ jobs:
       - npm_ci
       - run: xvfb-run -a node ci/scripts/smoke-test.mjs
 
+  # ---------------------------------------------------------------------------
+  # Release packaging — one job per OS. Each runs the same hybrid build the docs
+  # describe (`npm run dist` = Forge package + electron-builder --prepackaged),
+  # then persists only the release-relevant files into a per-OS subdirectory
+  # (per-OS dirs are required: every electron-builder run also writes
+  # builder-effective-config.yaml into dist/, and attach_workspace fails on
+  # conflicting paths).
+  # ---------------------------------------------------------------------------
+  package-linux:
+    executor: node-linux
+    steps:
+      - checkout
+      - run:
+          name: Install packaging dependencies
+          command: sudo apt-get update && sudo apt-get install -y build-essential python3 rpm fakeroot dpkg
+      - npm_ci
+      - run:
+          name: Build installers (AppImage + deb + rpm)
+          command: npm run dist -- --publish never
+      - run:
+          name: Generate SBOM (CycloneDX)
+          # Pure-npm SBOM from the lockfile — the dependency set is identical on
+          # all three OSes, so one SBOM (generated here) covers the release.
+          command: npx --yes @cyclonedx/cyclonedx-npm --omit dev --output-file dist/limboo-sbom.cdx.json
+      - run:
+          name: Verify code signing (skips when unsigned)
+          command: node ci/scripts/verify-signing.mjs dist
+      - run:
+          name: Stage release artifacts
+          command: |
+            mkdir -p artifacts/linux
+            cp dist/*.AppImage dist/*.deb dist/*.rpm dist/latest-linux.yml artifacts/linux/
+            # *.blockmap is optional (electron-updater delta metadata) — copy if
+            # present, but never mask a real error on the required files above.
+            if ls dist/*.blockmap >/dev/null 2>&1; then
+              cp dist/*.blockmap artifacts/linux/
+            else
+              echo "[stage] note: no *.blockmap in dist (delta updates disabled?)"
+            fi
+            cp dist/limboo-sbom.cdx.json artifacts/linux/
+            # Fail fast if the essential installers / update metadata are missing,
+            # so we never persist an incomplete artifact set to the workspace.
+            for pat in "artifacts/linux/*.AppImage" "artifacts/linux/*.deb" \
+                       "artifacts/linux/*.rpm" "artifacts/linux/latest-linux.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
+      - store_artifacts:
+          path: dist
+      - persist_to_workspace:
+          root: .
+          paths: [artifacts]
+
+  package-windows:
+    executor:
+      name: win/default # windows.medium, windows-server-2022, VS2022 toolchain
+      shell: bash.exe -eo pipefail
+    steps:
+      - checkout
+      - run:
+          name: Install Node 22 (nvm-windows switches the machine-wide symlink)
+          command: nvm install 22.12.0 && nvm use 22.12.0 && node --version && npm --version
+      - run: npm ci
+      - run:
+          name: Build branded NSIS installer
+          command: npm run dist -- --publish never
+      - run:
+          name: Verify code signing (skips when unsigned)
+          command: node ci/scripts/verify-signing.mjs dist
+      - run:
+          name: Stage release artifacts
+          command: |
+            mkdir -p artifacts/windows
+            cp dist/*.exe dist/latest.yml artifacts/windows/
+            # *.blockmap is optional (electron-updater delta metadata) — copy if
+            # present, but never mask a real error on the required files above.
+            if ls dist/*.blockmap >/dev/null 2>&1; then
+              cp dist/*.blockmap artifacts/windows/
+            else
+              echo "[stage] note: no *.blockmap in dist (delta updates disabled?)"
+            fi
+            # Fail fast if the essential installer / update metadata is missing,
+            # so we never persist an incomplete artifact set to the workspace.
+            for pat in "artifacts/windows/*.exe" "artifacts/windows/latest.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
+      - store_artifacts:
+          path: dist
+      - persist_to_workspace:
+          root: .
+          paths: [artifacts]
+
+  package-macos:
+    macos:
+      xcode: "16.4.0"
+    resource_class: m4pro.medium # free-plan Apple-silicon class -> arm64 builds
+    steps:
+      - checkout
+      - node/install:
+          node-version: "22.12.0"
+      - run: npm ci
+      - run:
+          name: Build installers (dmg + zip, unsigned, arm64)
+          # No signing cert on the runner; CSC_IDENTITY_AUTO_DISCOVERY=false stops
+          # electron-builder from probing the keychain. When the maintainer adds
+          # CSC_LINK / CSC_KEY_PASSWORD to the context, drop this override.
+          command: npm run dist -- --publish never
+          environment:
+            CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - run:
+          name: Stage release artifacts
+          command: |
+            mkdir -p artifacts/macos
+            cp dist/*.dmg dist/*.zip dist/latest-mac.yml artifacts/macos/
+            # *.blockmap is optional (electron-updater delta metadata) — copy if
+            # present, but never mask a real error on the required files above.
+            if ls dist/*.blockmap >/dev/null 2>&1; then
+              cp dist/*.blockmap artifacts/macos/
+            else
+              echo "[stage] note: no *.blockmap in dist (delta updates disabled?)"
+            fi
+            # Fail fast if the essential installers / update metadata are missing,
+            # so we never persist an incomplete artifact set to the workspace.
+            for pat in "artifacts/macos/*.dmg" "artifacts/macos/*.zip" \
+                       "artifacts/macos/latest-mac.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
+      - store_artifacts:
+          path: dist
+      - persist_to_workspace:
+          root: .
+          paths: [artifacts]
+
+  publish-release:
+    executor: node-linux
+    steps:
+      - checkout # full clone (CircleCI default) so release notes can diff from the previous tag
+      - run:
+          name: Validate release tag
+          # Fail fast before doing any publish work: CIRCLE_TAG must be present and
+          # look like a version tag (vMAJOR.MINOR.PATCH, optional -prerelease). An
+          # empty/malformed tag would otherwise blow up release-note generation and
+          # the gh release step deep into the job.
+          command: |
+            if [ -z "$CIRCLE_TAG" ]; then
+              echo "CIRCLE_TAG is empty — this job must run from a v* tag." >&2
+              exit 1
+            fi
+            if ! echo "$CIRCLE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+              echo "CIRCLE_TAG '$CIRCLE_TAG' is malformed — expected vMAJOR.MINOR.PATCH[-prerelease]." >&2
+              exit 1
+            fi
+            echo "Releasing $CIRCLE_TAG"
+      - attach_workspace:
+          at: .
+      - run:
+          name: Flatten artifacts
+          command: |
+            mkdir -p dist
+            cp artifacts/*/* dist/
+            ls -la dist
+      - run:
+          name: Consolidate checksums
+          command: node ci/scripts/make-checksums.mjs dist dist/SHA256SUMS
+      - run:
+          name: Generate release notes
+          command: node ci/scripts/generate-release-notes.mjs "$CIRCLE_TAG" RELEASE_NOTES.md
+      - run:
+          name: Install gh CLI (pinned)
+          command: |
+            GH_VERSION=2.95.0
+            curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz
+            sudo install "gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+            gh --version
+      - run:
+          name: Install CircleCI CLI (pinned + checksum-verified, best-effort)
+          # SECURITY: never pipe a mutable remote script into a shell. Instead pull a
+          # PINNED release tarball + its checksums.txt and verify the SHA256 before
+          # touching the binary. On any download/verify failure we skip the deploy
+          # markers entirely (they're best-effort) rather than run unverified code.
+          command: |
+            set -u
+            # Pinned CircleCI CLI release. v1+ archives place the `circleci` binary
+            # at the tarball root (v0.x wrapped it in a dir) — extract it directly.
+            CIRCLECI_CLI_VERSION=1.0.42868-pre
+            base="https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}"
+            tarball="circleci-cli_${CIRCLECI_CLI_VERSION}_linux_amd64.tar.gz"
+            tmp="$(mktemp -d)"
+            if curl -fLSs --retry 3 "${base}/${tarball}" -o "${tmp}/${tarball}" \
+               && curl -fLSs --retry 3 "${base}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt" -o "${tmp}/checksums.txt" \
+               && ( cd "${tmp}" && sha256sum --ignore-missing -c checksums.txt ) \
+               && tar -xzf "${tmp}/${tarball}" -C "${tmp}" circleci; then
+              sudo install "${tmp}/circleci" /usr/local/bin/circleci
+              circleci version
+            else
+              echo "[deploy-marker] CircleCI CLI download/verify failed — skipping deploy markers." >&2
+            fi
+            rm -rf "${tmp}"
+      - run:
+          name: Deploy marker — plan + running (best-effort, needs CIRCLECI_CLI_TOKEN)
+          command: |
+            command -v circleci >/dev/null 2>&1 || { echo "[deploy-marker] circleci CLI not installed — skipping."; exit 0; }
+            circleci run release plan "limboo-$CIRCLE_TAG" --environment-name=production \
+              --component-name=limboo-desktop --target-version="$CIRCLE_TAG" --namespace=default || true
+            circleci run release update "limboo-$CIRCLE_TAG" --status=running || true
+      - run:
+          name: Publish GitHub Release
+          # GH_TOKEN comes from the limboo-release context; gh reads it from env.
+          # The latest*.yml + *.blockmap files MUST be attached — electron-updater
+          # reads them from the Release to detect and verify updates.
+          command: |
+            export GH_REPO=BotCoder254/limboo
+            PRERELEASE=""
+            case "$CIRCLE_TAG" in *-*) PRERELEASE="--prerelease" ;; esac
+            if gh release view "$CIRCLE_TAG" >/dev/null 2>&1; then
+              echo "Release $CIRCLE_TAG already exists — uploading assets with --clobber"
+              gh release upload "$CIRCLE_TAG" dist/* --clobber
+            else
+              gh release create "$CIRCLE_TAG" \
+                --title "Limboo $CIRCLE_TAG" \
+                --notes-file RELEASE_NOTES.md \
+                --verify-tag $PRERELEASE \
+                dist/*
+            fi
+      - run:
+          name: Deploy marker — success
+          command: circleci run release update "limboo-$CIRCLE_TAG" --status=SUCCESS || true
+      - run:
+          name: Deploy marker — failed
+          command: circleci run release update "limboo-$CIRCLE_TAG" --status=FAILED || true
+          when: on_fail
+      - store_artifacts:
+          path: RELEASE_NOTES.md
+
 workflows:
   ci:
     jobs:
@@ -86,3 +336,20 @@ workflows:
           requires: [validate]
       - test:
           requires: [build]
+
+  deploy:
+    jobs:
+      - package-linux:
+          filters: &release-filters
+            tags:
+              only: /^v.*/
+            branches:
+              ignore: /.*/
+      - package-windows:
+          filters: *release-filters
+      - package-macos:
+          filters: *release-filters
+      - publish-release:
+          context: limboo-release
+          requires: [package-linux, package-windows, package-macos]
+          filters: *release-filters

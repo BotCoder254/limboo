@@ -235,8 +235,12 @@ The OS-level window/tray/app icon is [`assets/icon.png`](assets/icon.png) (512),
 `npm run gen:icons` (a cross-platform `sharp` script,
 [`scripts/gen-icons.mjs`](scripts/gen-icons.mjs)) after editing the SVG — this
 replaces the old `rsvg-convert` one-liner, which isn't available on Windows. The
-Windows *installer* art (`.ico`, NSIS sidebars) still derives from `icon.svg` via
-`scripts/gen-installer-assets.sh` (needs `rsvg-convert` + ImageMagick).
+Windows *installer* art (`.ico`, NSIS sidebar/header BMPs) derives from the same
+`icon.svg` via `npm run gen:installer`
+([`scripts/gen-installer-assets.mjs`](scripts/gen-installer-assets.mjs)) — also
+cross-platform: sharp + resvg rasterize, `opentype.js` outlines the wordmarks from
+the vendored Inter TTFs in `assets/installer/fonts/`, and a built-in 24-bit writer
+emits the BMP3 files NSIS needs (no rsvg-convert / ImageMagick anywhere).
 
 ### Frameless window + the `window.limboo` bridge
 
@@ -300,14 +304,19 @@ persists it). `ResizeHandle` is the 1px divider with a wider hover hit area.
 ## 5. Commands
 
 ```bash
-npm start          # run the app in dev (Electron + Vite HMR). Renderer on :5173
-npm run lint       # eslint over .ts/.tsx
-npm run package    # package the app (no installers)
-npm run make       # build platform installers (deb/rpm/zip/squirrel)
-npm run publish    # publish (configured via forge.config.ts)
+npm start              # run the app in dev (Electron + Vite HMR). Renderer on :5173
+npm run lint           # eslint over .ts/.tsx
+npm run package        # package the app (no installers)
+npm run dist           # package + electron-builder → branded installers in dist/
+npm run gen:icons      # regenerate runtime PNG icons from assets/icon.svg
+npm run gen:installer  # regenerate Windows installer art (.ico + NSIS BMPs)
+npm run make           # legacy Forge makers (unused — makers: [] in forge.config.ts)
+npm run publish        # legacy Forge publish (unused; releases ship via CircleCI)
 ```
 
 There is **no `npm run dev`** — use `npm start` (Electron Forge drives Vite).
+Releases: pushing a `v*` tag triggers the CircleCI `release` workflow (all-OS
+installers → GitHub Release); see `docs/ci/release-process.md`.
 
 ---
 
