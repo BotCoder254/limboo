@@ -17,7 +17,18 @@
 import { spawnSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 
-const toRef = process.argv[2] ?? 'HEAD';
+// argv[2] may be an explicit empty string (e.g. an unset "$CIRCLE_TAG" passed
+// through by CI), which `?? 'HEAD'` would NOT catch — treat empty/whitespace as a
+// hard error so we never run `git log ""` and emit garbage notes.
+const rawRef = process.argv[2];
+if (rawRef !== undefined && rawRef.trim() === '') {
+  console.error(
+    'generate-release-notes: empty target ref. Pass a valid tag/ref, e.g.\n' +
+      '  node ci/scripts/generate-release-notes.mjs v1.2.3 RELEASE_NOTES.md',
+  );
+  process.exit(1);
+}
+const toRef = rawRef ?? 'HEAD';
 const outFile = process.argv[3];
 
 function git(args) {

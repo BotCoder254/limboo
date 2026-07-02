@@ -1,6 +1,6 @@
 name: Release (manual fallback)
 
-# Manual FALLBACK release publisher. CircleCI (.circleci/config.yml, `release`
+# Manual FALLBACK release publisher. CircleCI (.circleci/config.yml, `deploy`
 # workflow) is the primary publisher and runs automatically on every `v*` tag —
 # this workflow deliberately has NO tag trigger so the two can never both publish
 # the same release. Dispatch it only when CircleCI is unavailable: it reuses the
@@ -19,8 +19,37 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    name: Validate tag
+    # Fail fast before the multi-OS package matrix: the dispatched tag must look
+    # like a version tag AND actually exist on the remote. Skipping this wastes an
+    # entire package run on a typo or a not-yet-pushed tag.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check tag format
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::inputs.tag is empty." ; exit 1
+          fi
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag '$TAG' is malformed — expected vMAJOR.MINOR.PATCH[-prerelease]." ; exit 1
+          fi
+      - name: Check tag exists on remote
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag '$TAG' does not exist in ${GITHUB_REPOSITORY}. Push it first." ; exit 1
+          fi
+          echo "Validated $TAG"
+
   package:
     name: Package + attest
+    needs: [validate]
     uses: ./.github/workflows/_package.yml
     permissions:
       contents: read

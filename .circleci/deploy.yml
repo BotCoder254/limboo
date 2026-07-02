@@ -5,7 +5,7 @@ version: 2.1
 # Two workflows:
 #   ci      — validate -> build -> test on every branch push (same logical stages
 #             as ci/pipeline.yml, via the same ci/scripts/*.mjs).
-#   release — on every `v*` tag: package branded installers on ALL THREE OSes
+#   deploy  — on every `v*` tag: package branded installers on ALL THREE OSes
 #             (Linux docker, Windows orb, macOS Apple-silicon) and publish a
 #             GitHub Release with the installers + SHA256SUMS + SBOM + the
 #             latest*.yml / *.blockmap metadata electron-updater reads.
@@ -19,7 +19,7 @@ version: 2.1
 # deploy markers. Never put tokens in this file.
 #
 # Tag-filter rule: CircleCI never runs a job for a tag unless the job (and every
-# job it `requires`) declares a tags filter — hence the filters on every release
+# job it `requires`) declares a tags filter — hence the filters on every deploy
 # job. Conversely the ci jobs carry no tag filters, so they run on branches only.
 
 orbs:
@@ -127,8 +127,20 @@ jobs:
           command: |
             mkdir -p artifacts/linux
             cp dist/*.AppImage dist/*.deb dist/*.rpm dist/latest-linux.yml artifacts/linux/
-            cp dist/*.blockmap artifacts/linux/ 2>/dev/null || true
+            # *.blockmap is optional (electron-updater delta metadata) — copy if
+            # present, but never mask a real error on the required files above.
+            if ls dist/*.blockmap >/dev/null 2>&1; then
+              cp dist/*.blockmap artifacts/linux/
+            else
+              echo "[stage] note: no *.blockmap in dist (delta updates disabled?)"
+            fi
             cp dist/limboo-sbom.cdx.json artifacts/linux/
+            # Fail fast if the essential installers / update metadata are missing,
+            # so we never persist an incomplete artifact set to the workspace.
+            for pat in "artifacts/linux/*.AppImage" "artifacts/linux/*.deb" \
+                       "artifacts/linux/*.rpm" "artifacts/linux/latest-linux.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
       - store_artifacts:
           path: dist
       - persist_to_workspace:
@@ -155,7 +167,19 @@ jobs:
           name: Stage release artifacts
           command: |
             mkdir -p artifacts/windows
-            cp dist/*.exe dist/*.blockmap dist/latest.yml artifacts/windows/
+            cp dist/*.exe dist/latest.yml artifacts/windows/
+            # *.blockmap is optional (electron-updater delta metadata) — copy if
+            # present, but never mask a real error on the required files above.
+            if ls dist/*.blockmap >/dev/null 2>&1; then
+              cp dist/*.blockmap artifacts/windows/
+            else
+              echo "[stage] note: no *.blockmap in dist (delta updates disabled?)"
+            fi
+            # Fail fast if the essential installer / update metadata is missing,
+            # so we never persist an incomplete artifact set to the workspace.
+            for pat in "artifacts/windows/*.exe" "artifacts/windows/latest.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
       - store_artifacts:
           path: dist
       - persist_to_workspace:
@@ -183,7 +207,20 @@ jobs:
           name: Stage release artifacts
           command: |
             mkdir -p artifacts/macos
-            cp dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml artifacts/macos/
+            cp dist/*.dmg dist/*.zip dist/latest-mac.yml artifacts/macos/
+            # *.blockmap is optional (electron-updater delta metadata) — copy if
+            # present, but never mask a real error on the required files above.
+            if ls dist/*.blockmap >/dev/null 2>&1; then
+              cp dist/*.blockmap artifacts/macos/
+            else
+              echo "[stage] note: no *.blockmap in dist (delta updates disabled?)"
+            fi
+            # Fail fast if the essential installers / update metadata are missing,
+            # so we never persist an incomplete artifact set to the workspace.
+            for pat in "artifacts/macos/*.dmg" "artifacts/macos/*.zip" \
+                       "artifacts/macos/latest-mac.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
       - store_artifacts:
           path: dist
       - persist_to_workspace:
@@ -194,6 +231,22 @@ jobs:
     executor: node-linux
     steps:
       - checkout # full clone (CircleCI default) so release notes can diff from the previous tag
+      - run:
+          name: Validate release tag
+          # Fail fast before doing any publish work: CIRCLE_TAG must be present and
+          # look like a version tag (vMAJOR.MINOR.PATCH, optional -prerelease). An
+          # empty/malformed tag would otherwise blow up release-note generation and
+          # the gh release step deep into the job.
+          command: |
+            if [ -z "$CIRCLE_TAG" ]; then
+              echo "CIRCLE_TAG is empty — this job must run from a v* tag." >&2
+              exit 1
+            fi
+            if ! echo "$CIRCLE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+              echo "CIRCLE_TAG '$CIRCLE_TAG' is malformed — expected vMAJOR.MINOR.PATCH[-prerelease]." >&2
+              exit 1
+            fi
+            echo "Releasing $CIRCLE_TAG"
       - attach_workspace:
           at: .
       - run:
@@ -216,9 +269,33 @@ jobs:
             sudo install "gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
             gh --version
       - run:
+          name: Install CircleCI CLI (pinned + checksum-verified, best-effort)
+          # SECURITY: never pipe a mutable remote script into a shell. Instead pull a
+          # PINNED release tarball + its checksums.txt and verify the SHA256 before
+          # touching the binary. On any download/verify failure we skip the deploy
+          # markers entirely (they're best-effort) rather than run unverified code.
+          command: |
+            set -u
+            # Pinned CircleCI CLI release. v1+ archives place the `circleci` binary
+            # at the tarball root (v0.x wrapped it in a dir) — extract it directly.
+            CIRCLECI_CLI_VERSION=1.0.42868-pre
+            base="https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}"
+            tarball="circleci-cli_${CIRCLECI_CLI_VERSION}_linux_amd64.tar.gz"
+            tmp="$(mktemp -d)"
+            if curl -fLSs --retry 3 "${base}/${tarball}" -o "${tmp}/${tarball}" \
+               && curl -fLSs --retry 3 "${base}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt" -o "${tmp}/checksums.txt" \
+               && ( cd "${tmp}" && sha256sum --ignore-missing -c checksums.txt ) \
+               && tar -xzf "${tmp}/${tarball}" -C "${tmp}" circleci; then
+              sudo install "${tmp}/circleci" /usr/local/bin/circleci
+              circleci version
+            else
+              echo "[deploy-marker] CircleCI CLI download/verify failed — skipping deploy markers." >&2
+            fi
+            rm -rf "${tmp}"
+      - run:
           name: Deploy marker — plan + running (best-effort, needs CIRCLECI_CLI_TOKEN)
           command: |
-            curl -fLSs https://raw.githubusercontent.com/CircleCI-Public/circleci-cli/main/install.sh | sudo bash || true
+            command -v circleci >/dev/null 2>&1 || { echo "[deploy-marker] circleci CLI not installed — skipping."; exit 0; }
             circleci run release plan "limboo-$CIRCLE_TAG" --environment-name=production \
               --component-name=limboo-desktop --target-version="$CIRCLE_TAG" --namespace=default || true
             circleci run release update "limboo-$CIRCLE_TAG" --status=running || true
@@ -260,7 +337,7 @@ workflows:
       - test:
           requires: [build]
 
-  release:
+  deploy:
     jobs:
       - package-linux:
           filters: &release-filters
