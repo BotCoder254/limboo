@@ -1,7 +1,7 @@
 {
   "name": "limboo",
   "productName": "limboo",
-  "version": "1.2.3",
+  "version": "1.2.5",
   "description": "My Electron application description",
   "main": ".vite/build/main.js",
   "private": true,
