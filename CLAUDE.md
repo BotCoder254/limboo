@@ -323,6 +323,12 @@ origin` is configured to fan out to both `github.com` and
 `gitlab.com/BotCoder254/limboo`. GitHub Actions' `release.yml` is a manual fallback
 only. See `docs/ci/release-process.md` and `docs/ci/gitlab-ci.md`.
 
+**Versioning is TAG-DRIVEN — never hand-bump `package.json` before tagging.** Every CI
+job that reads the version first runs `ci/scripts/apply-tag-version.mjs`, which stamps the
+`v*` tag's version into `package.json` (+ lockfile) at build time, so all artifacts
+(`app.getVersion()`, installers, `latest*.yml`) match the tag. The repo's `package.json`
+version is just a dev/baseline placeholder. To release: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
 ---
 
 ## 6. Conventions for agents working here

@@ -86,6 +86,49 @@ function loadSdk(): Promise<ClaudeSdk> {
 }
 
 /* ------------------------------------------------------------------ */
+/* Native Claude Code executable resolution.                           */
+/*                                                                     */
+/* The SDK (0.3.x) ships a per-platform NATIVE binary                  */
+/* (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude[.exe]`)   */
+/* and, when `pathToClaudeCodeExecutable` is unset, auto-resolves it to */
+/* its own module path. In a packaged build that path lands INSIDE     */
+/* `app.asar` — a virtual archive path the OS cannot exec, so the      */
+/* spawn fails with "native binary … exists but failed to launch".     */
+/* forge.config.ts already unpacks `@anthropic-ai/**` to               */
+/* `app.asar.unpacked`, so the real file exists on disk — we just have */
+/* to point the SDK at it. Memoized: the path never changes at runtime.*/
+/* ------------------------------------------------------------------ */
+let claudeExeResolved = false;
+let claudeExePath: string | undefined;
+function resolveClaudeExecutable(): string | undefined {
+  if (claudeExeResolved) return claudeExePath;
+  claudeExeResolved = true;
+  const binName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  const rel = path.join(
+    'node_modules',
+    '@anthropic-ai',
+    `claude-agent-sdk-${process.platform}-${process.arch}`,
+    binName,
+  );
+  const appPath = app.getAppPath();
+  const candidates = [
+    // Packaged: the unpacked copy lives beside app.asar.
+    appPath.includes('app.asar') ? path.join(appPath.replace('app.asar', 'app.asar.unpacked'), rel) : undefined,
+    // Dev / already-unpacked: resolve straight from the app path.
+    path.join(appPath, rel),
+  ].filter((p): p is string => typeof p === 'string');
+  claudeExePath = candidates.find((p) => fs.existsSync(p));
+  if (claudeExePath) {
+    logger.info('[claude] resolved native executable', { path: claudeExePath });
+  } else {
+    // Fall back to the SDK's built-in resolution (works in dev where the SDK
+    // sits in a plain node_modules) rather than forcing a broken path.
+    logger.warn('[claude] native executable not found on disk; using SDK default resolution');
+  }
+  return claudeExePath;
+}
+
+/* ------------------------------------------------------------------ */
 /* Tool risk classification                                            */
 /* ------------------------------------------------------------------ */
 const READ_TOOLS = new Set([
@@ -1677,6 +1720,10 @@ export class AgentManager {
       thinking: mapThinking(agent.thinking),
       stderr: (data: string) => logger.warn('[claude]', redact(data)),
     };
+    // Point the SDK at the UNPACKED native binary. Without this it auto-resolves
+    // claude[.exe] to a path inside app.asar (unrunnable) in a packaged build.
+    const claudeExe = resolveClaudeExecutable();
+    if (claudeExe) options.pathToClaudeCodeExecutable = claudeExe;
     // Memory + Search context: append durable project knowledge and the ranked
     // retrieval for this prompt to Claude Code's default system prompt (preset
     // preserved), so the agent starts each task with the most relevant context

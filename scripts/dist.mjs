@@ -15,8 +15,8 @@
  * (e.g. `--publish always`) are forwarded straight to electron-builder.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, writeFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 
 // Forge names the packaged dir from packagerConfig.name ('Limboo') + platform/arch.
 const prepackaged = resolve(
@@ -30,6 +30,34 @@ if (!existsSync(prepackaged)) {
     `[dist] Expected Forge package output at "${prepackaged}" but it does not exist.\n` +
       `       Run "electron-forge package" first (npm run dist does this for you).`,
   );
+  process.exit(1);
+}
+
+// electron-updater reads `resources/app-update.yml` on every checkForUpdates() to
+// learn its feed + cache dir. electron-builder normally writes this file during the
+// app-packaging step — but that step is SKIPPED here (`--prepackaged`), so without
+// this the file is missing, checkForUpdates() throws, AutoUpdateManager emits a
+// non-actionable `error`, and the UpdateBanner never shows. Write it into the
+// prepackaged app's resources (electron-builder copies resources as-is) so the
+// in-app updater works. Content mirrors electron-builder's own output, derived
+// from the `publish` block in electron-builder.yml.
+const appUpdateYml =
+  'owner: BotCoder254\n' +
+  'provider: github\n' +
+  'repo: limboo\n' +
+  'updaterCacheDirName: limboo-updater\n';
+// Resources live directly under the packaged dir on win/linux, but inside the
+// .app bundle on macOS.
+const resourcesDir =
+  process.platform === 'darwin'
+    ? join(prepackaged, 'Limboo.app', 'Contents', 'Resources')
+    : join(prepackaged, 'resources');
+const appUpdatePath = join(resourcesDir, 'app-update.yml');
+try {
+  writeFileSync(appUpdatePath, appUpdateYml, 'utf8');
+  console.log(`[dist] wrote ${appUpdatePath}`);
+} catch (err) {
+  console.error(`[dist] failed to write app-update.yml: ${err?.message ?? err}`);
   process.exit(1);
 }
 

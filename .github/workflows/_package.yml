@@ -55,6 +55,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Apply version from tag
+        # Tag-driven versioning: stamp package.json with the tag version before
+        # building so the installers + latest*.yml match the Release. `inputs.ref` is
+        # the tag on the release.yml path; a non-tag ref (cd.yml dry-run) is a no-op.
+        run: node ci/scripts/apply-tag-version.mjs "${{ inputs.ref }}"
+
       - name: Build branded installers (Forge package + electron-builder)
         # Forge packages the app (Vite build + security fuses + asar layout); then
         # electron-builder wraps that prepackaged dir into the branded NSIS / dmg /

@@ -12,7 +12,9 @@ fallback (dispatch-only, no tag trigger).
   See [gitlab-ci.md](gitlab-ci.md#first-time-setup).
 - GitHub push mirroring is configured so the repo stays in sync.
 - `main` is green (GitLab `validate` -> `build` -> `test` passing).
-- Update the version in `package.json` (e.g. `1.2.0`) and commit. Use Conventional
+- **Do NOT hand-edit `package.json` version.** Versioning is tag-driven: CI stamps the
+  tag version into `package.json` at build time via
+  [`apply-tag-version.mjs`](../../ci/scripts/apply-tag-version.mjs). Just use Conventional
   Commit subjects throughout the cycle so release notes are categorized automatically.
 
 ## 2. Tag
@@ -23,7 +25,9 @@ git push origin v1.2.0
 ```
 
 `git push origin` fans out to GitLab (source of truth) and GitHub (mirror); the `v*`
-tag triggers the GitLab release pipeline.
+tag triggers the GitLab release pipeline, which derives the version **from the tag** —
+every artifact (`app.getVersion()`, installers, `latest*.yml`) is `1.2.0` with no manual
+`package.json` bump. The repo's `package.json` version is only a dev/baseline placeholder.
 
 ## 3. What the pipeline does
 

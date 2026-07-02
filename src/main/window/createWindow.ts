@@ -52,7 +52,9 @@ export function createMainWindow(windowState: WindowStateManager): BrowserWindow
     show: false,
     frame: false,
     autoHideMenuBar: true,
-    icon: assetPath('icon.png'),
+    // Windows embeds/derives the runtime window + taskbar icon best from a .ico;
+    // other platforms use the PNG (macOS uses the app bundle icon anyway).
+    icon: assetPath(process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       // Security: keep the renderer isolated from Node entirely.

@@ -6,6 +6,10 @@
 #
 #   validate -> build -> test -> package(linux|windows|macos) -> secure -> release
 #
+# Versioning is TAG-DRIVEN: pushing a `v*` tag is all that's needed — every job that
+# reads the version first runs ci/scripts/apply-tag-version.mjs, which stamps the tag
+# version into package.json for the build. Never hand-bump package.json before tagging.
+#
 # On every `v*` tag the pipeline packages branded installers, consolidates
 # checksums + SBOM, generates release notes, and publishes the SAME build to BOTH
 #   * a GitLab Release  (release:gitlab — assets via the Generic Package Registry)
@@ -57,6 +61,10 @@ compliance:
     - apt-get update && apt-get install -y build-essential python3
     - npm ci --cache .npm --prefer-offline
   script:
+    # Tag-driven versioning: on a v* tag pipeline, stamp package.json (+ lockfile)
+    # with the tag version BEFORE check-manifest, so its tag<->version guard verifies
+    # the applied version instead of demanding a manual pre-bump. No-op off a tag.
+    - node ci/scripts/apply-tag-version.mjs
     - node ci/scripts/check-licenses.mjs
     - node ci/scripts/check-electron-security.mjs
     - node ci/scripts/check-manifest.mjs
@@ -90,6 +98,7 @@ build:
     - apt-get update && apt-get install -y build-essential python3
     - npm ci --cache .npm --prefer-offline
   script:
+    - node ci/scripts/apply-tag-version.mjs
     - npx vite build --config vite.renderer.config.mts
     - npm run package
   artifacts:
@@ -133,6 +142,8 @@ package:linux:
     - apt-get update && apt-get install -y build-essential python3 rpm fakeroot dpkg
     - npm ci --cache .npm --prefer-offline
   script:
+    # Stamp the tag version into package.json before building the installers.
+    - node ci/scripts/apply-tag-version.mjs
     - npm run dist -- --publish never
     # Pure-npm SBOM from the lockfile — the dependency set is identical on all three
     # OSes, so one SBOM (generated here) covers the whole release.
@@ -166,6 +177,7 @@ package:windows:
     # the runner toolset; fall back to a direct install if the image lacks it.
     - node --version
     - npm ci
+    - node ci/scripts/apply-tag-version.mjs
     - npm run dist -- --publish never
     - node ci/scripts/verify-signing.mjs dist
     - New-Item -ItemType Directory -Force artifacts/windows | Out-Null
@@ -192,6 +204,7 @@ package:macos:
   script:
     - node --version
     - npm ci
+    - node ci/scripts/apply-tag-version.mjs
     - npm run dist -- --publish never
     - node ci/scripts/verify-signing.mjs dist
     - |

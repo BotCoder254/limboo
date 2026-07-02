@@ -50,10 +50,12 @@ async function main() {
   // app.getVersion() and electron-builder's latest.yml — from package.json, while
   // the GitHub/GitLab Release is tagged from the git tag. If the two disagree the
   // Release ships mislabeled binaries and electron-updater never detects the new
-  // version. Fail fast here (validate stage, before the expensive package stage).
-  // Only enforced when a release tag is present, so ordinary commit pipelines are
-  // unaffected. Reads either CI's tag env (GitLab: CI_COMMIT_TAG; GitHub Actions:
-  // GITHUB_REF_NAME when GITHUB_REF_TYPE=tag).
+  // version. Versioning is TAG-DRIVEN: ci/scripts/apply-tag-version.mjs runs EARLIER
+  // in the job and stamps the tag version into package.json, so this check is now a
+  // post-apply safety net — it verifies the stamp landed rather than demanding a
+  // manual pre-bump. Only enforced when a release tag is present, so ordinary commit
+  // pipelines are unaffected. Reads either CI's tag env (GitLab: CI_COMMIT_TAG;
+  // GitHub Actions: GITHUB_REF_NAME when GITHUB_REF_TYPE=tag).
   const releaseTag =
     process.env.CI_COMMIT_TAG ||
     (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : '') ||
@@ -64,7 +66,8 @@ async function main() {
     else
       fail(
         `release tag ${releaseTag} (=${tagVersion}) does not match package.json version ` +
-          `${pkg.version} — bump package.json (and commit) before tagging`,
+          `${pkg.version} — apply-tag-version.mjs should have stamped it; ensure it runs ` +
+          `before this check in the job`,
       );
   }
 
