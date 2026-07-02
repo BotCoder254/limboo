@@ -14,9 +14,12 @@ version: 2.1
 # release.yml remains as a manually-dispatched fallback only. See
 # docs/ci/circleci.md and docs/ci/release-process.md.
 #
-# Secrets: the `limboo-release` Context must define GH_TOKEN (fine-grained PAT,
-# Contents: read+write on BotCoder254/limboo). Optional: CIRCLECI_CLI_TOKEN for
-# deploy markers. Never put tokens in this file.
+# Secrets: define GH_TOKEN as a CircleCI project Environment Variable (Project
+# Settings -> Environment Variables) — a fine-grained PAT with Contents:
+# read+write on BotCoder254/limboo. Project env vars are injected into every job,
+# so publish-release picks it up without a Context. (Alternatively, put GH_TOKEN
+# in an org Context and add `context: <name>` back to publish-release.) Optional:
+# CIRCLECI_CLI_TOKEN for deploy markers. Never put tokens in this file.
 #
 # Tag-filter rule: CircleCI never runs a job for a tag unless the job (and every
 # job it `requires`) declares a tags filter — hence the filters on every deploy
@@ -350,6 +353,5 @@ workflows:
       - package-macos:
           filters: *release-filters
       - publish-release:
-          context: limboo-release
           requires: [package-linux, package-windows, package-macos]
           filters: *release-filters
