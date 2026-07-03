@@ -15,8 +15,9 @@
  * (e.g. `--publish always`) are forwarded straight to electron-builder.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { writeAppUpdateYml } from './write-app-update-yml.mjs';
 
 // Forge names the packaged dir from packagerConfig.name ('Limboo') + platform/arch.
 const prepackaged = resolve(
@@ -34,27 +35,13 @@ if (!existsSync(prepackaged)) {
 }
 
 // electron-updater reads `resources/app-update.yml` on every checkForUpdates() to
-// learn its feed + cache dir. electron-builder normally writes this file during the
-// app-packaging step — but that step is SKIPPED here (`--prepackaged`), so without
-// this the file is missing, checkForUpdates() throws, AutoUpdateManager emits a
-// non-actionable `error`, and the UpdateBanner never shows. Write it into the
-// prepackaged app's resources (electron-builder copies resources as-is) so the
-// in-app updater works. Content mirrors electron-builder's own output, derived
-// from the `publish` block in electron-builder.yml.
-const appUpdateYml =
-  'owner: BotCoder254\n' +
-  'provider: github\n' +
-  'repo: limboo\n' +
-  'updaterCacheDirName: limboo-updater\n';
-// Resources live directly under the packaged dir on win/linux, but inside the
-// .app bundle on macOS.
-const resourcesDir =
-  process.platform === 'darwin'
-    ? join(prepackaged, 'Limboo.app', 'Contents', 'Resources')
-    : join(prepackaged, 'resources');
-const appUpdatePath = join(resourcesDir, 'app-update.yml');
+// learn its feed + cache dir, and neither Forge nor `--prepackaged` electron-builder
+// emits it. Forge's `postPackage` hook (forge.config.ts) already wrote it into this
+// dir, but re-write it here as a safety net so a stale/hand-assembled prepackaged
+// dir still gets a valid feed file before electron-builder wraps it. Shared content
+// lives in write-app-update-yml.mjs.
 try {
-  writeFileSync(appUpdatePath, appUpdateYml, 'utf8');
+  const appUpdatePath = writeAppUpdateYml(prepackaged, process.platform);
   console.log(`[dist] wrote ${appUpdatePath}`);
 } catch (err) {
   console.error(`[dist] failed to write app-update.yml: ${err?.message ?? err}`);

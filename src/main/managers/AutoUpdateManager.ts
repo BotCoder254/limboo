@@ -15,6 +15,8 @@
  * - The GitHub feed is HTTPS-only and host-fixed (no renderer-supplied URLs), so
  *   there is no SSRF surface to allowlist here.
  */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { app, BrowserWindow } from 'electron';
 import electronUpdater from 'electron-updater';
 import type { ProgressInfo, UpdateInfo } from 'electron-updater';
@@ -75,6 +77,14 @@ export class AutoUpdateManager {
   private computeEnabled(): boolean {
     if (!app.isPackaged) return false;
     if (process.platform === 'linux' && !process.env.APPIMAGE) return false;
+    // electron-updater reads `<resources>/app-update.yml` on checkForUpdates();
+    // if it's absent (e.g. an older installer or a plain Forge package that
+    // predates the packaging fix) that call throws ENOENT. Disable gracefully
+    // rather than surface a non-actionable error — a reinstall restores the file.
+    if (!existsSync(join(process.resourcesPath, 'app-update.yml'))) {
+      logger.warn('[updater] app-update.yml missing from resources; updates disabled');
+      return false;
+    }
     return true;
   }
 

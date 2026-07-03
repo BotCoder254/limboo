@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
@@ -79,6 +81,25 @@ const config: ForgeConfig = {
   // shipped as an ABI-stable per-platform prebuilt (sherpa-onnx-win-x64 etc.) —
   // no rebuild wanted or needed.
   rebuildConfig: { ignoreModules: ['node-pty', 'sherpa-onnx-node'] },
+  hooks: {
+    // electron-updater reads `resources/app-update.yml` on every checkForUpdates()
+    // to learn its feed + cache dir. Neither Forge nor `--prepackaged`
+    // electron-builder (scripts/dist.mjs) emits it during app packaging, so without
+    // this every packaged output — `npm run package`, running from `out/`, and the
+    // base of `npm run dist` — is missing it and the updater throws ENOENT. Write it
+    // here so EVERY Forge-packaged output has a valid feed file. The shared writer
+    // is ESM (.mjs); load it via dynamic import + file URL since this config is
+    // transpiled to CommonJS.
+    postPackage: async (_forgeConfig, options) => {
+      const { writeAppUpdateYml } = await import(
+        pathToFileURL(join(__dirname, 'scripts', 'write-app-update-yml.mjs')).href
+      );
+      for (const outputPath of options.outputPaths) {
+        const written = writeAppUpdateYml(outputPath, options.platform);
+        console.log(`[forge] wrote ${written}`);
+      }
+    },
+  },
   // No Forge makers: distributables are produced by electron-builder over the
   // Forge-packaged app dir (`npm run dist` -> scripts/dist.mjs), which is the only
   // path that supports the branded NSIS wizard + auto-update metadata + publishing.
