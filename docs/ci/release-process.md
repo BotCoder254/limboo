@@ -5,6 +5,30 @@ its pipeline runs automatically on every `v*` tag and publishes the **same build
 both a GitLab Release and a GitHub Release. GitHub Actions' `release.yml` is a manual
 fallback (dispatch-only, no tag trigger).
 
+## 0. Checklist — cutting a release (avoid the empty-release trap)
+
+A release only ever contains **the code at the tagged commit**. Two mistakes ship a
+release with *no new code*: tagging an old commit, or reusing a commit that already
+has a tag (this is exactly how `v1.2.8` and `v1.2.9` ended up identical). Run through
+this every time:
+
+1. Merge the work into `main` and let CI go green.
+2. `git fetch origin && git checkout main && git pull` — make sure your local `main`
+   is **not stale** (it must equal `origin/main`).
+3. Confirm the intended tip: `git log --oneline -1 origin/main` shows the commit you
+   expect to ship.
+4. Pick the **next unused** `vX.Y.Z` (`git tag -l | sort -V | tail`), and check the
+   tip isn't already tagged: `git tag --points-at origin/main` must be empty.
+5. Tag that commit and push (see §2).
+6. Watch the GitLab pipeline (Project → Build → Pipelines) run
+   `validate → build → test → package → secure → release`.
+7. Verify **both** Releases carry installers + `latest*.yml` (see §5).
+
+Never reuse a version, never tag an old commit, never hand-edit `package.json`. The
+`compliance` job runs [`check-tag-unique.mjs`](../../ci/scripts/check-tag-unique.mjs),
+which **fails the pipeline** if the tagged commit already carries another `v*` tag —
+so a duplicate tag can no longer silently ship an empty release.
+
 ## 1. Pre-flight
 
 - The GitLab project is set up: `GH_TOKEN` is a masked+protected CI/CD variable, the
@@ -20,7 +44,7 @@ fallback (dispatch-only, no tag trigger).
 ## 2. Tag
 
 ```bash
-git tag v1.2.0
+git tag -a v1.2.0 -m "Limboo v1.2.0"   # tag the tip of an up-to-date main
 git push origin v1.2.0
 ```
 
