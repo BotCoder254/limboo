@@ -158,6 +158,24 @@ function PlanView({
 
   const hasOutline = outline.taskCount > 0;
 
+  // Real-time headline tally, computed straight from the live TodoWrite list so it
+  // advances even when the fuzzy outline↔todo match fails (which otherwise froze
+  // the count at 0). Falls back to the outline only when no todos have streamed.
+  const live = useMemo(() => {
+    let completed = 0;
+    let active = 0;
+    for (const t of tasks) {
+      if (t.done || t.status === 'completed') completed += 1;
+      else if (t.status === 'in_progress') active += 1;
+    }
+    return { completed, active, total: tasks.length };
+  }, [tasks]);
+  const progress =
+    live.total > 0
+      ? { completed: live.completed, total: live.total, active: live.active }
+      : { completed: outline.completed, total: outline.taskCount, active: 0 };
+  const hasProgress = progress.total > 0;
+
   const copy = () => {
     void window.limboo?.system?.clipboardWrite(plan.markdown);
     addToast({ title: 'Plan copied', tone: 'success' });
@@ -185,9 +203,14 @@ function PlanView({
             {plan.title}
           </p>
           <span className={cn('text-[11px] font-medium', badge.cls)}>
-            {planning && <Loader2 size={10} className="mr-1 inline animate-spin" />}
+            {(planning || progress.active > 0) && (
+              <Loader2 size={10} className="mr-1 inline animate-spin" />
+            )}
             {badge.label}
-            {hasOutline && ` · ${outline.completed}/${outline.taskCount}`}
+            {hasProgress && ` · ${progress.completed}/${progress.total}`}
+            {progress.active > 0 && (
+              <span className="ml-1 text-accent">· {progress.active} running</span>
+            )}
           </span>
         </div>
         {!planning && (
