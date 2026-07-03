@@ -61,7 +61,48 @@ on a branch and are never pushed.
 Checkpoints are created using a temporary index so your real index and working tree
 are never disturbed.
 
+## Worktrees: parallel isolated sessions
+
+**New session in worktree** (`Mod+Shift+N`) gives a session its own checkout
+directory and branch via `git worktree add`, so several sessions can proceed in
+parallel — each agent, terminal, and dev server works in its own tree.
+
+- Worktrees live under `{userData}/worktrees` (configurable:
+  `git.worktrees.root`); branches default to `limboo/<slug>`
+  (`git.worktrees.branchPrefix`).
+- An editor-style tab strip above the session header switches between worktree
+  sessions (`Ctrl+Tab` / `Ctrl+Shift+Tab`); the plain workspace checkout is
+  always reachable as a tab.
+- Everything session-scoped (agent, terminals, git, search) runs inside the
+  worktree while it is healthy.
+- If a checkout vanishes outside Limboo, the session is flagged and a banner
+  offers **Recreate** or **Detach**. **Prune stale worktrees** (palette) cleans
+  leftover metadata.
+- Deleting a worktree session opens a dependency dialog (dirty checkout?
+  branch? terminals? checkpoints?) with explicit remove-worktree /
+  delete-branch choices.
+
+## Scripts & Services (limboo.json)
+
+A repo can declare setup/teardown hooks, on-demand scripts, and supervised dev
+services in a root [`limboo.json`](../reference/limboo-json.md). Because the
+file is repo-authored, **nothing runs until you approve the exact commands** in
+a confirmation dialog (and any edit re-requires approval — the Services strip
+shows "Review commands…" when re-approval is needed).
+
+- **Setup hooks** run in a fresh worktree (install dependencies, copy `.env`
+  from the source checkout via `LIMBOO_SOURCE_ROOT`).
+- **Scripts** get one-click run buttons in the strip under the session header.
+- **Services** are supervised: auto-assigned loopback port (`PORT`), live
+  status dot, clickable URL, start/stop/restart, optional crash respawn, and
+  logs streamed into the session's terminal.
+- With the proxy enabled, each service also gets a stable
+  `http://<service>--<slug>.localhost:<port>` hostname.
+
 ## See also
 
 - [Configuration](../getting-started/configuration.md) — git settings.
 - [Git Engine architecture](../architecture/subsystems/git-engine.md).
+- [Worktree Manager architecture](../architecture/subsystems/worktree-manager.md).
+- [Service Manager architecture](../architecture/subsystems/service-manager.md).
+- [limboo.json reference](../reference/limboo-json.md).

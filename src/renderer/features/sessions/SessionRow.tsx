@@ -142,11 +142,36 @@ export function SessionRow({
         </div>
 
         <div className="mt-0.5 flex items-center gap-2 text-[11px] text-faint">
-          <span className="flex min-w-0 items-center gap-1">
-            <GitBranch size={10} className="shrink-0" />
+          <span
+            className="flex min-w-0 items-center gap-1"
+            title={
+              session.worktreePath
+                ? `Worktree session — isolated checkout on ${session.worktreeBranch ?? session.branch}`
+                : undefined
+            }
+          >
+            <GitBranch
+              size={10}
+              className={cn(
+                'shrink-0',
+                session.worktreeStatus === 'missing'
+                  ? 'text-warning'
+                  : session.worktreePath
+                    ? 'text-accent'
+                    : undefined,
+              )}
+            />
             <span className="truncate">{session.branch}</span>
           </span>
           <DiffStat adds={session.adds} dels={session.dels} className="shrink-0" />
+          {session.tags.slice(0, 2).map((tag) => (
+            <Badge key={tag} tone="neutral" className="shrink-0">
+              {tag}
+            </Badge>
+          ))}
+          {session.tags.length > 2 && (
+            <span className="shrink-0 text-[10px] text-faint">+{session.tags.length - 2}</span>
+          )}
           {session.unread > 0 && (
             <Badge tone="accent" className="ml-auto">
               {session.unread}

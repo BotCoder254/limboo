@@ -16,10 +16,14 @@ the boot sequence and the cross-manager wiring. The entry point is
    - `SettingsManager`, then `NotificationManager(settings)`.
    - **Database** — `getDb()` opens SQLite before any manager reads it.
    - `WorkspaceManager`, `SessionManager`,
+     `WorktreeManager(workspace, sessions, settings)`,
+     `ServiceManager(sessions, settings)` + `ProxyServer(services, settings)`,
      `AgentManager(workspace, settings, notifications)`,
      `FileSystemManager(workspace)`, `TerminalManager(workspace, settings)`,
      `GitManager(workspace, settings)`, `MemoryManager(settings)`.
    - `registerAllIpc(...)` wires every handler.
+   - `worktrees.recover()` runs once (flag vanished checkouts, `git worktree
+     repair` + `prune` per repo), then the effective root is targeted.
    - The window is created (see [the window](#window-creation)).
 
 ## Cross-manager wiring
@@ -36,6 +40,16 @@ construction wiring (no hidden globals):
 - `git.setMemoryManager(memory)` — commits become memory proposals.
 - `fileSystem.setSessionManager(sessions)` — push live git status into session rows.
 - `fileSystem.setGitManager(git)` — notify git on tree changes.
+- `services.setTerminalManager(terminal)` / `services.setConfigSource(worktrees)`
+  and `worktrees.setTerminalManager(terminal)` / `worktrees.setServiceManager(services)`
+  — services spawn through PTYs, read the acknowledged limboo.json from the
+  Worktree Manager, and are stopped before a worktree is removed.
+- `worktrees.setReleaseRootHook(...)` — the watcher / search index are
+  retargeted off a worktree directory before it is deleted (Windows EBUSY).
+- The **effective-root resolvers** (`worktrees.resolveSessionRoot` /
+  `resolveActiveRoot`) are injected into the Agent, Terminal, Git, Search, and
+  File System managers so every subsystem executes in the session's worktree
+  when it owns one.
 
 This wiring is the map of how the subsystems interact; each is documented on its own
 [subsystem page](subsystems/agent-manager.md).
@@ -47,11 +61,18 @@ workspace changes: the File System Layer tears down the old watcher and starts
 watching/indexing the new root, and the Memory System seeds starter memories for the
 workspace on first activation (idempotent).
 
+`retargetEffectiveRoot()` runs on active-workspace **and** active-session
+changes: it retargets the single file watcher, invalidates the git root cache,
+reindexes search against the session's effective root, and auto-starts the
+session's `autoStart` services (acknowledged configs only). The `ProxyServer`
+re-syncs with settings changes (`proxy.sync()`).
+
 ## Maintenance and shutdown
 
 - `memory.sweep()` runs once at boot and then hourly to flag stale, unpinned
   memories (never deletes).
 - `before-quit` cleans up: `agent.cleanup()`, `fileSystem.dispose()`,
+  `proxy.stop()`, `services.dispose()` (kills every supervised service),
   `terminal.dispose()`, timers cleared, `tray.destroy()`, `closeDb()`.
 
 ## Session hardening

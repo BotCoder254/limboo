@@ -20,7 +20,12 @@ import {
   Terminal,
   type LucideIcon,
 } from 'lucide-react';
-import type { AgentActivityItem, FileChange, GitFileChange } from '@shared/types';
+import type {
+  AgentActivityItem,
+  FileChange,
+  GitFileChange,
+  SessionTimelineEntry,
+} from '@shared/types';
 import { DiffStat, EmptyState, IconButton } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { relativeTime } from '@/renderer/lib/format';
@@ -243,6 +248,32 @@ const ACTIVITY_ICONS: Record<AgentActivityItem['type'], LucideIcon> = {
 };
 
 export function ActivityFeedPanel() {
+  const [view, setView] = useState<'activity' | 'timeline'>('activity');
+  return (
+    <div className="flex flex-col gap-2">
+      {/* Activity = the live agent audit feed; Timeline = the unified session
+          narrative merged from activity + diagnostics + checkpoints + lifecycle. */}
+      <div className="flex items-center gap-0.5 rounded-md border border-line bg-surface-2 p-0.5">
+        {(['activity', 'timeline'] as const).map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setView(id)}
+            className={cn(
+              'flex-1 rounded px-2 py-1 text-[11px] font-medium capitalize transition-colors',
+              view === id ? 'bg-elevated text-fg' : 'text-muted hover:text-fg',
+            )}
+          >
+            {id}
+          </button>
+        ))}
+      </div>
+      {view === 'activity' ? <ActivityFeedList /> : <TimelineList />}
+    </div>
+  );
+}
+
+function ActivityFeedList() {
   const snapshot = useSnapshot();
   if (snapshot.activity.length === 0) {
     return (
@@ -277,6 +308,75 @@ export function ActivityFeedPanel() {
                 <span className="shrink-0 text-[10px] text-faint">{relativeTime(item.at)}</span>
               </div>
               {item.detail && <p className="truncate text-[11px] text-faint">{item.detail}</p>}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const TIMELINE_ICONS: Record<SessionTimelineEntry['kind'], LucideIcon> = {
+  activity: Activity,
+  diagnostic: ShieldCheck,
+  checkpoint: GitBranch,
+  lifecycle: CheckCircle2,
+};
+
+/**
+ * The unified engineering timeline: everything that happened in this session —
+ * agent activity, diagnostics (hooks, recovery, worktree events), git
+ * checkpoints, and lifecycle milestones — merged chronologically by the main
+ * process (no duplicate storage; derived by query).
+ */
+function TimelineList() {
+  const sessionId = useSessionStore((s) => s.selectedId);
+  const [entries, setEntries] = useState<SessionTimelineEntry[] | null>(null);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setEntries([]);
+      return;
+    }
+    let cancelled = false;
+    setEntries(null);
+    void window.limboo?.session
+      .timeline(sessionId)
+      .then((rows) => {
+        if (!cancelled) setEntries(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setEntries([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  if (entries === null) return null;
+  if (entries.length === 0) {
+    return (
+      <EmptyState
+        compact
+        icon={Activity}
+        title="No timeline yet"
+        description="Every meaningful event — prompts, tools, checkpoints, hooks, diagnostics — becomes a timeline entry."
+      />
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {entries.map((entry) => {
+        const Icon = TIMELINE_ICONS[entry.kind] ?? Activity;
+        return (
+          <li key={`${entry.kind}:${entry.id}`} className="flex items-start gap-2 rounded-md px-2 py-1.5">
+            <Icon size={13} className="mt-0.5 shrink-0 text-muted" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-2">
+                <span className="min-w-0 flex-1 truncate text-[12px] text-fg">{entry.label}</span>
+                <span className="shrink-0 text-[10px] text-faint">{relativeTime(entry.at)}</span>
+              </div>
+              {entry.detail && <p className="truncate text-[11px] text-faint">{entry.detail}</p>}
             </div>
           </li>
         );

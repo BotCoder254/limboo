@@ -19,6 +19,7 @@ import {
   SEARCH_LIMITS,
   SETTINGS_VERSION,
   VOICE_LIMITS,
+  WORKTREE_LIMITS,
   clamp,
 } from '@shared/constants';
 import { IpcEvents } from '@shared/ipc-channels';
@@ -135,6 +136,34 @@ export class SettingsManager {
     if (!['ff-only', 'rebase'].includes(merged.git.pull.strategy)) {
       merged.git.pull.strategy = 'ff-only';
     }
+
+    // Worktrees + Scripts & Services — coerce booleans, cap the root path, and
+    // whitelist the branch prefix to git-ref-safe characters (a renderer-supplied
+    // prefix must never smuggle flags or ref metacharacters into `git worktree`).
+    const wt = merged.git.worktrees;
+    wt.enabled = !!wt.enabled;
+    wt.autoSetup = !!wt.autoSetup;
+    wt.confirmHooks = !!wt.confirmHooks;
+    wt.teardownOnArchive = !!wt.teardownOnArchive;
+    wt.root = String(wt.root ?? '').slice(0, WORKTREE_LIMITS.rootPathMax);
+    wt.branchPrefix = String(wt.branchPrefix ?? '')
+      .replace(/[^A-Za-z0-9._/-]/g, '')
+      .replace(/^[-/.]+/, '')
+      .slice(0, 64);
+    if (!wt.branchPrefix) wt.branchPrefix = DEFAULT_SETTINGS.git.worktrees.branchPrefix;
+
+    const svc = merged.git.services;
+    svc.proxyEnabled = !!svc.proxyEnabled;
+    svc.portRangeStart = Math.round(
+      clamp(svc.portRangeStart, WORKTREE_LIMITS.portRangeStart.min, WORKTREE_LIMITS.portRangeStart.max),
+    );
+    svc.portRangeEnd = Math.round(
+      clamp(svc.portRangeEnd, WORKTREE_LIMITS.portRangeEnd.min, WORKTREE_LIMITS.portRangeEnd.max),
+    );
+    if (svc.portRangeEnd < svc.portRangeStart) svc.portRangeEnd = svc.portRangeStart;
+    svc.proxyPort = Math.round(
+      clamp(svc.proxyPort, WORKTREE_LIMITS.proxyPort.min, WORKTREE_LIMITS.proxyPort.max),
+    );
 
     const mem = merged.memory;
     if (!['propose', 'auto', 'off'].includes(mem.autoCapture)) {

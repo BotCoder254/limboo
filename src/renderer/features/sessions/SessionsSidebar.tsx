@@ -22,6 +22,7 @@ import {
   ArchiveRestore,
   CircleDot,
   Boxes,
+  GitBranch,
   X,
 } from 'lucide-react';
 import type { Session, SessionSort } from '@shared/types';
@@ -31,6 +32,7 @@ import { SessionRow } from './SessionRow';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
+import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 
 function sortSessions(list: Session[], sort: SessionSort): Session[] {
   const arr = [...list];
@@ -48,6 +50,7 @@ export function SessionsSidebar() {
   const sort = useSessionStore((s) => s.sort);
   const showArchived = useSessionStore((s) => s.showArchived);
   const showTrash = useSessionStore((s) => s.showTrash);
+  const groupByFolder = useSessionStore((s) => s.groupByFolder);
   const setFilter = useSessionStore((s) => s.setFilter);
   const createSession = useSessionStore((s) => s.createSession);
   const selectSession = useSessionStore((s) => s.selectSession);
@@ -63,7 +66,11 @@ export function SessionsSidebar() {
 
   const q = filter.trim().toLowerCase();
   const match = (s: Session) =>
-    !q || s.title.toLowerCase().includes(q) || s.branch.toLowerCase().includes(q);
+    !q ||
+    s.title.toLowerCase().includes(q) ||
+    s.branch.toLowerCase().includes(q) ||
+    (s.folder ?? '').toLowerCase().includes(q) ||
+    s.tags.some((t) => t.toLowerCase().includes(q));
 
   const visible = sessions.filter(match);
   const live = visible.filter((s) => !s.archived);
@@ -71,6 +78,24 @@ export function SessionsSidebar() {
   const unpinned = sortSessions(live.filter((s) => !s.pinned), sort);
   const archived = showArchived ? sortSessions(visible.filter((s) => s.archived), sort) : [];
   const trashed = showTrash ? trash.filter(match) : [];
+
+  // Optional folder grouping: unpinned live sessions bucket under their folder
+  // (alphabetical), with ungrouped sessions listed last under "Sessions".
+  const folders = new Map<string, Session[]>();
+  const ungrouped: Session[] = [];
+  if (groupByFolder) {
+    for (const s of unpinned) {
+      if (s.folder) {
+        const bucket = folders.get(s.folder) ?? [];
+        bucket.push(s);
+        folders.set(s.folder, bucket);
+      } else {
+        ungrouped.push(s);
+      }
+    }
+  }
+  const folderNames = [...folders.keys()].sort((a, b) => a.localeCompare(b));
+  const hasFolders = groupByFolder && folderNames.length > 0;
 
   const renderRow = (session: Session) => (
     <SessionRow
@@ -99,9 +124,7 @@ export function SessionsSidebar() {
             <Search size={14} />
           </IconButton>
           <ViewMenu />
-          <IconButton label="New session" size="sm" onClick={() => void createSession()}>
-            <Plus size={15} />
-          </IconButton>
+          <NewSessionMenu />
           <IconButton label="Collapse sidebar" size="sm" onClick={() => setSessionsCollapsed(true)}>
             <PanelLeftClose size={14} />
           </IconButton>
@@ -175,11 +198,28 @@ export function SessionsSidebar() {
                 {pinned.map(renderRow)}
               </>
             )}
-            {unpinned.length > 0 && (
+            {hasFolders ? (
               <>
-                {pinned.length > 0 && <GroupLabel>Sessions</GroupLabel>}
-                {unpinned.map(renderRow)}
+                {folderNames.map((name) => (
+                  <div key={name}>
+                    <GroupLabel>{name}</GroupLabel>
+                    {sortSessions(folders.get(name) ?? [], sort).map(renderRow)}
+                  </div>
+                ))}
+                {ungrouped.length > 0 && (
+                  <>
+                    <GroupLabel>Sessions</GroupLabel>
+                    {ungrouped.map(renderRow)}
+                  </>
+                )}
               </>
+            ) : (
+              unpinned.length > 0 && (
+                <>
+                  {pinned.length > 0 && <GroupLabel>Sessions</GroupLabel>}
+                  {unpinned.map(renderRow)}
+                </>
+              )
             )}
 
             {archived.length > 0 && (
@@ -235,14 +275,85 @@ function TrashRow({ session }: { session: Session }) {
   );
 }
 
+/**
+ * New-session split action: a plain click creates a regular session; when
+ * worktrees are enabled (Settings › Git) the button opens a small menu offering
+ * "New session" and "New session in worktree" — the latter provisions an
+ * isolated checkout + branch for the session before it opens.
+ */
+function NewSessionMenu() {
+  const createSession = useSessionStore((s) => s.createSession);
+  const createSessionInWorktree = useSessionStore((s) => s.createSessionInWorktree);
+  const worktreesEnabled = useSettingsStore((s) => s.settings.git.worktrees.enabled);
+
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  if (!worktreesEnabled) {
+    return (
+      <IconButton label="New session" size="sm" onClick={() => void createSession()}>
+        <Plus size={15} />
+      </IconButton>
+    );
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <IconButton label="New session" size="sm" active={open} onClick={() => setOpen((v) => !v)}>
+        <Plus size={15} />
+      </IconButton>
+      {open && (
+        <div className="animate-pop-in absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-line-strong bg-elevated p-1 shadow-2xl">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              void createSession();
+            }}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+          >
+            <Plus size={13} className="shrink-0" />
+            New session
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              void createSessionInWorktree();
+            }}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+          >
+            <GitBranch size={13} className="shrink-0 text-accent" />
+            <span className="flex-1">New session in worktree</span>
+          </button>
+          <p className="px-2 pb-1 pt-0.5 text-[10px] leading-snug text-faint">
+            Isolated checkout + branch — run parallel tasks without conflicts.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Sort + view-options dropdown (reuses the WorkspaceSwitcher menu styling). */
 function ViewMenu() {
   const sort = useSessionStore((s) => s.sort);
   const setSort = useSessionStore((s) => s.setSort);
   const showArchived = useSessionStore((s) => s.showArchived);
   const showTrash = useSessionStore((s) => s.showTrash);
+  const groupByFolder = useSessionStore((s) => s.groupByFolder);
   const toggleArchived = useSessionStore((s) => s.toggleArchived);
   const toggleTrash = useSessionStore((s) => s.toggleTrash);
+  const toggleGroupByFolder = useSessionStore((s) => s.toggleGroupByFolder);
   const archiveDone = useSessionStore((s) => s.archiveDone);
 
   const [open, setOpen] = useState(false);
@@ -284,6 +395,12 @@ function ViewMenu() {
             onClick={toggleArchived}
           />
           <MenuRow label="Show trash" icon={Trash2} checked={showTrash} onClick={toggleTrash} />
+          <MenuRow
+            label="Group by folder"
+            icon={Boxes}
+            checked={groupByFolder}
+            onClick={toggleGroupByFolder}
+          />
           <div className="my-1 border-t border-line" />
           <button
             type="button"

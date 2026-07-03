@@ -146,6 +146,17 @@ export class SearchManager {
     this.sessions = sessions;
   }
 
+  /**
+   * Resolves the workspace's effective root (the active session's worktree when
+   * it owns one). Injected by the composition root.
+   */
+  private activeRootResolver: ((workspaceId: string) => string | null) | null = null;
+
+  /** Inject the active-root resolver (worktree-backed sessions). */
+  setActiveRootResolver(resolve: (workspaceId: string) => string | null): void {
+    this.activeRootResolver = resolve;
+  }
+
   /* --------------------------------------------------------------- indexing */
 
   /**
@@ -171,11 +182,15 @@ export class SearchManager {
     if (!ws) return;
     const cfg = this.settings.getAll().search;
     const started = Date.now();
-    const matcher = cfg.includeIgnored ? null : buildIgnoreMatcher(ws.path, ws.config);
+    // The index scopes to the *effective* root — the active session's worktree
+    // when it owns one, else the workspace path. One live scope per workspace;
+    // switching sessions triggers a coalesced reindex from the composition root.
+    const root = this.activeRootResolver?.(workspaceId) ?? ws.path;
+    const matcher = cfg.includeIgnored ? null : buildIgnoreMatcher(root, ws.config);
     const maxBytes = Math.min(cfg.maxFileSizeKb * 1024, FS_LIMITS.maxReadBytes);
 
     // Collect the file set first (cheap readdir walk) so progress is a real %.
-    const files = this.walk(ws.path, matcher);
+    const files = this.walk(root, matcher);
     const total = files.length;
     this.broadcastProgress({ workspaceId, phase: 'indexing', processed: 0, total, percent: 0 });
 
@@ -205,7 +220,7 @@ export class SearchManager {
           let size = 0;
           if (cfg.indexContents) {
             try {
-              const res = readWorkspaceFile(ws.path, rel);
+              const res = readWorkspaceFile(root, rel);
               size = res.size;
               if (res.content && !res.isBinary && !res.tooLarge && res.size <= maxBytes) {
                 content = res.content.slice(0, SEARCH_LIMITS.contentIndexChars);

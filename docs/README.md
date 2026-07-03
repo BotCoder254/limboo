@@ -34,7 +34,7 @@ architecture vision).
 - [Using the agent](guides/using-the-agent.md) — plan vs implement, permissions,
   approvals.
 - [Git workflow](guides/git-workflow.md) — status, staging, commit, push/pull,
-  checkpoints.
+  checkpoints, worktrees, Scripts & Services.
 - [Memory system](guides/memory-system.md) — tiers, proposals, prompt injection.
 - [Terminal](guides/terminal.md) — integrated PTY sessions and mirrored commands.
 - [Keyboard shortcuts](guides/keyboard-shortcuts.md) — the command palette and
@@ -47,6 +47,8 @@ architecture vision).
 - [IPC channels](reference/ipc-channels.md) — invoke and event channel names by
   domain.
 - [Settings](reference/settings.md) — the `AppSettings` shape, defaults, and clamps.
+- [limboo.json](reference/limboo-json.md) — the repo-authored hooks / scripts /
+  services config and its trust model.
 - [Design tokens](reference/design-tokens.md) — the pure-black palette and usage.
 - [Commands](reference/commands.md) — the command registry and shortcuts.
 
@@ -64,6 +66,8 @@ architecture vision).
 - Subsystems:
   [Workspace Manager](architecture/subsystems/workspace-manager.md),
   [Session Manager](architecture/subsystems/session-manager.md),
+  [Worktree Manager](architecture/subsystems/worktree-manager.md),
+  [Service Manager](architecture/subsystems/service-manager.md),
   [Git Engine](architecture/subsystems/git-engine.md),
   [Terminal Manager](architecture/subsystems/terminal-manager.md),
   [File System Layer](architecture/subsystems/file-system-layer.md),

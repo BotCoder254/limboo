@@ -100,6 +100,24 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    id: 'session.newInWorktree',
+    title: 'New session in worktree',
+    section: 'Sessions',
+    keys: ['Mod', 'Shift', 'N'],
+    inPalette: true,
+    run: () => {
+      if (!useSettingsStore.getState().settings.git.worktrees.enabled) {
+        useUIStore.getState().addToast({
+          title: 'Worktrees are disabled',
+          description: 'Enable them under Settings › Git › Worktrees.',
+          tone: 'warning',
+        });
+        return;
+      }
+      void useSessionStore.getState().createSessionInWorktree();
+    },
+  },
+  {
     id: 'session.duplicate',
     title: 'Duplicate session',
     section: 'Sessions',
@@ -107,6 +125,26 @@ export const COMMANDS: Command[] = [
     run: () => {
       const id = useSessionStore.getState().selectedId;
       if (id) void useSessionStore.getState().duplicate(id);
+    },
+  },
+  {
+    id: 'session.nextTab',
+    title: 'Next worktree tab',
+    section: 'Sessions',
+    keys: ['Ctrl', 'Tab'],
+    inPalette: true,
+    run: () => {
+      void useSessionStore.getState().cycleWorktreeTab(1);
+    },
+  },
+  {
+    id: 'session.prevTab',
+    title: 'Previous worktree tab',
+    section: 'Sessions',
+    keys: ['Ctrl', 'Shift', 'Tab'],
+    inPalette: true,
+    run: () => {
+      void useSessionStore.getState().cycleWorktreeTab(-1);
     },
   },
   {
@@ -160,6 +198,34 @@ export const COMMANDS: Command[] = [
     section: 'Workspace',
     inPalette: true,
     run: () => void reindexActiveWorkspace(),
+  },
+  {
+    id: 'worktree.prune',
+    title: 'Prune stale worktrees',
+    section: 'Workspace',
+    inPalette: true,
+    run: () => {
+      const id = useWorkspaceStore.getState().activeId;
+      if (!id) {
+        useUIStore.getState().addToast({ title: 'No active workspace', tone: 'warning' });
+        return;
+      }
+      void window.limboo?.worktree
+        .prune(id)
+        .then((ok) =>
+          useUIStore.getState().addToast({
+            title: ok ? 'Stale worktrees pruned' : 'Nothing to prune',
+            tone: ok ? 'success' : 'info',
+          }),
+        )
+        .catch((err) =>
+          useUIStore.getState().addToast({
+            title: 'Prune failed',
+            description: err instanceof Error ? err.message : String(err),
+            tone: 'danger',
+          }),
+        );
+    },
   },
   {
     id: 'sidebar.toggle',

@@ -70,6 +70,37 @@ clean and means timeline changes never require touching the main process. See
 
 The same one-way event pattern drives the rest of the live UI: `fs:tree-changed` and
 `fs:index-progress` (file tree), `terminal:data` / `terminal:exit` /
-`terminal:command` (terminal), `git:changed` / `git:checkpoints-changed` (git), and
-`memory:changed` (memory). Each is consumed by its store's subscription. See
+`terminal:command` (terminal), `git:changed` / `git:checkpoints-changed` (git),
+`services:updated` (the Scripts & Services strip), and `memory:changed` (memory).
+Each is consumed by its store's subscription. See
 [the IPC channels reference](../reference/ipc-channels.md).
+
+## Worktree provisioning and the repo-config trust gate
+
+Creating a worktree session is a two-step flow with an explicit approval in the
+middle:
+
+```
+ session.createInWorktree(workspaceId)
+     |   SessionManager.create + WorktreeManager.createForSession
+     |   (git worktree add -b {prefix}/{slug}; rollback to plain on failure)
+     v
+ sessions:updated  ->  useSessionStore.refresh  ->  WorktreeTabs render
+     |
+     v
+ worktree.getRepoConfig(sessionId)   { config, hash, acked }
+     |   config declares setup/scripts/services and is NOT acked
+     v
+ HooksConfirmDialog  (exact commands shown verbatim)
+     |  approve
+     v
+ worktree.ackConfig(sessionId, hash)   fail-closed if limboo.json changed
+     |  + worktree.runSetup(...) when setup hooks exist and the worktree is ready
+     v
+ setup hooks stream through visible PTYs; services/scripts unlock
+```
+
+Service lifecycle changes then push `services:updated` (`{ sessionId,
+services }`) into `useServiceStore`, which the `ServicesStrip` renders. Reads
+(`service:list`) never broadcast — pushes fire only on genuine transitions
+(start / stop / exit / restart), so the strip cannot feed back into itself.

@@ -10,7 +10,7 @@ Settings are stored at `settings.json` under the OS user-data directory, deep-me
 with defaults on load, clamped, and migrated when `SETTINGS_VERSION` changes. See
 [the Settings subsystem](../architecture/subsystems/settings.md).
 
-The current `SETTINGS_VERSION` is **7**.
+The current `SETTINGS_VERSION` is **11**.
 
 ## appearance
 
@@ -78,6 +78,28 @@ display toggles.
 | `push.confirmForcePush` | `true` | force always uses `--force-with-lease` |
 | `pull.strategy` | `ff-only` | `ff-only` / `rebase` |
 
+`git.worktrees` (session-owned isolated checkouts — see
+[the Worktree Manager](../architecture/subsystems/worktree-manager.md)):
+
+| Field | Default | Notes |
+| ----- | ------- | ----- |
+| `enabled` | `true` | master switch for worktree sessions |
+| `root` | `''` | blank = `{userData}/worktrees` |
+| `branchPrefix` | `limboo` | new branches are `{prefix}/{slug}` |
+| `autoSetup` | `true` | offer the repo's setup hooks after provisioning |
+| `confirmHooks` | `true` | always re-confirm hooks before running |
+| `teardownOnArchive` | `false` | reclaim the worktree directory on archive |
+
+`git.services` (Scripts & Services — see
+[the Service Manager](../architecture/subsystems/service-manager.md)):
+
+| Field | Default | Notes |
+| ----- | ------- | ----- |
+| `portRangeStart` | `42000` | clamped 1024 - 65000 |
+| `portRangeEnd` | `42999` | clamped 1024 - 65535 |
+| `proxyEnabled` | `false` | `<service>--<slug>.localhost` reverse proxy |
+| `proxyPort` | `4040` | clamped 1024 - 65535 |
+
 ## memory
 
 | Field | Default | Notes |
@@ -90,10 +112,19 @@ display toggles.
 | `expiry.enabled` | `true` | |
 | `expiry.staleDays` | `180` | clamped 7 - 3650 |
 
+## search / voice
+
+The `search` (Search Engine indexing + federation) and `voice` (local
+speech-to-text / text-to-speech) categories also live in `DEFAULT_SETTINGS`;
+their defaults and clamps are in `SEARCH_LIMITS` / `VOICE_LIMITS` in the same
+constants file.
+
 ## Related limits
 
 Other bounds enforced by the main process live in the same constants file:
 `AGENT_LIMITS`, `AGENT_CONNECTION_LIMITS`, `LAYOUT_LIMITS`, `TERMINAL_LIMITS`,
-`GIT_LIMITS`, `MEMORY_LIMITS`, `FS_LIMITS`, `SESSION_LIMITS`, `WORKSPACE_LIMITS`,
-`WINDOW_MIN` / `WINDOW_DEFAULT`, plus `DEFAULT_WORKSPACE_CONFIG`,
-`DEFAULT_IGNORED_DIRS`, and `FORBIDDEN_WORKSPACE_PATHS`.
+`GIT_LIMITS`, `WORKTREE_LIMITS` (worktrees, limboo.json, service ports),
+`MEMORY_LIMITS`, `SEARCH_LIMITS`, `VOICE_LIMITS`, `FS_LIMITS`,
+`SESSION_LIMITS`, `WORKSPACE_LIMITS`, `WINDOW_MIN` / `WINDOW_DEFAULT`, plus
+`DEFAULT_WORKSPACE_CONFIG`, `DEFAULT_IGNORED_DIRS`, and
+`FORBIDDEN_WORKSPACE_PATHS`.

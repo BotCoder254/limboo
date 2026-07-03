@@ -11,10 +11,12 @@
  * it replaces the previous floating-absolute composer + `--composer-h` reserve
  * hack that raced the real height and overlapped tall replies.
  */
-import { useEffect } from 'react';
-import { CircleDot, GitBranch, Plus, Sparkles, TerminalSquare } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertTriangle, CircleDot, GitBranch, Plus, Sparkles, TerminalSquare } from 'lucide-react';
 import { DiffStat, EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
+import { WorktreeTabs } from '@/renderer/features/sessions/WorktreeTabs';
+import { ServicesStrip } from '@/renderer/features/sessions/ServicesStrip';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Composer } from './Composer';
 import { ClarificationCard } from './ClarificationCard';
@@ -23,6 +25,7 @@ import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
+import { useUIStore } from '@/renderer/stores/useUIStore';
 
 export function CenterWorkspace() {
   const session = useSessionStore((s) =>
@@ -45,7 +48,13 @@ export function CenterWorkspace() {
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-base">
+      {/* Editor-style tabs for worktree-backed sessions (hidden when none exist). */}
+      <WorktreeTabs />
       {session && <SessionHeader sessionId={session.id} title={session.title} branch={session.branch} adds={session.adds} dels={session.dels} />}
+      {/* Supervised services for this session (hidden when none are declared). */}
+      {session && <ServicesStrip sessionId={session.id} />}
+      {/* Recovery affordance when the session's worktree directory vanished. */}
+      {session?.worktreeStatus === 'missing' && <MissingWorktreeBanner sessionId={session.id} />}
 
       {/* Scroll region — the single scroller. Messages live entirely above the
           docked composer below, so they are never overlapped or clipped. */}
@@ -97,6 +106,53 @@ export function CenterWorkspace() {
         <Composer disabled={!session || !!clarification} />
       </div>
     </main>
+  );
+}
+
+/**
+ * Recovery banner for a worktree session whose checkout directory vanished
+ * (moved/deleted outside Limboo). Recreate re-provisions from the recorded
+ * branch (or base ref); Detach reverts to a plain workspace-checkout session.
+ */
+function MissingWorktreeBanner({ sessionId }: { sessionId: string }) {
+  const [busy, setBusy] = useState(false);
+  const act = (fn: (id: string) => Promise<unknown> | undefined) => async () => {
+    setBusy(true);
+    try {
+      await fn(sessionId);
+    } catch (err) {
+      useUIStore.getState().addToast({
+        title: 'Worktree recovery failed',
+        description: err instanceof Error ? err.message : String(err),
+        tone: 'danger',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line bg-surface px-4">
+      <AlertTriangle size={13} className="shrink-0 text-warning" />
+      <span className="min-w-0 flex-1 truncate text-[12px] text-muted">
+        This session&apos;s worktree directory is missing.
+      </span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void act((id) => window.limboo?.worktree.recreate(id))()}
+        className="rounded-md bg-accent px-2 py-1 text-[11px] font-semibold text-base transition-opacity hover:opacity-90 disabled:opacity-50"
+      >
+        Recreate
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void act((id) => window.limboo?.worktree.detach(id))()}
+        className="rounded-md border border-line bg-surface-2 px-2 py-1 text-[11px] font-medium text-fg transition-colors hover:border-line-strong disabled:opacity-50"
+      >
+        Detach
+      </button>
+    </div>
   );
 }
 
