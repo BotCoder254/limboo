@@ -139,7 +139,13 @@ const COMMAND_TOOLS = new Set(['Bash', 'BashOutput', 'KillBash', 'KillShell']);
 
 /** The SDK tool the agent calls to present its plan and exit planning mode. */
 const EXIT_PLAN_TOOL = 'ExitPlanMode';
-/** The SDK tool the agent uses to maintain its implementation checklist. */
+/**
+ * The SDK tool the agent uses to maintain its implementation checklist.
+ * Deprecated-but-pinned: SDK ≥ 0.3.142 defaults to the Task tools and stops
+ * emitting `TodoWrite`, so `buildOptions` forces it back on via
+ * `CLAUDE_CODE_ENABLE_TASKS=0`. If that flag ever stops working, migrate the
+ * ingestion in `onTodoWrite` to `TaskCreate`/`TaskUpdate` (keyed by task id).
+ */
 const TODO_TOOL = 'TodoWrite';
 /** The SDK tool the agent uses to ask the user clarifying questions. */
 const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
@@ -1718,6 +1724,14 @@ export class AgentManager {
       abortController: abort,
       settingSources: ['user', 'project', 'local'],
       thinking: mapThinking(agent.thinking),
+      // Pin the legacy `TodoWrite` checklist tool ON. As of SDK 0.3.142 the agent
+      // defaults to the structured Task tools (TaskCreate/TaskUpdate/…) and stops
+      // emitting `TodoWrite`, which is the ONLY tool `onTodoWrite` (→ TODO_TOOL)
+      // ingests — so without this the Plan panel's live checklist never populates
+      // ("Completed · 0/N"). `CLAUDE_CODE_ENABLE_TASKS=0` restores TodoWrite; must
+      // spread process.env since this replaces the spawned process's environment.
+      // If a future SDK bump removes TodoWrite, migrate onTodoWrite to Task* tools.
+      env: { ...process.env, CLAUDE_CODE_ENABLE_TASKS: '0' },
       stderr: (data: string) => logger.warn('[claude]', redact(data)),
     };
     // Point the SDK at the UNPACKED native binary. Without this it auto-resolves
