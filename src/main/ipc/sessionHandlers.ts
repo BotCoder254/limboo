@@ -5,10 +5,25 @@
  * patches are scanned for prototype-pollution keys before reaching the manager.
  */
 import { IpcChannels } from '@shared/ipc-channels';
-import { SESSION_LIMITS } from '@shared/constants';
-import type { Session, SessionUpdate } from '@shared/types';
+import { SESSION_LIMITS, WORKTREE_LIMITS } from '@shared/constants';
+import type {
+  Session,
+  SessionDeleteOptions,
+  SessionDependencies,
+  SessionTimelineEntry,
+  SessionUpdate,
+} from '@shared/types';
 import { handle } from './registry';
 import type { SessionManager } from '../managers/SessionManager';
+import type { WorktreeManager } from '../managers/worktree/WorktreeManager';
+import type { ServiceManager } from '../managers/services/ServiceManager';
+import type { TerminalManager } from '../managers/TerminalManager';
+import { logger } from '../logger';
+
+/** Bounds for session organization inputs (folder / tags). */
+const FOLDER_MAX = 64;
+const TAG_MAX = 24;
+const TAGS_MAX = 8;
 
 const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
 
@@ -52,9 +67,71 @@ function assertValidUpdate(patch: unknown): asserts patch is SessionUpdate {
   if (patch.archived !== undefined && typeof patch.archived !== 'boolean') {
     throw new Error('session:update archived must be a boolean');
   }
+  if (patch.folder !== undefined && patch.folder !== null) {
+    if (
+      typeof patch.folder !== 'string' ||
+      patch.folder.length > FOLDER_MAX ||
+      patch.folder.includes('\0')
+    ) {
+      throw new Error('session:update invalid folder');
+    }
+  }
+  if (patch.tags !== undefined) {
+    if (!Array.isArray(patch.tags) || patch.tags.length > TAGS_MAX) {
+      throw new Error('session:update invalid tags');
+    }
+    for (const tag of patch.tags) {
+      if (typeof tag !== 'string' || tag.length === 0 || tag.length > TAG_MAX || /[\0\n\r]/.test(tag)) {
+        throw new Error('session:update invalid tag');
+      }
+    }
+  }
 }
 
-export function registerSessionHandlers(sessions: SessionManager): void {
+/** Validate delete options (booleans only; polluting keys rejected). */
+function sanitizeDeleteOptions(raw: unknown): SessionDeleteOptions {
+  if (raw === undefined || raw === null) return {};
+  if (!isPlainObject(raw)) throw new Error('session:delete expects an options object');
+  assertNoPollutingKeys(raw);
+  return {
+    removeWorktree: raw.removeWorktree === true,
+    deleteBranch: raw.deleteBranch === true,
+    force: raw.force === true,
+  };
+}
+
+/** Validate worktree-create options (title / baseRef / branch, length-capped). */
+function sanitizeWorktreeCreate(raw: unknown): { title?: string; baseRef?: string; branch?: string } {
+  if (raw === undefined || raw === null) return {};
+  if (!isPlainObject(raw)) throw new Error('session:createInWorktree expects an options object');
+  assertNoPollutingKeys(raw);
+  const out: { title?: string; baseRef?: string; branch?: string } = {};
+  if (raw.title !== undefined) {
+    assertValidTitle(raw.title);
+    out.title = raw.title;
+  }
+  for (const key of ['baseRef', 'branch'] as const) {
+    const value = raw[key];
+    if (value === undefined) continue;
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      value.length > WORKTREE_LIMITS.branchMax ||
+      value.includes('\0')
+    ) {
+      throw new Error(`session:createInWorktree invalid ${key}`);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+export function registerSessionHandlers(
+  sessions: SessionManager,
+  worktrees: WorktreeManager,
+  services: ServiceManager,
+  terminals: TerminalManager,
+): void {
   handle<[string, boolean?], Session[]>(IpcChannels.sessionList, (_e, workspaceId, trash) => {
     assertValidId(workspaceId);
     return trash === true ? sessions.listTrash(workspaceId) : sessions.list(workspaceId);
@@ -71,16 +148,56 @@ export function registerSessionHandlers(sessions: SessionManager): void {
   handle<[string, SessionUpdate], Session>(IpcChannels.sessionUpdate, (_e, id, patch) => {
     assertValidId(id);
     assertValidUpdate(patch);
-    return sessions.update(id, patch);
+    const before = sessions.get(id);
+    const updated = sessions.update(id, patch);
+    // Archive transition drives the worktree lifecycle (teardown on archive /
+    // recreate on restore) — fire-and-forget, the manager gates on settings.
+    if (before && patch.archived !== undefined && before.archived !== updated.archived) {
+      worktrees.onSessionArchivedChanged(id, updated.archived);
+    }
+    return updated;
   });
 
-  handle<[string], Session>(IpcChannels.sessionDuplicate, (_e, id) => {
-    assertValidId(id);
-    return sessions.duplicate(id);
-  });
+  handle<[string, { cloneWorktree?: boolean }?], Session>(
+    IpcChannels.sessionDuplicate,
+    async (_e, id, opts) => {
+      assertValidId(id);
+      const src = sessions.get(id);
+      const copy = sessions.duplicate(id);
+      // Optional worktree clone: a fresh, independent checkout from the same
+      // base — two strategies can now diverge from the identical context.
+      if (opts && isPlainObject(opts) && opts.cloneWorktree === true && src) {
+        try {
+          return await worktrees.createForSession(copy.id, {
+            baseRef: src.worktreeBranch ?? src.baseRef ?? undefined,
+          });
+        } catch (err) {
+          logger.warn('duplicate worktree clone failed', err);
+        }
+      }
+      return copy;
+    },
+  );
 
-  handle<[string], void>(IpcChannels.sessionDelete, (_e, id) => {
+  handle<[string, SessionDeleteOptions?], void>(IpcChannels.sessionDelete, async (_e, id, opts) => {
     assertValidId(id);
+    const options = sanitizeDeleteOptions(opts);
+    // A trashed session must not keep processes alive: stop its supervised
+    // services and PTYs regardless of the worktree option (plain sessions can
+    // own running services too). removeForSession also does this, but only
+    // runs when the worktree is being removed.
+    await services.stopForSession(id).catch(() => undefined);
+    // Tear the worktree down BEFORE trashing so the directory (and optionally
+    // its branch) is reclaimed while the session record survives in the trash.
+    if (options.removeWorktree) {
+      await worktrees.removeForSession(id, {
+        force: options.force,
+        deleteBranch: options.deleteBranch,
+        preserveBranchMeta: !options.deleteBranch,
+      });
+    } else {
+      terminals.disposeSession(id);
+    }
     sessions.softDelete(id);
   });
 
@@ -89,10 +206,49 @@ export function registerSessionHandlers(sessions: SessionManager): void {
     return sessions.restore(id);
   });
 
-  handle<[string], void>(IpcChannels.sessionPurge, (_e, id) => {
+  handle<[string], void>(IpcChannels.sessionPurge, async (_e, id) => {
     assertValidId(id);
+    // A purged session must not leak its worktree directory — force-remove it
+    // (keeping the branch: permanent data loss stays a separate, explicit act).
+    try {
+      await worktrees.removeForSession(id, { force: true, deleteBranch: false });
+    } catch (err) {
+      logger.warn('session:purge worktree removal failed', err);
+    }
     sessions.purge(id);
   });
+
+  handle<[string, { title?: string; baseRef?: string; branch?: string }?], Session>(
+    IpcChannels.sessionCreateInWorktree,
+    async (_e, workspaceId, opts) => {
+      assertValidId(workspaceId);
+      const options = sanitizeWorktreeCreate(opts);
+      const session = sessions.create(workspaceId, options.title);
+      // On worktree failure the session survives as a plain session — the
+      // renderer surfaces the error as a toast against the created session.
+      return worktrees.createForSession(session.id, {
+        baseRef: options.baseRef,
+        branch: options.branch,
+      });
+    },
+  );
+
+  handle<[string], SessionDependencies>(IpcChannels.sessionGetDependencies, (_e, id) => {
+    assertValidId(id);
+    return worktrees.getDependencies(id);
+  });
+
+  handle<[string, number?], SessionTimelineEntry[]>(
+    IpcChannels.sessionTimeline,
+    (_e, id, limit) => {
+      assertValidId(id);
+      const capped =
+        typeof limit === 'number' && Number.isFinite(limit)
+          ? Math.max(1, Math.min(500, Math.floor(limit)))
+          : undefined;
+      return sessions.getTimeline(id, capped);
+    },
+  );
 
   handle<[string], Session>(IpcChannels.sessionSetActive, (_e, id) => {
     assertValidId(id);

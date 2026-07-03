@@ -357,6 +357,17 @@ function migrate(database: Database.Database): void {
   // Idempotent column additions for databases created before a column existed.
   // (SQLite has no "ADD COLUMN IF NOT EXISTS"; guard against the existing set.)
   addColumnIfMissing(database, 'sessions', 'mode', 'TEXT');
+  // Worktree-backed sessions (schema v8) — a session may own an isolated git
+  // worktree (own directory + branch). worktree_status: 'none'|'creating'|
+  // 'ready'|'missing'|'removing'. base_ref is the branch/commit the worktree
+  // branch was created from (used for recreate/duplicate). folder + tags are
+  // user organization (tags is a JSON string array, validated before write).
+  addColumnIfMissing(database, 'sessions', 'worktree_path', 'TEXT');
+  addColumnIfMissing(database, 'sessions', 'worktree_branch', 'TEXT');
+  addColumnIfMissing(database, 'sessions', 'worktree_status', "TEXT NOT NULL DEFAULT 'none'");
+  addColumnIfMissing(database, 'sessions', 'base_ref', 'TEXT');
+  addColumnIfMissing(database, 'sessions', 'folder', 'TEXT');
+  addColumnIfMissing(database, 'sessions', 'tags', "TEXT NOT NULL DEFAULT '[]'");
 
   const current = database
     .prepare('SELECT value FROM meta WHERE key = ?')

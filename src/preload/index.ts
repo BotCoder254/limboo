@@ -44,8 +44,10 @@ import type {
   MemoryListFilter,
   MemoryTier,
   MemoryUpdateInput,
+  RepoConfigState,
   SavedSearch,
   SearchFilter,
+  ServiceInfo,
   SearchGroup,
   SearchHistoryEntry,
   SearchHit,
@@ -55,8 +57,11 @@ import type {
   PermissionRequest,
   PlanRevision,
   Session,
+  SessionDeleteOptions,
+  SessionDependencies,
   SessionPermissionMode,
   SessionPlan,
+  SessionTimelineEntry,
   SessionUpdate,
   TerminalChunk,
   TerminalCommandRecord,
@@ -71,6 +76,7 @@ import type {
   Workspace,
   WorkspaceConfig,
   WorkspaceStats,
+  WorktreeInfo,
 } from '@shared/types';
 
 /** Subscribe to a one-way main -> renderer event. Returns an unsubscribe fn. */
@@ -159,16 +165,76 @@ const sessionApi = {
     ipcRenderer.invoke(IpcChannels.sessionCreate, workspaceId, title),
   update: (id: string, patch: SessionUpdate): Promise<Session> =>
     ipcRenderer.invoke(IpcChannels.sessionUpdate, id, patch),
-  duplicate: (id: string): Promise<Session> =>
-    ipcRenderer.invoke(IpcChannels.sessionDuplicate, id),
-  delete: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.sessionDelete, id),
+  duplicate: (id: string, opts?: { cloneWorktree?: boolean }): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.sessionDuplicate, id, opts),
+  delete: (id: string, opts?: SessionDeleteOptions): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.sessionDelete, id, opts),
   restore: (id: string): Promise<Session> => ipcRenderer.invoke(IpcChannels.sessionRestore, id),
   purge: (id: string): Promise<void> => ipcRenderer.invoke(IpcChannels.sessionPurge, id),
   setActive: (id: string): Promise<Session> =>
     ipcRenderer.invoke(IpcChannels.sessionSetActive, id),
+  /** Create a session that owns a dedicated git worktree (isolated checkout). */
+  createInWorktree: (
+    workspaceId: string,
+    opts?: { title?: string; baseRef?: string; branch?: string },
+  ): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.sessionCreateInWorktree, workspaceId, opts),
+  /** Everything the session owns — shown before deletion. */
+  getDependencies: (id: string): Promise<SessionDependencies> =>
+    ipcRenderer.invoke(IpcChannels.sessionGetDependencies, id),
+  /** Unified engineering timeline (activity + diagnostics + checkpoints). */
+  timeline: (id: string, limit?: number): Promise<SessionTimelineEntry[]> =>
+    ipcRenderer.invoke(IpcChannels.sessionTimeline, id, limit),
   onUpdated: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.sessionsUpdated, cb),
   onActiveChanged: (cb: (session: Session | null) => void): (() => void) =>
     subscribe<Session | null>(IpcEvents.sessionActiveChanged, cb),
+};
+
+const worktreeApi = {
+  /** Worktrees of the workspace's repo, joined to the sessions that own them. */
+  list: (workspaceId: string): Promise<WorktreeInfo[]> =>
+    ipcRenderer.invoke(IpcChannels.worktreeList, workspaceId),
+  /** Drop stale worktree metadata (deleted directories). */
+  prune: (workspaceId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IpcChannels.worktreePrune, workspaceId),
+  /** Recreate a `missing` session worktree from its branch / base ref. */
+  recreate: (sessionId: string): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.worktreeRecreate, sessionId),
+  /** Detach a `missing` worktree association (revert to a plain session). */
+  detach: (sessionId: string): Promise<Session> =>
+    ipcRenderer.invoke(IpcChannels.worktreeDetach, sessionId),
+  /** The repo's limboo.json (hooks / scripts / services) + acknowledgment state. */
+  getRepoConfig: (sessionId: string): Promise<RepoConfigState> =>
+    ipcRenderer.invoke(IpcChannels.worktreeGetRepoConfig, sessionId),
+  /**
+   * Acknowledge the displayed repo config (the trust gate for hooks / scripts /
+   * services) without running setup — works for plain sessions too.
+   */
+  ackConfig: (sessionId: string, ackHash: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.worktreeAckConfig, sessionId, ackHash),
+  /** Acknowledge + run setup hooks; `ackHash` must hash the displayed config. */
+  runSetup: (sessionId: string, ackHash: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.worktreeRunSetup, sessionId, ackHash),
+  onUpdated: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.worktreesUpdated, cb),
+};
+
+const servicesApi = {
+  /** Declared + running services for a session. */
+  list: (sessionId: string): Promise<ServiceInfo[]> =>
+    ipcRenderer.invoke(IpcChannels.serviceList, sessionId),
+  start: (sessionId: string, name: string): Promise<ServiceInfo> =>
+    ipcRenderer.invoke(IpcChannels.serviceStart, sessionId, name),
+  stop: (sessionId: string, name: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.serviceStop, sessionId, name),
+  restart: (sessionId: string, name: string): Promise<ServiceInfo> =>
+    ipcRenderer.invoke(IpcChannels.serviceRestart, sessionId, name),
+  /** Run a named on-demand script from limboo.json (visible terminal). */
+  runScript: (sessionId: string, name: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.scriptRun, sessionId, name),
+  onUpdated: (
+    cb: (payload: { sessionId: string; services: ServiceInfo[] }) => void,
+  ): (() => void) =>
+    subscribe<{ sessionId: string; services: ServiceInfo[] }>(IpcEvents.servicesUpdated, cb),
 };
 
 const agentApi = {
@@ -487,6 +553,8 @@ const limbooApi = {
   fs: fsApi,
   terminal: terminalApi,
   git: gitApi,
+  worktree: worktreeApi,
+  services: servicesApi,
   memory: memoryApi,
   search: searchApi,
   updates: updatesApi,

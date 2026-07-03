@@ -46,6 +46,13 @@ export class FileSystemManager {
   /** Exactly one watcher, bound to the currently active workspace. */
   private activeWatcher: WorkspaceWatcher | null = null;
   private activeWatchId: string | null = null;
+  /**
+   * The effective root being watched/indexed — the active session's worktree
+   * when it owns one, else the workspace path. Never diverges from the watcher.
+   */
+  private activeRoot: string | null = null;
+  /** The worktree-backed session that owns `activeRoot` (git status stamping). */
+  private activeSessionId: string | null = null;
 
   /** Sessions sink for live git status; wired after construction. */
   private sessions: SessionManager | null = null;
@@ -83,7 +90,7 @@ export class FileSystemManager {
   /** Read a workspace-relative file through the centralized, guarded reader. */
   readFile(workspaceId: string, relPath: string): FileReadResult {
     const ws = this.requireWorkspace(workspaceId);
-    const result = readWorkspaceFile(ws.path, relPath);
+    const result = readWorkspaceFile(this.rootFor(ws), relPath);
     this.historyFor(workspaceId).record(result.path, 'read');
     return result;
   }
@@ -101,13 +108,14 @@ export class FileSystemManager {
    */
   async reveal(workspaceId: string, relPath?: string): Promise<void> {
     const ws = this.requireWorkspace(workspaceId);
+    const root = this.rootFor(ws);
     const rel = (relPath ?? '').trim();
     if (!rel) {
-      await shell.openPath(ws.path);
+      await shell.openPath(root);
       return;
     }
-    const target = path.resolve(ws.path, rel);
-    if (!isInsideRoot(ws.path, target)) {
+    const target = path.resolve(root, rel);
+    if (!isInsideRoot(root, target)) {
       throw new Error('fs:reveal target is outside the workspace');
     }
     shell.showItemInFolder(target);
@@ -142,11 +150,12 @@ export class FileSystemManager {
   /** The actual index pass; only ever invoked through {@link index}'s coalescer. */
   private async runIndex(ws: Workspace, workspaceId: string): Promise<FileTree> {
     const started = Date.now();
-    const matcher = this.matcherFor(ws);
+    const root = this.rootFor(ws);
+    const matcher = this.matcherFor(ws, root);
     this.historyFor(workspaceId).record('', 'index');
     const tree = await buildTree({
       workspaceId,
-      root: ws.path,
+      root,
       matcher,
       onProgress: (p) => this.broadcastProgress(p),
     });
@@ -167,14 +176,34 @@ export class FileSystemManager {
    * whenever the active workspace changes (open / switch / clear).
    */
   setActiveWorkspace(ws: Workspace | null): void {
-    if (this.activeWatchId === (ws?.id ?? null)) return;
+    this.setActiveTarget(ws, ws?.path ?? null, null);
+  }
+
+  /**
+   * Point the File System Layer at an *effective root* — the workspace path, or
+   * the active session's worktree checkout. Retargets the single watcher and
+   * re-indexes only when the (workspace, root) pair actually changed, so
+   * unrelated session broadcasts never churn the watcher. `ownerSessionId`
+   * identifies the worktree-backed session whose git status the watched root
+   * feeds (null when watching the plain workspace checkout).
+   */
+  setActiveTarget(ws: Workspace | null, root: string | null, ownerSessionId: string | null): void {
+    const nextRoot = ws ? root ?? ws.path : null;
+    if (this.activeWatchId === (ws?.id ?? null) && this.activeRoot === nextRoot) {
+      this.activeSessionId = ownerSessionId;
+      return;
+    }
     void this.stopWatching();
-    if (!ws) return;
+    if (!ws || !nextRoot) return;
 
     this.activeWatchId = ws.id;
+    this.activeRoot = nextRoot;
+    this.activeSessionId = ownerSessionId;
+    // The cached tree was built from the previous root — never serve it stale.
+    this.trees.delete(ws.id);
     this.activeWatcher = new WorkspaceWatcher({
-      root: ws.path,
-      matcher: this.matcherFor(ws),
+      root: nextRoot,
+      matcher: this.matcherFor(ws, nextRoot),
       onChange: () => this.onWatchedChange(ws.id),
     });
     this.activeWatcher.start();
@@ -188,6 +217,8 @@ export class FileSystemManager {
   /** Stop watching the active workspace (idempotent). */
   async stopWatching(): Promise<void> {
     this.activeWatchId = null;
+    this.activeRoot = null;
+    this.activeSessionId = null;
     if (this.activeWatcher) {
       const w = this.activeWatcher;
       this.activeWatcher = null;
@@ -221,12 +252,23 @@ export class FileSystemManager {
   }
 
   /**
-   * Compute the workspace's git status and push it into its session rows. Deduped
-   * against the last broadcast so a watcher burst that didn't move git is a no-op.
+   * Compute git status and push it into session rows. When the watched root is a
+   * session's worktree, that session is stamped from its OWN checkout while the
+   * plain sessions keep tracking the workspace checkout. Deduped per target so a
+   * watcher burst that didn't move git is a no-op.
    */
   private refreshGitStatus(ws: Workspace): void {
     if (!this.sessions) return;
     try {
+      const root = this.rootFor(ws);
+      if (this.activeSessionId && root !== ws.path) {
+        const wtStatus = gitStatus(root);
+        const wtKey = `${wtStatus.branch ?? ''}|${wtStatus.adds}|${wtStatus.dels}`;
+        if (this.lastGitKey.get(`${ws.id}:wt`) !== wtKey) {
+          this.lastGitKey.set(`${ws.id}:wt`, wtKey);
+          this.sessions.applySessionGitStatus(this.activeSessionId, wtStatus);
+        }
+      }
       const status = gitStatus(ws.path);
       const key = `${status.branch ?? ''}|${status.adds}|${status.dels}`;
       if (this.lastGitKey.get(ws.id) === key) return;
@@ -237,8 +279,13 @@ export class FileSystemManager {
     }
   }
 
-  private matcherFor(ws: Workspace): IgnoreMatcher {
-    return buildIgnoreMatcher(ws.path, ws.config);
+  /** The effective root for a workspace: the retargeted root when active. */
+  private rootFor(ws: Workspace): string {
+    return this.activeWatchId === ws.id && this.activeRoot ? this.activeRoot : ws.path;
+  }
+
+  private matcherFor(ws: Workspace, root: string = ws.path): IgnoreMatcher {
+    return buildIgnoreMatcher(root, ws.config);
   }
 
   private historyFor(workspaceId: string): FileHistory {

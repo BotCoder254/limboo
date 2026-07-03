@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 10;
+export const SETTINGS_VERSION = 11;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -84,6 +84,43 @@ export const GIT_LIMITS = {
   refNameMax: 255,
   /** Timeout (ms) for network git ops (push / pull / fetch). */
   networkTimeoutMs: 120_000,
+} as const;
+
+/**
+ * Bounds + caps for the Git worktree + Scripts & Services subsystem (main +
+ * renderer both clamp). Slugs stay short so the default worktree root under
+ * userData leaves Windows MAX_PATH headroom for deep node_modules trees.
+ */
+export const WORKTREE_LIMITS = {
+  /** Random slug length (a-z0-9 only, generated main-side). */
+  slugLength: 8,
+  /** Branch name length cap (also re-checked by sanitizeRef). */
+  branchMax: 200,
+  /** Worktree root path length cap. */
+  rootPathMax: 4096,
+  /** Max worktrees Limboo manages per repository. */
+  maxPerRepo: 32,
+  /** Timeout (ms) for `git worktree add/remove` (fresh checkouts can be slow). */
+  gitTimeoutMs: 60_000,
+  /** Timeout (ms) for one setup/teardown hook command (npm install is slow). */
+  hookTimeoutMs: 600_000,
+  /** limboo.json repo-config size cap (bytes). */
+  configBytesMax: 65_536,
+  /** Script / service name cap (validated against ^[a-z0-9-]+$). */
+  nameMax: 32,
+  /** Hook / script / service command string cap. */
+  commandMax: 2_048,
+  /** Max setup + teardown commands and scripts per repo config. */
+  maxCommands: 16,
+  /** Max supervised services per repo config. */
+  maxServices: 8,
+  /** Auto-assigned service port bounds (never below the privileged range). */
+  portRangeStart: { min: 1_024, max: 65_000, default: 42_000 },
+  portRangeEnd: { min: 1_024, max: 65_535, default: 42_999 },
+  /** Loopback reverse-proxy port. */
+  proxyPort: { min: 1_024, max: 65_535, default: 4_040 },
+  /** Max consecutive on-failure respawns before a service is marked crashed. */
+  maxRestarts: 5,
 } as const;
 
 /** Bounds + caps for the Local Memory System (main + renderer both clamp). */
@@ -279,6 +316,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
     pull: {
       strategy: 'ff-only',
     },
+    worktrees: {
+      enabled: true,
+      root: '',
+      branchPrefix: 'limboo',
+      autoSetup: true,
+      confirmHooks: true,
+      teardownOnArchive: false,
+    },
+    services: {
+      portRangeStart: WORKTREE_LIMITS.portRangeStart.default,
+      portRangeEnd: WORKTREE_LIMITS.portRangeEnd.default,
+      proxyEnabled: false,
+      proxyPort: WORKTREE_LIMITS.proxyPort.default,
+    },
   },
   memory: {
     enabled: true,
@@ -365,7 +416,7 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 7;
+export const WORKSPACE_SCHEMA_VERSION = 8;
 
 /** Input caps the main process enforces on renderer-supplied session values. */
 export const SESSION_LIMITS = {

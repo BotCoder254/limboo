@@ -10,6 +10,9 @@ import { WorkspaceCreateScreen } from '@/renderer/features/workspace/WorkspaceCr
 import { CommandPalette } from '@/renderer/features/command-palette/CommandPalette';
 import { GlobalSearch } from '@/renderer/features/search/GlobalSearch';
 import { SettingsModal } from '@/renderer/features/settings/SettingsModal';
+import { SessionDeleteDialog } from '@/renderer/features/sessions/SessionDeleteDialog';
+import { HooksConfirmDialog } from '@/renderer/features/sessions/HooksConfirmDialog';
+import { useServiceStore } from '@/renderer/stores/useServiceStore';
 import { UpdateBanner } from '@/renderer/features/updates/UpdateBanner';
 import { Toaster } from '@/renderer/components/feedback/Toaster';
 import { useKeyboardShortcuts } from '@/renderer/hooks/useKeyboardShortcuts';
@@ -65,6 +68,8 @@ export function App() {
     useUpdateStore.getState().hydrate();
     // Subscribe to voice state / model progress / TTS playback pushes.
     void useVoiceStore.getState().hydrate();
+    // Subscribe to supervised-service lifecycle pushes (Services strip).
+    useServiceStore.getState().hydrate();
   }, []);
 
   return (
@@ -79,8 +84,21 @@ export function App() {
       <CommandPalette />
       <GlobalSearch />
       <SettingsModal />
+      <SessionDeleteGate />
+      <HooksConfirmDialog />
       <UpdateBanner />
       <Toaster />
     </>
   );
+}
+
+/** Mounts the session delete-confirmation dialog when the store requests one. */
+function SessionDeleteGate() {
+  const deleteDialogId = useSessionStore((s) => s.deleteDialogId);
+  const session = useSessionStore((s) =>
+    deleteDialogId ? s.sessions.find((x) => x.id === deleteDialogId) ?? null : null,
+  );
+  const close = useSessionStore((s) => s.closeDeleteDialog);
+  if (!session) return null;
+  return <SessionDeleteDialog session={session} onClose={close} />;
 }

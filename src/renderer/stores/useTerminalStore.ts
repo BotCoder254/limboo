@@ -13,6 +13,7 @@ import type {
   TerminalExit,
   TerminalSession,
 } from '@shared/types';
+import { useSessionStore } from './useSessionStore';
 
 interface TerminalState {
   /** Terminals per workspace id (creation order). */
@@ -117,7 +118,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   create: async (workspaceId) => {
     const api = termApi();
     if (!api) return null;
-    const term = await api.create(workspaceId);
+    // Stamp the active session so a worktree-backed session's terminal spawns
+    // inside its isolated checkout (the main process resolves the cwd; the id
+    // only selects it — no path ever crosses the bridge).
+    const sessionId = useSessionStore.getState().selectedId ?? undefined;
+    const term = await api.create(workspaceId, sessionId ? { sessionId } : undefined);
     set((s) => ({
       activeByWorkspace: { ...s.activeByWorkspace, [workspaceId]: term.id },
     }));

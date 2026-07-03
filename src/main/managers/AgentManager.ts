@@ -406,6 +406,17 @@ export class AgentManager {
     this.sessions = sessions;
   }
 
+  /**
+   * Resolves a session's effective execution root (its git worktree when it
+   * owns one, else the workspace path). Injected by the composition root.
+   */
+  private resolveSessionRoot: ((sessionId: string) => string | null) | null = null;
+
+  /** Inject the session→root resolver (worktree-backed sessions). */
+  setSessionRootResolver(resolve: (sessionId: string) => string | null): void {
+    this.resolveSessionRoot = resolve;
+  }
+
   /** Git Manager, wired after construction (auto-checkpoints + live refresh). */
   private git: GitManager | null = null;
 
@@ -1037,7 +1048,11 @@ export class AgentManager {
   ): Promise<void> {
     const ws = this.workspace.getActive();
     if (!ws) throw new Error('Open a workspace before talking to the agent.');
-    const cwd = ws.path;
+    // A worktree-backed session binds the agent to ITS isolated checkout — the
+    // cwd flows into buildOptions AND makeCanUseTool, so the existing
+    // isInside(cwd, …) path guard automatically confines every file tool to the
+    // worktree. Plain sessions keep the workspace root.
+    const cwd = this.resolveSessionRoot?.(sessionId) ?? ws.path;
     const agent = this.settings.getAll().agent;
 
     let streaming: ChatMessage | null = null;
@@ -1348,7 +1363,7 @@ export class AgentManager {
     const command = typeof input.command === 'string' ? input.command : '';
     if (!command) return;
 
-    const terminalId = this.terminal.ensureAgentTerminal(workspaceId);
+    const terminalId = this.terminal.ensureAgentTerminal(workspaceId, sessionId);
     if (!terminalId) return;
 
     const startedAt = Date.now();

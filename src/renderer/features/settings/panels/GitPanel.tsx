@@ -124,6 +124,126 @@ export function GitPanel() {
         </Field>
       </Section>
 
+      <Section
+        title="Worktrees"
+        hint="A worktree-backed session gets its own isolated checkout + branch, so parallel sessions (and agents) never contend for one working tree. Worktrees live under a hashed per-repo folder inside the root below."
+      >
+        <Field
+          id="gitWtEnabled"
+          label="Enable worktree sessions"
+          hint="Offer 'New session in worktree' and the worktree tab strip."
+        >
+          <Toggle
+            checked={git.worktrees.enabled}
+            onChange={(v) => void update({ git: { worktrees: { enabled: v } } })}
+          />
+        </Field>
+        <StackedField
+          id="gitWtRoot"
+          label="Worktree root"
+          hint="Absolute folder for worktree checkouts. Leave blank for the app data default. Tip: a short path (e.g. C:\\wt) leaves the most room for deep node_modules trees on Windows."
+        >
+          <TextInput
+            value={git.worktrees.root}
+            placeholder="App data default"
+            onChange={(v) => void update({ git: { worktrees: { root: v } } })}
+          />
+        </StackedField>
+        <StackedField
+          id="gitWtBranchPrefix"
+          label="Branch prefix"
+          hint="Auto-generated worktree branches are named <prefix>/<slug>."
+        >
+          <TextInput
+            value={git.worktrees.branchPrefix}
+            placeholder="limboo"
+            onChange={(v) => void update({ git: { worktrees: { branchPrefix: v } } })}
+          />
+        </StackedField>
+        <Field
+          id="gitWtAutoSetup"
+          label="Run setup hooks after create"
+          hint="Run the repo's limboo.json setup commands (install deps, copy .env, …) in a visible terminal when a worktree is created."
+        >
+          <Toggle
+            checked={git.worktrees.autoSetup}
+            onChange={(v) => void update({ git: { worktrees: { autoSetup: v } } })}
+          />
+        </Field>
+        <Field
+          id="gitWtConfirmHooks"
+          label="Confirm hooks before running"
+          hint="Show the exact commands and ask first. Repo-authored hooks always confirm on their first run in a workspace."
+        >
+          <Toggle
+            checked={git.worktrees.confirmHooks}
+            onChange={(v) => void update({ git: { worktrees: { confirmHooks: v } } })}
+          />
+        </Field>
+        <Field
+          id="gitWtTeardownOnArchive"
+          label="Teardown on archive"
+          hint="Archiving a worktree session runs teardown hooks and removes its directory; the branch and metadata are kept so restore can recreate it."
+        >
+          <Toggle
+            checked={git.worktrees.teardownOnArchive}
+            onChange={(v) => void update({ git: { worktrees: { teardownOnArchive: v } } })}
+          />
+        </Field>
+      </Section>
+
+      <Section
+        title="Scripts & Services"
+        hint="Supervised long-running processes (dev servers, workers) defined in the repo's limboo.json. Each service gets a loopback port from the range below; everything binds to 127.0.0.1 only."
+      >
+        <Field
+          id="gitSvcPortRange"
+          label="Service port range"
+          hint="Ports auto-assigned to supervised services."
+        >
+          <div className="flex items-center gap-2">
+            <TextInput
+              value={String(git.services.portRangeStart)}
+              onChange={(v) => {
+                const n = Number(v);
+                if (Number.isFinite(n)) void update({ git: { services: { portRangeStart: n } } });
+              }}
+            />
+            <span className="text-[12px] text-faint">–</span>
+            <TextInput
+              value={String(git.services.portRangeEnd)}
+              onChange={(v) => {
+                const n = Number(v);
+                if (Number.isFinite(n)) void update({ git: { services: { portRangeEnd: n } } });
+              }}
+            />
+          </div>
+        </Field>
+        <Field
+          id="gitSvcProxyEnabled"
+          label="*.localhost reverse proxy"
+          hint="Expose services as <service>--<slug>.localhost URLs through a loopback-only proxy (HTTP + WebSocket)."
+        >
+          <Toggle
+            checked={git.services.proxyEnabled}
+            onChange={(v) => void update({ git: { services: { proxyEnabled: v } } })}
+          />
+        </Field>
+        <Field
+          id="gitSvcProxyPort"
+          label="Proxy port"
+          hint="Loopback port the reverse proxy listens on."
+        >
+          <TextInput
+            value={String(git.services.proxyPort)}
+            onChange={(v) => {
+              const n = Number(v);
+              if (Number.isFinite(n)) void update({ git: { services: { proxyPort: n } } });
+            }}
+          />
+        </Field>
+      </Section>
+
       <Section title="Safety">
         <Field
           id="gitConfirmBranchSwitch"

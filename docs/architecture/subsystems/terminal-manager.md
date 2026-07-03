@@ -20,7 +20,11 @@ Source: [`src/main/managers/TerminalManager.ts`](../../../src/main/managers/Term
 - `list(workspaceId)`, `create(workspaceId, {cols?, rows?, title?, origin?})`
 - `write(terminalId, data)`, `resize(terminalId, cols, rows)`, `rename`, `clear`,
   `kill`
-- `disposeWorkspace(workspaceId)`, `dispose()`
+- `createForCommand({workspaceId, sessionId, cwd, command, title, origin, env?,
+  onExit?})` — a PTY that runs one command (worktree hooks, scripts, services)
+  with an exit callback
+- `disposeWorkspace(workspaceId)`, `disposeSession(sessionId)`,
+  `countForSession(sessionId)`, `dispose()`
 - `ensureAgentTerminal(workspaceId)`, `mirrorAgentCommand(record)`
 
 Reached via the `terminal:*` channels.
@@ -36,7 +40,10 @@ The shell is resolved from the workspace config, then the global terminal settin
 then the OS default. Args add interactive flags for bash / zsh / sh. The environment
 is sanitized: it inherits the user PATH and adds `TERM=xterm-256color`,
 `LIMBOO_TERMINAL=1`, and `GIT_TERMINAL_PROMPT=0` (so git never blocks on a credential
-prompt). Each terminal records its `origin` (`user` or `agent`).
+prompt). Each terminal records its `origin` (`user`, `agent`, `hook`, or
+`service`). A terminal's `cwd` is the owning session's **effective root**
+(resolved through the [Worktree Manager](worktree-manager.md)), so terminals of
+a worktree-backed session open inside its isolated checkout.
 
 ## Bounds
 
@@ -49,7 +56,10 @@ title length, and the PTY grid.
 The **Agent Manager** uses `ensureAgentTerminal` and `mirrorAgentCommand` to surface
 the commands it runs in the integrated terminal (controlled by the
 `agent.terminal.mirrorAgentCommands` setting). Mirrored commands are records of what
-the agent ran, surfaced for visibility.
+the agent ran, surfaced for visibility. The **Worktree Manager** runs
+setup/teardown hooks through `createForCommand` (killed on hook timeout), and
+the **Service Manager** supervises services through it — the PTY scrollback IS
+each service's log.
 
 ## Data flow
 

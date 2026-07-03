@@ -64,11 +64,22 @@ const SCROLLBACK_BYTES_MAX = TERMINAL_LIMITS.scrollbackLines * 256;
 export class TerminalManager {
   private readonly terminals = new Map<string, ManagedTerminal>();
   private seq = 0;
+  /**
+   * Resolves a session's effective execution root (its worktree when it owns
+   * one, else the workspace path). Injected by the composition root to avoid a
+   * hard dependency on the WorktreeManager.
+   */
+  private sessionRootResolver: ((sessionId: string) => string | null) | null = null;
 
   constructor(
     private readonly workspace: WorkspaceManager,
     private readonly settings: SettingsManager,
   ) {}
+
+  /** Inject the session→root resolver (worktree-backed sessions). */
+  setSessionRootResolver(resolve: (sessionId: string) => string | null): void {
+    this.sessionRootResolver = resolve;
+  }
 
   /* ----------------------------------------------------------- queries */
 
@@ -99,7 +110,7 @@ export class TerminalManager {
       throw new Error(`Terminal limit reached (${TERMINAL_LIMITS.maxPerWorkspace}) for this workspace`);
     }
 
-    const cwd = this.resolveCwd(ws);
+    const cwd = this.resolveCwd(ws, opts.sessionId);
     const shell = this.resolveShell(ws);
     const cols = clamp(opts.cols ?? TERMINAL_LIMITS.cols.default, TERMINAL_LIMITS.cols.min, TERMINAL_LIMITS.cols.max);
     const rows = clamp(opts.rows ?? TERMINAL_LIMITS.rows.default, TERMINAL_LIMITS.rows.min, TERMINAL_LIMITS.rows.max);
@@ -128,6 +139,7 @@ export class TerminalManager {
       shell,
       status: 'running',
       origin: opts.origin ?? 'user',
+      sessionId: opts.sessionId,
       createdAt: Date.now(),
     };
 
@@ -213,6 +225,32 @@ export class TerminalManager {
     this.broadcastUpdated(workspaceId);
   }
 
+  /**
+   * Kill every terminal owned by a session (worktree teardown / delete). PTYs
+   * holding a cwd inside a worktree keep `git worktree remove` failing with
+   * EBUSY on Windows, so this runs before any directory removal.
+   */
+  disposeSession(sessionId: string): void {
+    let workspaceId: string | null = null;
+    for (const [id, t] of this.terminals) {
+      if (t.meta.sessionId === sessionId) {
+        workspaceId = t.meta.workspaceId;
+        this.killProc(t);
+        this.terminals.delete(id);
+      }
+    }
+    if (workspaceId) this.broadcastUpdated(workspaceId);
+  }
+
+  /** Number of live terminals owned by a session (delete dependency summary). */
+  countForSession(sessionId: string): number {
+    let n = 0;
+    for (const t of this.terminals.values()) {
+      if (t.meta.sessionId === sessionId && t.meta.status === 'running') n += 1;
+    }
+    return n;
+  }
+
   /** Kill every PTY on shutdown — no orphaned shells. */
   dispose(): void {
     for (const t of this.terminals.values()) this.killProc(t);
@@ -226,13 +264,26 @@ export class TerminalManager {
    * most recent running agent-origin terminal, else creates one. Returns its id,
    * or null when no workspace can be resolved.
    */
-  ensureAgentTerminal(workspaceId: string): string | null {
+  ensureAgentTerminal(workspaceId: string, sessionId?: string): string | null {
     if (!this.workspace.getById(workspaceId)) return null;
     const running = this.list(workspaceId).filter((t) => t.status === 'running');
-    const agentTerm = running.find((t) => t.origin === 'agent') ?? running[0];
+    // A worktree-backed session's mirror terminal must live in ITS cwd — match
+    // by owning session first, then fall back to any agent/first terminal only
+    // for plain (non-worktree) sessions.
+    const bySession = sessionId
+      ? running.find((t) => t.origin === 'agent' && t.sessionId === sessionId)
+      : undefined;
+    const sessionRoot = sessionId ? this.sessionRootResolver?.(sessionId) ?? null : null;
+    const wsPath = this.workspace.getById(workspaceId)?.path ?? null;
+    const isWorktreeSession = !!sessionRoot && sessionRoot !== wsPath;
+    const agentTerm =
+      bySession ??
+      (isWorktreeSession
+        ? undefined
+        : running.find((t) => t.origin === 'agent' && !t.sessionId) ?? running.find((t) => !t.sessionId));
     if (agentTerm) return agentTerm.id;
     try {
-      return this.create(workspaceId, { title: 'Agent', origin: 'agent' }).id;
+      return this.create(workspaceId, { title: 'Agent', origin: 'agent', sessionId }).id;
     } catch (err) {
       logger.warn('ensureAgentTerminal failed', err);
       return null;
@@ -242,6 +293,86 @@ export class TerminalManager {
   /** Broadcast a mirrored agent command record to the renderer. */
   mirrorAgentCommand(record: TerminalCommandRecord): void {
     this.broadcast<TerminalCommandRecord>(IpcEvents.terminalCommand, record);
+  }
+
+  /* --------------------------------------------- hook / service commands */
+
+  /**
+   * Spawn a PTY that runs ONE command to completion (worktree setup/teardown
+   * hooks, named scripts, supervised services) with its output streamed like a
+   * normal terminal. The command string is user/repo-authored configuration —
+   * never composed by the renderer — and is passed as a single argv element to
+   * the directly exec'd shell binary (never `shell: true`).
+   */
+  createForCommand(opts: {
+    workspaceId: string;
+    sessionId: string;
+    cwd: string;
+    command: string;
+    title: string;
+    origin: 'hook' | 'service';
+    env?: Record<string, string>;
+    onExit?: (exitCode: number) => void;
+  }): TerminalSession {
+    const ws = this.requireWorkspace(opts.workspaceId);
+    if (!safeIsDir(opts.cwd)) throw new Error('Command cwd is not a directory');
+
+    const existing = this.list(opts.workspaceId).filter((t) => t.status === 'running').length;
+    if (existing >= TERMINAL_LIMITS.maxPerWorkspace) {
+      throw new Error(`Terminal limit reached (${TERMINAL_LIMITS.maxPerWorkspace}) for this workspace`);
+    }
+
+    const shell = this.resolveShell(ws);
+    const [bin, args] =
+      process.platform === 'win32'
+        ? [process.env.COMSPEC || 'cmd.exe', ['/d', '/s', '/c', opts.command]]
+        : [shell, ['-c', opts.command]];
+
+    const id = `term_${Date.now().toString(36)}_${(this.seq++).toString(36)}`;
+    const env = this.sanitizedEnv();
+    for (const [k, v] of Object.entries(opts.env ?? {})) env[k] = v;
+
+    const proc = pty.spawn(bin, args, {
+      name: 'xterm-256color',
+      cwd: opts.cwd,
+      cols: TERMINAL_LIMITS.cols.default,
+      rows: TERMINAL_LIMITS.rows.default,
+      env,
+    });
+
+    const meta: TerminalSession = {
+      id,
+      workspaceId: opts.workspaceId,
+      title: opts.title.slice(0, TERMINAL_LIMITS.titleMax),
+      cwd: opts.cwd,
+      shell: bin,
+      status: 'running',
+      origin: opts.origin,
+      sessionId: opts.sessionId,
+      createdAt: Date.now(),
+    };
+    const managed: ManagedTerminal = { meta, proc, scrollback: [], scrollbackBytes: 0 };
+    this.terminals.set(id, managed);
+
+    proc.onData((data) => {
+      this.recordScrollback(managed, data);
+      this.broadcast<TerminalChunk>(IpcEvents.terminalData, { terminalId: id, data });
+    });
+    proc.onExit(({ exitCode, signal }) => {
+      meta.status = signal && signal !== 0 ? 'crashed' : 'exited';
+      meta.exitCode = exitCode;
+      this.broadcast<TerminalExit>(IpcEvents.terminalExit, { terminalId: id, exitCode, signal });
+      this.broadcastUpdated(opts.workspaceId);
+      try {
+        opts.onExit?.(exitCode);
+      } catch (err) {
+        logger.warn('command terminal onExit callback failed', err);
+      }
+    });
+
+    logger.info(`Command terminal opened: ${redact(meta.title)} (${opts.origin})`);
+    this.broadcastUpdated(opts.workspaceId);
+    return meta;
   }
 
   /* --------------------------------------------------------- internals */
@@ -263,8 +394,25 @@ export class TerminalManager {
     }
   }
 
-  private resolveCwd(ws: Workspace): string {
-    // The PTY's working directory is always the (real) workspace root, guarded
+  private resolveCwd(ws: Workspace, sessionId?: string): string {
+    // A session that owns a worktree spawns its terminals inside that worktree.
+    // The worktree path comes from the main-side WorktreeManager (validated by
+    // its containment guard at creation) — never from the renderer. If the
+    // directory vanished, fall back to the workspace root with a warning.
+    if (sessionId && this.sessionRootResolver) {
+      const sessionRoot = this.sessionRootResolver(sessionId);
+      if (sessionRoot && sessionRoot !== ws.path) {
+        if (safeIsDir(sessionRoot)) {
+          try {
+            return fs.realpathSync(sessionRoot);
+          } catch {
+            return sessionRoot;
+          }
+        }
+        logger.warn(`Session worktree missing — terminal falls back to workspace root`);
+      }
+    }
+    // The PTY's working directory is otherwise the (real) workspace root, guarded
     // against symlink escapes — the same containment rule the agent/file layers use.
     const root = ws.path;
     let real = root;

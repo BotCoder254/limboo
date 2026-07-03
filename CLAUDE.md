@@ -107,7 +107,7 @@ limboo/
         ├── app/AppShell.tsx   #   the resizable 3-region layout
         ├── components/        #   ui/ (primitives), layout/ (TitleBar, WindowControls), brand/ (Logo), feedback/
         ├── features/          #   sessions/, workspace/, activity/, command-palette/, settings/
-        ├── stores/            #   Zustand: useSettings/useLayout/useSession/useUI
+        ├── stores/            #   Zustand slice stores (settings/layout/session/UI/agent/git/terminal/service/…)
         ├── hooks/             #   useResizable, useKeyboardShortcuts, useCommandBridge
         └── lib/               #   cn, debounce, format, commands (registry)
 ```
@@ -257,6 +257,9 @@ window.limboo.settings.{getAll,set,reset,onChange}      // persisted prefs
 window.limboo.system.{notify,openExternal,clipboardWrite,clipboardRead}
 window.limboo.app.getInfo()                             // version/electron/…
 window.limboo.events.onCommand(cb)                      // native menu/tray → command
+// …plus one namespace per platform service: workspace, session, agent, fs,
+// terminal, git, worktree, services, memory, search, updates, voice
+// (full surface: docs/reference/window-limboo-api.md)
 ```
 
 Types flow from `src/preload/index.ts` (`LimbooApi`) into the renderer via
@@ -445,11 +448,42 @@ the real (no-mock) UI. Each owns one responsibility:
   ahead/behind pill, an unpushed badge on the Git rail tab, and "publish branch"
   for an untracked branch. Push/pull preferences live under `settings.git.push` /
   `settings.git.pull`.
+- **Worktree Manager** (`managers/worktree/WorktreeManager.ts` + `paths.ts` /
+  `config.ts`) — first-class **git worktrees per session**: an isolated checkout
+  (`{root}/{sha1(repo)[:12]}/{slug}`, default root `{userData}/worktrees`) +
+  branch (`{prefix}/{slug}`), provisioned argv-only via `git worktree add`. It
+  is the **single resolver of a session's effective execution root**
+  (`resolveSessionRoot`/`resolveActiveRoot`, injected into Agent/Terminal/Git/
+  Search/FS managers, retargeted on active-session change). Windows-safe
+  removal order (services → acked teardown hooks → PTYs → watcher release →
+  `git worktree remove` → guarded `fs.rm` fallback), boot-time recovery
+  (`repair`+`prune`, `missing` status → Recreate/Detach banner), archive
+  teardown/restore, and the **limboo.json ack-hash trust gate** (repo-authored
+  commands never run before the workspace acknowledges the exact config hash;
+  `worktree:ackConfig` acks without hooks — works for scripts/services-only
+  repos and plain sessions). UI: `WorktreeTabs` (editor-style tab strip,
+  Ctrl+Tab cycling), `SessionDeleteDialog` (dependency summary),
+  `HooksConfirmDialog` (verbatim command approval). Settings under
+  `settings.git.worktrees`; bounds in `WORKTREE_LIMITS`.
+- **Service Manager** (`managers/services/ServiceManager.ts` + `ProxyServer.ts`)
+  — **Scripts & Services** from the repo's `limboo.json`
+  (see `docs/reference/limboo-json.md`): on-demand scripts + supervised
+  services (auto-assigned 127.0.0.1 port, `PORT`/`LIMBOO_*` + peer-discovery
+  env, on-failure restart with backoff capped at `maxRestarts`, stale-exit
+  guarded restarts) running as PTYs via the Terminal Engine — the scrollback IS
+  the log. Optional loopback reverse proxy maps
+  `<service>--<slug>.localhost:<proxyPort>` → the service port (registry
+  lookup only; 404 on unknown hosts). Pushes `services:updated`; UI:
+  `ServicesStrip` under the session header (status dot, URL, start/stop/
+  restart, script run buttons, "Review commands…" when unacked). Settings
+  under `settings.git.services`.
 - **Terminal Engine** (`managers/TerminalManager.ts`) — `node-pty` sessions,
   pinned to the `1.2.0-beta` line (Microsoft's Node-API rewrite): the bundled
   per-platform prebuilt is ABI-stable across Node.js/Electron, so it never
   needs a `node-gyp` rebuild; `forge.config.ts` excludes it from
-  `@electron/rebuild` accordingly.
+  `@electron/rebuild` accordingly. `createForCommand` runs one command in a
+  PTY (`origin: 'hook' | 'service'`) with an exit callback; terminal `cwd` is
+  the session's effective root.
 - **File System Layer** (`managers/FileSystemManager.ts`) — `chokidar` watch +
   tree index + guarded reads; pushes live git status into sessions.
 - **Agent Manager** (`managers/AgentManager.ts`) — drives `@anthropic-ai/claude-

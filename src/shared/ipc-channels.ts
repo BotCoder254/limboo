@@ -52,6 +52,25 @@ export const IpcChannels = {
   sessionPurge: 'session:purge',
   sessionSetActive: 'session:setActive',
   sessionGetActive: 'session:getActive',
+  sessionCreateInWorktree: 'session:createInWorktree',
+  sessionGetDependencies: 'session:getDependencies',
+  sessionTimeline: 'session:timeline',
+
+  // Git worktrees — session-owned isolated checkouts (own directory + branch).
+  worktreeList: 'worktree:list',
+  worktreePrune: 'worktree:prune',
+  worktreeRecreate: 'worktree:recreate',
+  worktreeDetach: 'worktree:detach',
+  worktreeGetRepoConfig: 'worktree:getRepoConfig',
+  worktreeAckConfig: 'worktree:ackConfig',
+  worktreeRunSetup: 'worktree:runSetup',
+
+  // Scripts & Services — supervised per-session processes from limboo.json.
+  serviceList: 'service:list',
+  serviceStart: 'service:start',
+  serviceStop: 'service:stop',
+  serviceRestart: 'service:restart',
+  scriptRun: 'script:run',
 
   // Coding agent (Claude Code orchestration).
   agentGetInstall: 'agent:getInstall',
@@ -221,6 +240,10 @@ export const IpcEvents = {
   gitChanged: 'git:changed',
   /** A session's git checkpoints changed (created / restored / pruned). */
   gitCheckpointsChanged: 'git:checkpoints-changed',
+  /** The set of session worktrees changed (created / removed / pruned / missing). */
+  worktreesUpdated: 'worktrees:updated',
+  /** A session's supervised services changed (started / exited / restarted). */
+  servicesUpdated: 'services:updated',
   /** The memory store changed (created / updated / proposed / accepted / pruned). */
   memoryChanged: 'memory:changed',
   /** The search index / history / saved searches changed (reindex, save, clear). */

@@ -24,8 +24,13 @@ function sanitizeOptions(raw: unknown): TerminalCreateOptions {
   if (typeof o.title === 'string') opts.title = o.title.slice(0, TERMINAL_LIMITS.titleMax);
   if (typeof o.cols === 'number' && Number.isFinite(o.cols)) opts.cols = o.cols;
   if (typeof o.rows === 'number' && Number.isFinite(o.rows)) opts.rows = o.rows;
+  // The owning session scopes a worktree-backed session's terminals to its own
+  // checkout. The id only *selects* a main-side-resolved cwd — never a path.
+  if (typeof o.sessionId === 'string' && o.sessionId.length > 0 && o.sessionId.length <= 128) {
+    opts.sessionId = o.sessionId;
+  }
   // `origin` is intentionally NOT honored from the renderer — user-driven creates
-  // are always 'user'. Agent terminals are created inside the main process only.
+  // are always 'user'. Agent/hook/service terminals are created in main only.
   return opts;
 }
 
