@@ -65,6 +65,9 @@ compliance:
     # with the tag version BEFORE check-manifest, so its tag<->version guard verifies
     # the applied version instead of demanding a manual pre-bump. No-op off a tag.
     - node ci/scripts/apply-tag-version.mjs
+    # Fail fast if this v* tag re-tags an already-tagged commit (the v1.2.8==v1.2.9
+    # mistake that ships a release with zero new code).
+    - node ci/scripts/check-tag-unique.mjs
     - node ci/scripts/check-licenses.mjs
     - node ci/scripts/check-electron-security.mjs
     - node ci/scripts/check-manifest.mjs
