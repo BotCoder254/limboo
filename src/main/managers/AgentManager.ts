@@ -43,6 +43,7 @@ import type {
   DiagnosticCategory,
   DiagnosticSeverity,
   FileChange,
+  FileChangeStatus,
   PermissionDecision,
   PermissionRequest,
   PlanMeta,
@@ -1293,6 +1294,10 @@ export class AgentManager {
     }
 
     const risk = classifyTool(name);
+    // For file-editing tools, compute the change summary + a diff preview up front
+    // so they ride along on the tool-start event the renderer stream consumes.
+    const change = risk === 'write' ? changeFromInput(name, input) : null;
+    const edit = risk === 'write' ? editFromInput(name, input) : null;
     const call: AgentToolCall = {
       id,
       sessionId,
@@ -1301,6 +1306,8 @@ export class AgentManager {
       summary: summarizeTool(name, input, risk),
       detail: permissionDetail(name, input),
       target: toolTarget(name, input),
+      change: change ?? undefined,
+      edit: edit ?? undefined,
       status: 'running',
       startedAt: Date.now(),
     };
@@ -1318,13 +1325,10 @@ export class AgentManager {
     // Snapshot the pre-edit state before the first write/command of this run.
     if (risk === 'write' || name === 'Bash') this.maybeAutoCheckpoint(sessionId);
 
-    if (risk === 'write') {
-      const change = changeFromInput(name, input);
-      if (change) {
-        rt.changes.set(change.path, change);
-        this.pushEvent({ kind: 'file-change', sessionId, change });
-        this.pushActivity(sessionId, 'file-change', `${change.status} ${shortPath(change.path)}`, undefined, 'info');
-      }
+    if (change) {
+      rt.changes.set(change.path, change);
+      this.pushEvent({ kind: 'file-change', sessionId, change });
+      this.pushActivity(sessionId, 'file-change', `${change.status} ${shortPath(change.path)}`, undefined, 'info');
     }
   }
 
@@ -2422,7 +2426,9 @@ function changeFromInput(name: string, input: Record<string, unknown>): FileChan
   if (!file) return null;
   if (name === 'Write') {
     const content = String(input.content ?? '');
-    return { path: file, status: 'modified', adds: countLines(content), dels: 0 };
+    // tool-start fires before the write runs, so a missing target means a create.
+    const status: FileChangeStatus = fileMissing(file) ? 'added' : 'modified';
+    return { path: file, status, adds: countLines(content), dels: 0 };
   }
   if (name === 'Edit') {
     return {
@@ -2448,6 +2454,63 @@ function changeFromInput(name: string, input: Record<string, unknown>): FileChan
 function countLines(s: string): number {
   if (!s) return 0;
   return s.split('\n').length;
+}
+
+/** True when the write target does not exist yet (→ a file create). Best-effort. */
+function fileMissing(file: string): boolean {
+  try {
+    return !fs.existsSync(file);
+  } catch {
+    return false;
+  }
+}
+
+/** Cap for diff previews carried on tool-call events (renderer-only display). */
+const DIFF_PREVIEW_CAP = 4000;
+
+/**
+ * Build the truncated before/after content for the conversation stream's diff
+ * view. `before` is empty for creates, `after` empty for pure deletions.
+ */
+function editFromInput(
+  name: string,
+  input: Record<string, unknown>,
+): { before: string; after: string; lang?: string } | null {
+  const file = filePathOf(input);
+  if (!file) return null;
+  const lang = langFromPath(file);
+  if (name === 'Write') {
+    return { before: '', after: truncate(String(input.content ?? ''), DIFF_PREVIEW_CAP), lang };
+  }
+  if (name === 'Edit') {
+    return {
+      before: truncate(String(input.old_string ?? ''), DIFF_PREVIEW_CAP),
+      after: truncate(String(input.new_string ?? ''), DIFF_PREVIEW_CAP),
+      lang,
+    };
+  }
+  if (name === 'MultiEdit') {
+    const edits = Array.isArray(input.edits) ? (input.edits as Array<Record<string, unknown>>) : [];
+    const before = edits.map((e) => String(e.old_string ?? '')).join('\n');
+    const after = edits.map((e) => String(e.new_string ?? '')).join('\n');
+    return { before: truncate(before, DIFF_PREVIEW_CAP), after: truncate(after, DIFF_PREVIEW_CAP), lang };
+  }
+  return null;
+}
+
+/** Map a file extension to a Shiki language id for the stream diff view. */
+function langFromPath(p: string): string | undefined {
+  const ext = path.extname(p).slice(1).toLowerCase();
+  const map: Record<string, string> = {
+    ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx', mjs: 'javascript',
+    cjs: 'javascript', mts: 'typescript', cts: 'typescript', json: 'json', jsonc: 'json',
+    css: 'css', scss: 'scss', less: 'less', html: 'html', xml: 'xml', svg: 'xml',
+    md: 'markdown', mdx: 'markdown', py: 'python', rs: 'rust', go: 'go', java: 'java',
+    kt: 'kotlin', rb: 'ruby', php: 'php', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp',
+    hpp: 'cpp', cs: 'csharp', sh: 'bash', bash: 'bash', zsh: 'bash', ps1: 'powershell',
+    yml: 'yaml', yaml: 'yaml', toml: 'toml', sql: 'sql', swift: 'swift', dart: 'dart',
+  };
+  return map[ext];
 }
 
 function truncate(s: string, max: number): string {

@@ -7,8 +7,8 @@
  * The composer is NOT part of this panel — it stays anchored in the center
  * column so the user can keep prompting while terminals run.
  */
-import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, TerminalSquare, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Bot, Plus, TerminalSquare, X } from 'lucide-react';
 import { EmptyState, IconButton } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
@@ -30,7 +30,8 @@ export function TerminalPanel() {
   const workspaceId = useWorkspaceStore((s) => s.activeId);
   const setActiveTab = useLayoutStore((s) => s.setActiveTab);
   const closeTerminal = () => setActiveTab(null);
-  const [showCommands, setShowCommands] = useState(false);
+  // Whether the synthetic "Agent" tab (the agent-command mirror) is selected.
+  const [agentTab, setAgentTab] = useState(false);
 
   const terminals = useTerminalStore((s) =>
     workspaceId ? s.byWorkspace[workspaceId] ?? EMPTY_TERMINALS : EMPTY_TERMINALS,
@@ -38,15 +39,31 @@ export function TerminalPanel() {
   const activeId = useTerminalStore((s) =>
     workspaceId ? s.activeByWorkspace[workspaceId] ?? null : null,
   );
-  const commands = useTerminalStore((s) =>
-    activeId ? s.commandsByTerminal[activeId] ?? EMPTY_COMMANDS : EMPTY_COMMANDS,
-  );
+  const commandsByTerminal = useTerminalStore((s) => s.commandsByTerminal);
   const load = useTerminalStore((s) => s.load);
   const create = useTerminalStore((s) => s.create);
   const kill = useTerminalStore((s) => s.kill);
   const rename = useTerminalStore((s) => s.rename);
   const setActive = useTerminalStore((s) => s.setActive);
   const confirmKill = useSettingsStore((s) => s.settings.agent.terminal.confirmKill);
+
+  // The agent's mirrored commands surface as their own pinned "Agent" tab rather
+  // than a strip stacked over a shell. Gather every agent-origin terminal's
+  // records into one chronological list; user shells keep their own tabs.
+  const userTerminals = useMemo(() => terminals.filter((t) => t.origin !== 'agent'), [terminals]);
+  const agentCommands = useMemo(() => {
+    const list = terminals
+      .filter((t) => t.origin === 'agent')
+      .flatMap((t) => commandsByTerminal[t.id] ?? EMPTY_COMMANDS);
+    return list.slice().sort((a, b) => a.startedAt - b.startedAt);
+  }, [terminals, commandsByTerminal]);
+  const hasAgent = agentCommands.length > 0;
+  // The user-shell tab to display — the active one if it's a shell, else the first.
+  const displayId = userTerminals.some((t) => t.id === activeId)
+    ? activeId
+    : userTerminals[0]?.id ?? null;
+  // Fall back to the shell view if the agent tab is selected but has no records.
+  const showAgent = agentTab && hasAgent;
 
   // Close a terminal, confirming first when it still has a running process.
   const closeOne = (id: string) => {
@@ -95,16 +112,32 @@ export function TerminalPanel() {
       onClose={closeTerminal}
       tabs={
         <TabStrip
-          terminals={terminals}
-          activeId={activeId}
-          onSelect={(id) => setActive(workspaceId, id)}
+          terminals={userTerminals}
+          activeId={showAgent ? null : displayId}
+          hasAgent={hasAgent}
+          agentActive={showAgent}
+          agentCount={agentCommands.length}
+          onSelectAgent={() => setAgentTab(true)}
+          onSelect={(id) => {
+            setAgentTab(false);
+            setActive(workspaceId, id);
+          }}
           onClose={closeOne}
           onRename={(id, title) => void rename(workspaceId, id, title)}
         />
       }
-      onNew={() => void create(workspaceId)}
+      onNew={() => {
+        setAgentTab(false);
+        void create(workspaceId);
+      }}
     >
-      {terminals.length === 0 ? (
+      {showAgent ? (
+        <div className="flex h-full min-h-0 flex-col gap-1 overflow-y-auto p-2">
+          {agentCommands.map((rec) => (
+            <AgentCommandBlock key={rec.callId} record={rec} />
+          ))}
+        </div>
+      ) : userTerminals.length === 0 ? (
         <EmptyState
           compact
           icon={TerminalSquare}
@@ -122,32 +155,11 @@ export function TerminalPanel() {
           }
         />
       ) : (
-        <div className="flex h-full min-h-0 flex-col">
-          {commands.length > 0 && (
-            <div className="flex shrink-0 flex-col border-b border-line">
-              <button
-                type="button"
-                onClick={() => setShowCommands((v) => !v)}
-                className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-faint transition-colors hover:text-muted"
-              >
-                {showCommands ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                Agent commands ({commands.length})
-              </button>
-              {showCommands && (
-                <div className="flex max-h-40 flex-col gap-1 overflow-y-auto px-2 pb-2">
-                  {commands.map((rec) => (
-                    <AgentCommandBlock key={rec.callId} record={rec} />
-                  ))}
-                </div>
-              )}
-            </div>
+        // Keep one mounted xterm per active shell; remount on id change.
+        <div className="min-h-0 flex-1 bg-base p-2">
+          {displayId && (
+            <TerminalView key={displayId} workspaceId={workspaceId} terminalId={displayId} />
           )}
-          {/* Keep one mounted xterm per active terminal; remount on id change. */}
-          <div className="min-h-0 flex-1 bg-base p-2">
-            {activeId && (
-              <TerminalView key={activeId} workspaceId={workspaceId} terminalId={activeId} />
-            )}
-          </div>
         </div>
       )}
     </Shell>
@@ -189,12 +201,20 @@ function Shell({
 function TabStrip({
   terminals,
   activeId,
+  hasAgent,
+  agentActive,
+  agentCount,
+  onSelectAgent,
   onSelect,
   onClose,
   onRename,
 }: {
   terminals: import('@shared/types').TerminalSession[];
   activeId: string | null;
+  hasAgent: boolean;
+  agentActive: boolean;
+  agentCount: number;
+  onSelectAgent: () => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onRename: (id: string, title: string) => void;
@@ -203,6 +223,21 @@ function TabStrip({
 
   return (
     <div className="flex items-center gap-0.5">
+      {hasAgent && (
+        <button
+          type="button"
+          onClick={onSelectAgent}
+          title="Agent commands"
+          className={cn(
+            'flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-colors',
+            agentActive ? 'bg-surface-2 text-fg' : 'text-muted hover:bg-surface-2 hover:text-fg',
+          )}
+        >
+          <Bot size={12} className="text-accent" />
+          Agent
+          <span className="text-[10px] text-faint">{agentCount}</span>
+        </button>
+      )}
       {terminals.map((t) => {
         const isActive = t.id === activeId;
         const exited = t.status !== 'running';

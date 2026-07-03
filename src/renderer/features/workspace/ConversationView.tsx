@@ -18,6 +18,7 @@ import { Check, ChevronRight, CircleAlert } from 'lucide-react';
 import type { AgentActivityItem, AgentToolCall, ChatMessage, PermissionRequest } from '@shared/types';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Spinner } from '@/renderer/components/ui';
+import { DiffStat } from '@/renderer/components/ui/DiffStat';
 import { cn } from '@/renderer/lib/cn';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
@@ -25,6 +26,14 @@ import { useGitStore } from '@/renderer/stores/useGitStore';
 import { Markdown } from './Markdown';
 import { MessageSkeleton, ThinkingPulse } from './MessageSkeleton';
 import { InlineApproval } from './InlineApproval';
+import { ToolDiff } from './ToolDiff';
+
+/** Human label for a file-edit tool's change status, shown inline in the stream. */
+const CHANGE_WORD: Record<string, string> = {
+  added: 'Created',
+  modified: 'Edited',
+  deleted: 'Deleted',
+};
 
 /** Activity types that surface inline in the conversation as status markers.
  *  Tool / prompt / file-change / permission activity is intentionally excluded —
@@ -383,7 +392,10 @@ function openGit(path?: string): void {
 function InlineEventRow({ call }: { call: AgentToolCall }) {
   const isWeb = call.name === 'WebSearch' || call.name === 'WebFetch';
   const [open, setOpen] = useState(false);
-  const expandable = !!call.detail && call.detail !== call.target;
+  // A file-edit tool carries a structured change + diff preview; prefer showing
+  // the Shiki diff on expand over the plain-text `detail`.
+  const hasDiff = !!call.edit && (call.edit.before.length > 0 || call.edit.after.length > 0);
+  const expandable = hasDiff || (!!call.detail && call.detail !== call.target);
 
   return (
     <div className="flex flex-col gap-1">
@@ -406,6 +418,25 @@ function InlineEventRow({ call }: { call: AgentToolCall }) {
             {call.name}
           </span>
           <span className="shrink-0 text-[12px] text-muted">{call.summary}</span>
+          {call.change && (
+            <span className="flex shrink-0 items-center gap-1.5">
+              <span
+                className={cn(
+                  'text-[10px] uppercase tracking-wider',
+                  call.change.status === 'added'
+                    ? 'text-success'
+                    : call.change.status === 'deleted'
+                      ? 'text-danger'
+                      : 'text-faint',
+                )}
+              >
+                {CHANGE_WORD[call.change.status] ?? call.change.status}
+              </span>
+              {(call.change.adds > 0 || call.change.dels > 0) && (
+                <DiffStat adds={call.change.adds} dels={call.change.dels} />
+              )}
+            </span>
+          )}
           {call.target && (
             <span
               className={cn(
@@ -445,7 +476,10 @@ function InlineEventRow({ call }: { call: AgentToolCall }) {
           )}
         </span>
       </div>
-      {open && expandable && (
+      {open && hasDiff && call.edit && (
+        <ToolDiff edit={call.edit} status={call.change?.status} />
+      )}
+      {open && !hasDiff && expandable && (
         <pre className="ml-6 max-h-48 overflow-auto rounded-md border border-line bg-[#0a0a0a] px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
           {call.detail}
         </pre>

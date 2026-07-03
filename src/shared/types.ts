@@ -1563,6 +1563,18 @@ export interface AgentToolCall {
   detail?: string;
   /** For web tools: the target URL or search query, shown inline in chat. */
   target?: string;
+  /**
+   * For file-editing tools (Write/Edit/MultiEdit): the change summary
+   * (path + status + add/del line counts) so the stream can render `+adds/-dels`
+   * and a Created/Edited/Deleted indicator inline.
+   */
+  change?: FileChange;
+  /**
+   * For file-editing tools: truncated before/after content + language id so the
+   * conversation stream can render a Shiki-highlighted diff on expand. `before` is
+   * empty for creates, `after` empty for deletes.
+   */
+  edit?: { before: string; after: string; lang?: string };
   status: ToolCallStatus;
   startedAt: number;
   endedAt?: number;

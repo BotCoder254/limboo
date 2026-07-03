@@ -137,12 +137,20 @@ export function ChangesPanel() {
         />
       );
     }
+    const snapAdds = snapshot.changes.reduce((n, c) => n + c.adds, 0);
+    const snapDels = snapshot.changes.reduce((n, c) => n + c.dels, 0);
     return (
-      <ul className="flex flex-col gap-0.5">
-        {snapshot.changes.map((change) => (
-          <SnapshotChangeRow key={change.path} change={change} />
-        ))}
-      </ul>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2 px-1 pb-1 text-[11px] text-faint">
+          {snapshot.changes.length} change{snapshot.changes.length === 1 ? '' : 's'}
+          {(snapAdds > 0 || snapDels > 0) && <DiffStat adds={snapAdds} dels={snapDels} />}
+        </div>
+        <ul className="flex flex-col gap-0.5">
+          {snapshot.changes.map((change) => (
+            <SnapshotChangeRow key={change.path} change={change} />
+          ))}
+        </ul>
+      </div>
     );
   }
 
@@ -165,12 +173,15 @@ export function ChangesPanel() {
     });
   const expandAll = () => setExpanded(new Set(files.map((f) => rowKey(f))));
   const collapseAll = () => setExpanded(new Set());
+  const totalAdds = files.reduce((n, f) => n + f.adds, 0);
+  const totalDels = files.reduce((n, f) => n + f.dels, 0);
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-1 px-1 pb-1">
-        <span className="mr-auto text-[11px] text-faint">
+        <span className="mr-auto flex items-center gap-2 text-[11px] text-faint">
           {files.length} change{files.length === 1 ? '' : 's'}
+          {(totalAdds > 0 || totalDels > 0) && <DiffStat adds={totalAdds} dels={totalDels} />}
         </span>
         <IconButton label="Expand all" size="sm" onClick={expandAll}>
           <ChevronsDownUp size={13} className="rotate-180" />
