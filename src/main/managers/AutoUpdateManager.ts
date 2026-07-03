@@ -25,6 +25,8 @@ import type { NotificationManager } from './NotificationManager';
 import type { AppSettings, UpdateStatus } from '@shared/types';
 import { IpcEvents } from '@shared/ipc-channels';
 import { logger } from '../logger';
+import { readJson, writeJson } from '../storage';
+import { getMainWindow } from '../window/createWindow';
 
 // electron-updater is CommonJS; the named `autoUpdater` rides on the default export.
 const { autoUpdater } = electronUpdater;
@@ -35,6 +37,17 @@ const FEED = { provider: 'github', owner: 'BotCoder254', repo: 'limboo' } as con
 /** Re-check cadence once the app has settled (ms). */
 const POLL_INTERVAL = 60 * 60 * 1000; // hourly
 const INITIAL_DELAY = 8_000; // let the window finish hydrating first
+
+/**
+ * Persisted marker of an in-flight download. Written when a download starts and
+ * cleared once it finishes (or errors). If it survives a restart it means the
+ * previous download was interrupted — so the next matching `update-available`
+ * resumes the partial from electron-updater's cache instead of starting over.
+ */
+const DOWNLOAD_MARKER = 'update-download.json';
+interface DownloadMarker {
+  version: string;
+}
 
 export class AutoUpdateManager {
   private status: UpdateStatus;
@@ -101,6 +114,7 @@ export class AutoUpdateManager {
   dispose(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.initialTimer) clearTimeout(this.initialTimer);
+    getMainWindow()?.setProgressBar(-1);
   }
 
   getState(): UpdateStatus {
@@ -140,28 +154,60 @@ export class AutoUpdateManager {
       this.emit({ stage: 'checking', checkedAt: Date.now() });
     });
     autoUpdater.on('update-available', (info: UpdateInfo) => {
-      this.emit({ stage: 'available', version: info.version, notes: releaseNotes(info) });
+      // A surviving marker for this same version means the previous download was
+      // interrupted — resume it rather than treat it as a fresh start.
+      const resuming = this.readMarker()?.version === info.version;
+      this.emit({ stage: 'available', version: info.version, notes: releaseNotes(info), resuming });
       this.notifications.notify({
         title: 'Update available',
         body: `Limboo ${info.version} is available to download.`,
       });
+      // Auto-resume a partial even when the user has NOT enabled auto-start of
+      // fresh downloads ("resume, not start"). When autoDownload is on,
+      // electron-updater resumes from its cache on its own.
+      if (resuming && !autoUpdater.autoDownload) void this.download();
     });
     autoUpdater.on('update-not-available', () => {
       this.emit({ stage: 'not-available' });
     });
     autoUpdater.on('download-progress', (p: ProgressInfo) => {
-      this.emit({ stage: 'downloading', percent: Math.round(p.percent) });
+      // First progress event of a run: record the marker so an interruption is
+      // resumable on the next launch.
+      if (!this.readMarker() && this.status.version) {
+        this.writeMarker({ version: this.status.version });
+      }
+      this.emit({
+        stage: 'downloading',
+        percent: Math.round(p.percent),
+        resuming: this.status.resuming,
+      });
     });
     autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
-      this.emit({ stage: 'downloaded', version: info.version, notes: releaseNotes(info) });
+      this.clearMarker();
+      this.emit({ stage: 'downloaded', version: info.version, notes: releaseNotes(info), resuming: false });
       this.notifications.notify({
         title: 'Update ready',
         body: `Limboo ${info.version} has been downloaded. Restart to install.`,
       });
     });
     autoUpdater.on('error', (err: Error) => {
+      // Abort: the partial (if any) stays on disk for electron-updater to reuse,
+      // but drop our marker so we don't loop trying to auto-resume a bad download.
+      this.clearMarker();
       this.emit({ stage: 'error', error: errorMessage(err) });
     });
+  }
+
+  private readMarker(): DownloadMarker | null {
+    return readJson<DownloadMarker | null>(DOWNLOAD_MARKER, null);
+  }
+
+  private writeMarker(marker: DownloadMarker): void {
+    writeJson(DOWNLOAD_MARKER, marker);
+  }
+
+  private clearMarker(): void {
+    writeJson(DOWNLOAD_MARKER, null);
   }
 
   /** Merge a transition into the status and push the full object to renderers. */
@@ -174,6 +220,16 @@ export class AutoUpdateManager {
     // A new check supersedes any stale error/version once it resolves.
     if (patch.stage === 'not-available' || patch.stage === 'checking') {
       this.status.error = undefined;
+    }
+    // Drive the OS taskbar progress button so download progress is visible
+    // without switching to the window; clear it whenever we're not downloading.
+    const progressWin = getMainWindow();
+    if (progressWin) {
+      if (this.status.stage === 'downloading' && typeof this.status.percent === 'number') {
+        progressWin.setProgressBar(this.status.percent / 100);
+      } else {
+        progressWin.setProgressBar(-1);
+      }
     }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {

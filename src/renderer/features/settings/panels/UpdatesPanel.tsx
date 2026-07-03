@@ -46,7 +46,11 @@ export function UpdatesPanel() {
         }
       >
         <div className="flex items-center gap-2">
-          <span className="text-[12px] text-muted">{STAGE_LABEL[status.stage] ?? status.stage}</span>
+          <span className="text-[12px] text-muted">
+            {status.stage === 'downloading' && status.resuming
+              ? 'Resuming…'
+              : (STAGE_LABEL[status.stage] ?? status.stage)}
+          </span>
           {status.stage === 'downloading' && (
             <span className="text-[12px] tabular-nums text-faint">{status.percent ?? 0}%</span>
           )}

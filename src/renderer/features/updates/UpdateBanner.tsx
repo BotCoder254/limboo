@@ -50,7 +50,9 @@ export function UpdateBanner() {
             {status.stage === 'downloaded'
               ? 'Update ready to install'
               : status.stage === 'downloading'
-                ? 'Downloading update…'
+                ? status.resuming
+                  ? 'Resuming update…'
+                  : 'Downloading update…'
                 : 'Update available'}
           </span>
           <span className="truncate text-[11px] text-muted">

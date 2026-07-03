@@ -455,6 +455,8 @@ export interface UpdateStatus {
   notes?: string;
   /** Download progress, 0–100 (downloading stage only). */
   percent?: number;
+  /** True while continuing a previously-interrupted download (resume, not start). */
+  resuming?: boolean;
   /** Last error message (error stage only). */
   error?: string;
   /** Epoch ms of the last check. */
