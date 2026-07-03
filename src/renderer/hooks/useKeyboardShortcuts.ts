@@ -15,12 +15,19 @@ const IS_MAC =
 
 function matches(e: KeyboardEvent, keys: string[]): boolean {
   const wantMod = keys.includes('Mod');
+  // A literal `Ctrl` always means the Control key — even on macOS, where tab
+  // cycling (Ctrl+Tab) conventionally uses Control rather than Command.
+  const wantCtrl = keys.includes('Ctrl');
   const wantShift = keys.includes('Shift');
   const wantAlt = keys.includes('Alt');
   const main = keys[keys.length - 1].toLowerCase();
 
-  const hasMod = IS_MAC ? e.metaKey : e.ctrlKey;
-  if (wantMod !== hasMod) return false;
+  if (wantCtrl) {
+    if (!e.ctrlKey) return false;
+  } else {
+    const hasMod = IS_MAC ? e.metaKey : e.ctrlKey;
+    if (wantMod !== hasMod) return false;
+  }
   if (wantShift !== e.shiftKey) return false;
   if (wantAlt !== e.altKey) return false;
   return e.key.toLowerCase() === main;

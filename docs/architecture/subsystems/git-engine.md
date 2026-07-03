@@ -9,7 +9,7 @@ process, argv-only, with no shell. See the
 [Git workflow guide](../../guides/git-workflow.md).
 
 Source: [`src/main/managers/GitManager.ts`](../../../src/main/managers/GitManager.ts)
-with `managers/git/{exec,parse,status}.ts`.
+with `managers/git/{exec,parse,status,refs}.ts`.
 
 ## Responsibilities
 
@@ -29,6 +29,9 @@ with `managers/git/{exec,parse,status}.ts`.
   name-status, and numstat.
 - `git/status.ts` — a quick status snapshot (branch, ahead/behind, counts), reused by
   the File System Layer to push status into session rows.
+- `git/refs.ts` — `sanitizeRef` validates user-supplied branch / base refs
+  (rejects leading `-`, metacharacters, control bytes) before they become git
+  argv elements; used by the Worktree Manager and branch operations.
 
 ## Public surface (key methods)
 
@@ -60,6 +63,12 @@ embedded-credential remote URLs are redacted from results and logs.
   candidate (fire-and-forget; respects the auto-capture policy).
 - The **File System Layer** notifies the engine on tree changes so git refreshes
   live; the **Agent Manager** triggers auto-checkpoints before changes.
+- Worktree lifecycle (add / remove / repair) lives in the separate
+  [**Worktree Manager**](worktree-manager.md). The engine's root resolves
+  through it: git operations target the *active session's* effective root
+  (its worktree when it owns one), and the root cache is invalidated on
+  active-session changes. Known limitation: git queries for a non-active
+  session in the same workspace resolve to the active session's root.
 
 ## Data flow
 

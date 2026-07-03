@@ -781,6 +781,39 @@ This separation keeps the architecture modular and allows different coding agent
 
 ---
 
-# 20. Closing
+# 20. Session Isolation — Worktrees, Scripts & Services
+
+Every session can own an **isolated engineering environment** so multiple units
+of work proceed in parallel without contending for one working tree.
+
+**Worktree sessions.** A session may be backed by a first-class git worktree:
+its own checkout directory and branch, provisioned through `git worktree add`.
+The Worktree Manager is the single resolver of a session's *effective execution
+root* — the agent, terminals, git operations, search indexing, and file
+watching all execute inside the session's worktree while it is healthy, and
+fall back to the workspace checkout otherwise. Worktree sessions surface as an
+editor-style tab strip; vanished checkouts are detected and recoverable
+(recreate from the surviving branch, or detach); archiving can reclaim the
+directory while preserving the branch for later restoration.
+
+**Scripts & Services.** A repository declares its runtime in a root
+`limboo.json`: setup/teardown hooks (make a fresh worktree usable, clean up
+before removal), named on-demand scripts, and long-running supervised services
+(dev servers, APIs, workers). Services receive an auto-assigned loopback port,
+peer-discovery environment variables, live status, a restart policy, and their
+logs stream through the integrated terminal. An optional loopback reverse
+proxy gives each service a stable `<service>--<slug>.localhost` hostname.
+
+**Trust model.** `limboo.json` is repo-authored and therefore untrusted:
+nothing it declares executes until the user reviews the exact commands and the
+acknowledgment (a hash over the executable config) is persisted for the
+workspace. Any edit to the file invalidates the acknowledgment and re-requires
+review. Execution is argv-only through the terminal engine; ports bind to
+127.0.0.1 exclusively; every worktree path is containment-checked before the
+filesystem is touched.
+
+---
+
+# 21. Closing
 
 This document defines the foundation of a local-first AI coding workspace. The desktop application is intentionally designed as an orchestration layer rather than another AI model. By separating user interface, operating-system integration, repository management, and workflow orchestration from the coding agent itself, the architecture remains modular, secure, maintainable, and adaptable to future coding agents and AI models without requiring major redesign.

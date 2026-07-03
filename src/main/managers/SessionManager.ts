@@ -21,7 +21,9 @@ import type {
   Session,
   SessionPermissionMode,
   SessionStatus,
+  SessionTimelineEntry,
   SessionUpdate,
+  WorktreeStatus,
 } from '@shared/types';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
@@ -41,13 +43,43 @@ interface SessionRow {
   dels: number;
   unread: number;
   mode: string | null;
+  worktree_path: string | null;
+  worktree_branch: string | null;
+  worktree_status: string | null;
+  base_ref: string | null;
+  folder: string | null;
+  tags: string | null;
 }
 
 const ACTIVE_KEY = 'activeSessionId';
 
+/** Fields the WorktreeManager persists onto a session after worktree ops. */
+export interface SessionWorktreePatch {
+  worktreePath: string | null;
+  worktreeBranch: string | null;
+  worktreeStatus: WorktreeStatus;
+  baseRef?: string | null;
+}
+
 export class SessionManager {
   private get db(): Database.Database {
     return getDb();
+  }
+
+  /**
+   * In-process subscribers notified when the *effective execution root* of the
+   * app may have changed — the active session switched, or the active session's
+   * worktree was created / removed / went missing. Mirrors
+   * WorkspaceManager.onActiveChanged; used to retarget the file watcher, git
+   * root cache, and search index at the active session's worktree.
+   */
+  private activeListeners = new Set<(session: Session | null) => void>();
+  /** Last `id:worktreePath:worktreeStatus` broadcast, to emit only real changes. */
+  private lastActiveKey: string | null = null;
+
+  onActiveChanged(cb: (session: Session | null) => void): () => void {
+    this.activeListeners.add(cb);
+    return () => this.activeListeners.delete(cb);
   }
 
   /* -------------------------------------------------------------- reads */
@@ -86,6 +118,11 @@ export class SessionManager {
     return this.byId(id);
   }
 
+  /** Public by-id lookup (used by the WorktreeManager / ServiceManager). */
+  get(id: string): Session | null {
+    return this.byId(id);
+  }
+
   /* ------------------------------------------------------------- writes */
 
   /** Create a new session inside a workspace and make it active. */
@@ -105,6 +142,12 @@ export class SessionManager {
       pinned: false,
       archived: false,
       deletedAt: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      worktreeStatus: 'none',
+      baseRef: null,
+      folder: null,
+      tags: [],
     };
 
     this.db
@@ -136,7 +179,7 @@ export class SessionManager {
     return session;
   }
 
-  /** Merge a partial patch — rename / pin / archive. Bumps `updated_at`. */
+  /** Merge a partial patch — rename / pin / archive / organize. Bumps `updated_at`. */
   update(id: string, patch: SessionUpdate): Session {
     const current = this.requireById(id);
     const next: Session = {
@@ -144,15 +187,49 @@ export class SessionManager {
       title: patch.title !== undefined ? patch.title.trim() || current.title : current.title,
       pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
       archived: patch.archived !== undefined ? patch.archived : current.archived,
+      folder:
+        patch.folder !== undefined ? (patch.folder ? patch.folder.trim() || null : null) : current.folder,
+      tags: patch.tags !== undefined ? patch.tags : current.tags,
       updatedAt: Date.now(),
     };
     this.db
       .prepare(
-        `UPDATE sessions SET title = ?, pinned = ?, archived = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE sessions SET title = ?, pinned = ?, archived = ?, folder = ?, tags = ?, updated_at = ? WHERE id = ?`,
       )
-      .run(next.title, next.pinned ? 1 : 0, next.archived ? 1 : 0, next.updatedAt, id);
+      .run(
+        next.title,
+        next.pinned ? 1 : 0,
+        next.archived ? 1 : 0,
+        next.folder,
+        JSON.stringify(next.tags),
+        next.updatedAt,
+        id,
+      );
     this.broadcast();
     return next;
+  }
+
+  /**
+   * Persist a session's worktree association (called only by the
+   * WorktreeManager after a real `git worktree` operation). Does NOT bump
+   * `updated_at` for status-only transitions so recovery sweeps don't reorder
+   * the sidebar.
+   */
+  setWorktree(id: string, patch: SessionWorktreePatch): Session {
+    const current = this.requireById(id);
+    this.db
+      .prepare(
+        `UPDATE sessions SET worktree_path = ?, worktree_branch = ?, worktree_status = ?, base_ref = ? WHERE id = ?`,
+      )
+      .run(
+        patch.worktreePath,
+        patch.worktreeBranch,
+        patch.worktreeStatus,
+        patch.baseRef !== undefined ? patch.baseRef : current.baseRef,
+        id,
+      );
+    this.broadcast();
+    return this.requireById(id);
   }
 
   /**
@@ -170,14 +247,20 @@ export class SessionManager {
       updatedAt: now,
       pinned: false,
       deletedAt: null,
+      // The clone never shares the source's worktree directory — resuming two
+      // agents in one working tree defeats the isolation model. The caller may
+      // provision a fresh worktree from the same base afterwards.
+      worktreePath: null,
+      worktreeBranch: null,
+      worktreeStatus: 'none',
     };
 
     const clone = this.db.transaction(() => {
       this.db
         .prepare(
           `INSERT INTO sessions
-            (id, workspace_id, title, branch, status, created_at, updated_at, pinned, archived, deleted_at, adds, dels, unread, mode)
-           VALUES (@id, @workspace_id, @title, @branch, @status, @created_at, @updated_at, @pinned, @archived, @deleted_at, @adds, @dels, @unread, @mode)`,
+            (id, workspace_id, title, branch, status, created_at, updated_at, pinned, archived, deleted_at, adds, dels, unread, mode, base_ref, folder, tags)
+           VALUES (@id, @workspace_id, @title, @branch, @status, @created_at, @updated_at, @pinned, @archived, @deleted_at, @adds, @dels, @unread, @mode, @base_ref, @folder, @tags)`,
         )
         .run({
           id: copy.id,
@@ -194,6 +277,9 @@ export class SessionManager {
           dels: copy.dels,
           unread: 0,
           mode: copy.mode ?? null,
+          base_ref: copy.baseRef,
+          folder: copy.folder,
+          tags: JSON.stringify(copy.tags),
         });
 
       // Copy the transcript / activity so the clone opens with the same history.
@@ -310,14 +396,94 @@ export class SessionManager {
     status: { branch?: string; adds: number; dels: number },
   ): void {
     const branch = status.branch ?? SESSION_DEFAULTS.branch;
+    // Worktree-backed sessions track their OWN branch/diff (stamped via
+    // applySessionGitStatus from their own root) — never overwrite them with
+    // the shared workspace checkout's status.
     const info = this.db
       .prepare(
         `UPDATE sessions SET branch = ?, adds = ?, dels = ?
-          WHERE workspace_id = ? AND deleted_at IS NULL
+          WHERE workspace_id = ? AND deleted_at IS NULL AND worktree_path IS NULL
             AND (branch != ? OR adds != ? OR dels != ?)`,
       )
       .run(branch, status.adds, status.dels, workspaceId, branch, status.adds, status.dels);
     if (info.changes > 0) this.broadcast();
+  }
+
+  /**
+   * Apply live git status from a *worktree* to the single session that owns it
+   * (the worktree checkout has its own branch + diff, independent of the
+   * workspace checkout). Same no-reorder / no-churn semantics as
+   * {@link applyGitStatus}.
+   */
+  applySessionGitStatus(
+    sessionId: string,
+    status: { branch?: string; adds: number; dels: number },
+  ): void {
+    const branch = status.branch ?? SESSION_DEFAULTS.branch;
+    const info = this.db
+      .prepare(
+        `UPDATE sessions SET branch = ?, adds = ?, dels = ?
+          WHERE id = ? AND deleted_at IS NULL
+            AND (branch != ? OR adds != ? OR dels != ?)`,
+      )
+      .run(branch, status.adds, status.dels, sessionId, branch, status.adds, status.dels);
+    if (info.changes > 0) this.broadcast();
+  }
+
+  /**
+   * The session's unified engineering timeline — activity feed, diagnostics,
+   * and git checkpoints merged chronologically, plus synthetic lifecycle rows.
+   * Derived by query over the already-persisted tables (no duplicate storage,
+   * so it can never drift from its sources). Most recent first.
+   */
+  getTimeline(sessionId: string, limit = 200): SessionTimelineEntry[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, 'activity' AS kind, type AS label, payload AS detail, created_at
+           FROM agent_activity WHERE session_id = ?
+         UNION ALL
+         SELECT id, 'diagnostic' AS kind, label, detail, created_at
+           FROM agent_diagnostics WHERE session_id = ?
+         UNION ALL
+         SELECT id, 'checkpoint' AS kind, label, files AS detail, created_at
+           FROM git_checkpoints WHERE session_id = ?
+         ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(sessionId, sessionId, sessionId, limit) as Array<{
+      id: string;
+      kind: SessionTimelineEntry['kind'];
+      label: string;
+      detail: string | null;
+      created_at: number;
+    }>;
+
+    const entries: SessionTimelineEntry[] = rows.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      label: r.label,
+      detail: r.detail ?? undefined,
+      at: r.created_at,
+    }));
+
+    const session = this.byId(sessionId);
+    if (session) {
+      entries.push({
+        id: `${sessionId}:created`,
+        kind: 'lifecycle',
+        label: 'Session created',
+        at: session.createdAt,
+      });
+      if (session.archived) {
+        entries.push({
+          id: `${sessionId}:archived`,
+          kind: 'lifecycle',
+          label: 'Session archived',
+          at: session.updatedAt,
+        });
+      }
+    }
+    entries.sort((a, b) => b.at - a.at);
+    return entries.slice(0, limit);
   }
 
   /**
@@ -372,6 +538,23 @@ export class SessionManager {
       win.webContents.send(IpcEvents.sessionsUpdated);
       win.webContents.send(IpcEvents.sessionActiveChanged, active);
     }
+
+    // Notify in-process listeners only when the active session's execution root
+    // could actually differ (switch, worktree created/removed/missing) so the
+    // watcher/index/git retarget path never churns on unrelated broadcasts.
+    const key = active
+      ? `${active.id}:${active.worktreePath ?? ''}:${active.worktreeStatus}`
+      : null;
+    if (key !== this.lastActiveKey) {
+      this.lastActiveKey = key;
+      for (const cb of this.activeListeners) {
+        try {
+          cb(active);
+        } catch (err) {
+          logger.warn('session active-changed listener failed', err);
+        }
+      }
+    }
   }
 }
 
@@ -403,7 +586,37 @@ function rowToSession(row: SessionRow): Session {
     archived: row.archived === 1,
     deletedAt: row.deleted_at,
     mode: coerceMode(row.mode),
+    worktreePath: row.worktree_path,
+    worktreeBranch: row.worktree_branch,
+    worktreeStatus: coerceWorktreeStatus(row.worktree_status),
+    baseRef: row.base_ref,
+    folder: row.folder,
+    tags: parseTags(row.tags),
   };
+}
+
+function coerceWorktreeStatus(value: string | null): WorktreeStatus {
+  if (
+    value === 'creating' ||
+    value === 'ready' ||
+    value === 'missing' ||
+    value === 'removing'
+  ) {
+    return value;
+  }
+  return 'none';
+}
+
+/** Parse the persisted JSON tags column defensively (never throws). */
+function parseTags(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((t): t is string => typeof t === 'string');
+  } catch {
+    return [];
+  }
 }
 
 /**

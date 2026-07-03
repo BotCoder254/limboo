@@ -16,21 +16,29 @@ run against the Zustand stores, so they work from anywhere in the UI.
 | Shortcut   | Command                    | Section   |
 | ---------- | -------------------------- | --------- |
 | `Mod+K`    | Open command palette       | General   |
+| `Mod+P`    | Search everything          | General   |
 | `Mod+O`    | Open folder as workspace   | Workspace |
 | `Mod+N`    | New session                | Sessions  |
+| `Mod+Shift+N` | New session in worktree | Sessions  |
+| `Ctrl+Tab` | Next worktree tab          | Sessions  |
+| `Ctrl+Shift+Tab` | Previous worktree tab | Sessions |
+| `Mod+Shift+M` | Toggle voice input      | Agent     |
 | `Mod+B`    | Toggle activity drawer     | View      |
 | `` Mod+` `` | Toggle terminal           | View      |
 | `Mod+,`    | Open settings              | General   |
+
+A literal `Ctrl` in a combo (the tab-cycling pair) means the Control key on
+every platform, including macOS — matching editor tab muscle memory.
 
 ## Other commands (palette)
 
 These are available from the palette and the native menu / tray; not all have a
 default binding:
 
-- **Workspace** — Create workspace, Reindex workspace.
+- **Workspace** — Create workspace, Reindex workspace, Prune stale worktrees.
 - **Sessions** — Duplicate session.
 - **Agent** — New agent session, Stop the agent, Switch to Plan mode, Switch to
-  Implement mode, Approve plan and execute.
+  Ask-before-edits mode, Approve plan and execute.
 - **View** — New terminal, Show Files / Changes / Tasks / Activity, Reload.
 
 ## Adding a command

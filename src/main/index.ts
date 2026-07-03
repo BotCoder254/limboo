@@ -22,6 +22,9 @@ import { AgentManager } from './managers/AgentManager';
 import { FileSystemManager } from './managers/FileSystemManager';
 import { TerminalManager } from './managers/TerminalManager';
 import { GitManager } from './managers/GitManager';
+import { WorktreeManager } from './managers/worktree/WorktreeManager';
+import { ServiceManager } from './managers/services/ServiceManager';
+import { ProxyServer } from './managers/services/ProxyServer';
 import { MemoryManager } from './managers/memory/MemoryManager';
 import { SearchManager } from './managers/search/SearchManager';
 import { AutoUpdateManager } from './managers/AutoUpdateManager';
@@ -77,6 +80,9 @@ function bootstrap(): void {
   let fileSystem: FileSystemManager;
   let terminal: TerminalManager;
   let git: GitManager;
+  let worktrees: WorktreeManager;
+  let services: ServiceManager;
+  let proxy: ProxyServer;
   let memory: MemoryManager;
   let search: SearchManager;
   let updates: AutoUpdateManager;
@@ -107,6 +113,21 @@ function bootstrap(): void {
     fileSystem = new FileSystemManager(workspace);
     terminal = new TerminalManager(workspace, settings);
     git = new GitManager(workspace, settings);
+    // Git worktrees — first-class session isolation. The WorktreeManager is the
+    // single resolver of a session's effective execution root; agent / terminal /
+    // git / file-watcher / search all consult it instead of deriving paths.
+    worktrees = new WorktreeManager(workspace, sessions, settings);
+    worktrees.setTerminalManager(terminal);
+    // Scripts & Services — supervised per-session processes from limboo.json.
+    // Stopped before any worktree removal (open handles = EBUSY on Windows).
+    services = new ServiceManager(sessions, settings);
+    services.setTerminalManager(terminal);
+    services.setConfigSource(worktrees);
+    worktrees.setServiceManager(services);
+    // Loopback-only *.localhost reverse proxy (off by default; Settings › Git).
+    proxy = new ProxyServer(services, settings);
+    proxy.sync();
+    settings.onChange(() => proxy.sync());
     // The Local Memory System — a platform service owned by the app, not the
     // agent. Seeds default memories on first run and injects relevant knowledge
     // into prompts before they reach the harness.
@@ -140,6 +161,13 @@ function bootstrap(): void {
     fileSystem.setGitManager(git);
     // The File System Layer drives incremental search reindexing on tree changes.
     fileSystem.setSearchManager(search);
+    // Worktree-backed sessions: every subsystem resolves the session's isolated
+    // checkout through the WorktreeManager (agent cwd, terminal cwd, git root,
+    // search scope). The resolvers are cheap, synchronous DB lookups.
+    agent.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
+    terminal.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
+    git.setActiveRootResolver((workspaceId) => worktrees.resolveActiveRoot(workspaceId));
+    search.setActiveRootResolver((workspaceId) => worktrees.resolveActiveRoot(workspaceId));
     // The Voice subsystem — local speech (sherpa-onnx) as another input/output
     // modality of the SAME agent session. The model store owns downloads; the
     // manager orchestrates capture/TTS and taps the agent event stream.
@@ -158,6 +186,8 @@ function bootstrap(): void {
       fs: fileSystem,
       terminal,
       git,
+      worktree: worktrees,
+      services,
       memory,
       search,
       updates,
@@ -171,22 +201,58 @@ function bootstrap(): void {
     // Begin the auto-update check + hourly poll (packaged builds only).
     updates.start();
 
-    // File System Layer: watch + index the active workspace, and follow every
-    // subsequent active-workspace change (open / switch / clear). Each newly
-    // active workspace also seeds its starter memories (idempotent).
-    workspace.onActiveChanged((ws) => {
-      fileSystem.setActiveWorkspace(ws);
-      if (ws) {
-        memory.seedDefaults(ws.id);
-        void search.indexWorkspace(ws.id).catch((err) => logger.warn('search index failed', err));
+    // File System Layer: watch + index the *effective root* — the workspace
+    // path, or the active session's worktree checkout when it owns one — and
+    // follow every active-workspace AND active-session change. The retarget is
+    // guarded by the last effective root so unrelated session broadcasts (and
+    // switches between plain sessions) never churn the watcher or the index.
+    let lastEffectiveRoot: string | null = null;
+    const retargetEffectiveRoot = (): void => {
+      const ws = workspace.getActive();
+      if (!ws) {
+        lastEffectiveRoot = null;
+        void fileSystem.stopWatching();
+        return;
       }
+      const active = sessions.getActive();
+      const root = worktrees.resolveActiveRoot(ws.id) ?? ws.path;
+      const owner =
+        active && active.workspaceId === ws.id && active.worktreePath && root !== ws.path
+          ? active.id
+          : null;
+      fileSystem.setActiveTarget(ws, root, owner);
+      if (root !== lastEffectiveRoot) {
+        lastEffectiveRoot = root;
+        git.invalidate(ws.id);
+        void search.indexWorkspace(ws.id).catch((err) => logger.warn('search index failed', err));
+        // Recovery/activation: start the session's autoStart services (only
+        // when the workspace already acknowledged the repo's limboo.json).
+        if (owner) services.autoStartForSession(owner);
+      }
+    };
+    workspace.onActiveChanged((ws) => {
+      retargetEffectiveRoot();
+      if (ws) memory.seedDefaults(ws.id);
     });
+    // Session switches (and worktree create/remove/missing on the active
+    // session) retarget the same way — the SessionManager only emits when the
+    // active session's execution root could actually differ.
+    sessions.onActiveChanged(() => retargetEffectiveRoot());
+    // Before a worktree directory is removed, fully release the watcher handles
+    // inside it (Windows EBUSY) — the post-removal broadcast retargets afresh.
+    worktrees.setReleaseRootHook(async () => {
+      lastEffectiveRoot = null;
+      await fileSystem.stopWatching();
+    });
+
     const initialWs = workspace.getActive();
-    fileSystem.setActiveWorkspace(initialWs);
-    if (initialWs) {
-      memory.seedDefaults(initialWs.id);
-      void search.indexWorkspace(initialWs.id).catch((err) => logger.warn('search index failed', err));
-    }
+    // Boot-time worktree recovery (repair/prune + flag missing directories)
+    // runs before the first retarget so a vanished worktree never gets watched.
+    void worktrees
+      .recover()
+      .catch((err) => logger.warn('worktree recovery failed', err))
+      .finally(() => retargetEffectiveRoot());
+    if (initialWs) memory.seedDefaults(initialWs.id);
 
     // Low-frequency memory maintenance (decay/flag stale entries). Off the hot
     // path; runs hourly and once shortly after boot.
@@ -217,6 +283,8 @@ function bootstrap(): void {
   app.on('before-quit', () => {
     agent?.cleanup();
     void fileSystem?.dispose();
+    proxy?.stop();
+    services?.dispose();
     terminal?.dispose();
     updates?.dispose();
     voice?.dispose();

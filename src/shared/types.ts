@@ -232,6 +232,39 @@ export interface AppSettings {
     pull: {
       strategy: 'ff-only' | 'rebase';
     };
+    /**
+     * Git worktree preferences — a session may own an isolated worktree (its own
+     * directory + branch) so parallel sessions never contend for one working
+     * tree. ALL worktree + hook settings live here in the Git category.
+     */
+    worktrees: {
+      /** Offer "New session in worktree" and worktree-backed flows. */
+      enabled: boolean;
+      /** Absolute root for worktree checkouts ('' = {userData}/worktrees). */
+      root: string;
+      /** Prefix for auto-generated worktree branches (e.g. limboo/<slug>). */
+      branchPrefix: string;
+      /** Run the repo's setup hooks (limboo.json) after a worktree is created. */
+      autoSetup: boolean;
+      /** Require explicit confirmation before running setup/teardown hooks. */
+      confirmHooks: boolean;
+      /** Run teardown hooks + remove the worktree directory when archiving. */
+      teardownOnArchive: boolean;
+    };
+    /**
+     * Scripts & Services supervision — long-running dev processes (servers,
+     * workers) owned by a session, auto-assigned a loopback port and optionally
+     * exposed through the local *.localhost reverse proxy.
+     */
+    services: {
+      /** Lowest / highest port auto-assigned to a supervised service. */
+      portRangeStart: number;
+      portRangeEnd: number;
+      /** Expose services through the loopback-only *.localhost reverse proxy. */
+      proxyEnabled: boolean;
+      /** Loopback port the reverse proxy listens on. */
+      proxyPort: number;
+    };
   };
   /**
    * Local Memory System — a provider-independent platform service that preserves
@@ -494,13 +527,87 @@ export interface Session {
   deletedAt: number | null;
   /** Last composer permission mode used for this session (drives the selector). */
   mode?: SessionPermissionMode;
+  /**
+   * Absolute path of the session's dedicated git worktree, or null when the
+   * session works directly in the shared workspace checkout. A worktree-backed
+   * session is an isolated engineering environment: its own directory + branch,
+   * so parallel sessions never contend for one working tree.
+   */
+  worktreePath: string | null;
+  /** Branch checked out in the session's worktree (null without a worktree). */
+  worktreeBranch: string | null;
+  /** Lifecycle of the session's worktree directory. */
+  worktreeStatus: WorktreeStatus;
+  /** The ref the worktree branch was created from (recreate/duplicate base). */
+  baseRef: string | null;
+  /** User-defined sidebar folder (grouping); null = ungrouped. */
+  folder: string | null;
+  /** Orthogonal user-defined tags (bounded + sanitized in the main process). */
+  tags: string[];
 }
 
-/** Renderer-supplied patch for a session update (rename / pin / archive). */
+/** Lifecycle of a session's git worktree directory. */
+export type WorktreeStatus = 'none' | 'creating' | 'ready' | 'missing' | 'removing';
+
+/** One entry parsed from `git worktree list --porcelain`, joined to sessions. */
+export interface WorktreeInfo {
+  path: string;
+  /** Checked-out branch ref (short name), absent when detached/bare. */
+  branch?: string;
+  head?: string;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+  /** The Limboo session that owns this worktree, when one does. */
+  sessionId?: string;
+  sessionTitle?: string;
+}
+
+/**
+ * Everything a session owns, summarized before permanent removal so the user
+ * can preserve selected resources (branch / worktree) while removing the rest.
+ */
+export interface SessionDependencies {
+  worktree: { path: string; exists: boolean; dirty: boolean } | null;
+  branch: { name: string; exists: boolean } | null;
+  terminals: number;
+  checkpoints: number;
+  memoryLinks: number;
+  hasPlan: boolean;
+}
+
+/**
+ * One entry in a session's unified engineering timeline — a merged, chronological
+ * view over the activity feed, diagnostics, git checkpoints, and lifecycle
+ * events. Read-only; derived by query, never stored separately.
+ */
+export interface SessionTimelineEntry {
+  id: string;
+  kind: 'activity' | 'diagnostic' | 'checkpoint' | 'lifecycle';
+  label: string;
+  detail?: string;
+  /** Epoch ms. */
+  at: number;
+}
+
+/** Options accompanying a session delete (what to do with owned resources). */
+export interface SessionDeleteOptions {
+  /** Remove the worktree directory (forced when dirty only if user confirmed). */
+  removeWorktree?: boolean;
+  /** Also delete the worktree branch (default: keep it). */
+  deleteBranch?: boolean;
+  /** Force worktree removal even when the tree is dirty. */
+  force?: boolean;
+}
+
+/** Renderer-supplied patch for a session update (rename / pin / archive / organize). */
 export interface SessionUpdate {
   title?: string;
   pinned?: boolean;
   archived?: boolean;
+  /** Sidebar folder; null clears the grouping. */
+  folder?: string | null;
+  tags?: string[];
 }
 
 /** Sort order for the sessions sidebar. */
@@ -996,6 +1103,71 @@ export interface WorkspaceConfig {
    * `.claude/settings.json` `permissions.defaultMode`. Undefined = inherit global.
    */
   planDefaultMode?: SessionPermissionMode;
+  /**
+   * SHA-256 of the repo's limboo.json hooks the user has acknowledged. Repo
+   * config is untrusted until acknowledged: setup/teardown hooks only run when
+   * this matches the current config (or the user just confirmed the commands).
+   */
+  hooksAckHash?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Worktree repo config + Scripts & Services                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The repo-authored `limboo.json` at the workspace/worktree root: worktree
+ * setup/teardown hooks, named scripts, and supervised services. Parsed and
+ * strictly validated in the main process (size-capped, whitelisted names,
+ * length-capped commands, prototype-pollution rejected) — see
+ * `managers/worktree/config.ts`.
+ */
+export interface RepoConfig {
+  /** Commands run sequentially right after a worktree is created. */
+  setup: string[];
+  /** Commands run before a worktree is removed (archive / delete). */
+  teardown: string[];
+  /** On-demand named commands (test, lint, migrate, …). */
+  scripts: Record<string, string>;
+  /** Long-running processes supervised per session. */
+  services: Record<string, RepoServiceConfig>;
+}
+
+export interface RepoServiceConfig {
+  command: string;
+  /** Start automatically when the session's worktree comes up. */
+  autoStart: boolean;
+  /** Respawn policy after an unexpected exit. */
+  restart: 'no' | 'on-failure';
+}
+
+export type ServiceStatus = 'starting' | 'running' | 'exited' | 'crashed' | 'stopped';
+
+/** A supervised service instance owned by one session. */
+export interface ServiceInfo {
+  sessionId: string;
+  name: string;
+  status: ServiceStatus;
+  /** Loopback port assigned from the configured range (null until started). */
+  port: number | null;
+  /** Direct URL (http://127.0.0.1:<port>) once running. */
+  url: string | null;
+  /** Deterministic *.localhost URL when the reverse proxy is enabled. */
+  proxyUrl: string | null;
+  /** Terminal streaming this service's output. */
+  terminalId: string | null;
+  /** Consecutive on-failure respawns since the last clean start. */
+  restarts: number;
+  autoStart: boolean;
+}
+
+/** Repo config + acknowledgment state, as served to the renderer. */
+export interface RepoConfigState {
+  config: RepoConfig | null;
+  /** SHA-256 over the hooks portion — pass back to run what was displayed. */
+  hash: string;
+  /** True when the workspace has already acknowledged these hooks. */
+  acked: boolean;
 }
 
 /** Groundable repository statistics (no indexing/search engine required yet). */
@@ -1136,7 +1308,7 @@ export interface FileHistoryEntry {
 export type TerminalStatus = 'running' | 'exited' | 'crashed';
 
 /** Who opened a terminal — a user action or the coding agent. */
-export type TerminalOrigin = 'user' | 'agent';
+export type TerminalOrigin = 'user' | 'agent' | 'hook' | 'service';
 
 /**
  * A managed terminal session. The PTY itself lives in the main process
@@ -1153,6 +1325,8 @@ export interface TerminalSession {
   shell: string;
   status: TerminalStatus;
   origin: TerminalOrigin;
+  /** The session this terminal belongs to (worktree terminals / hooks / services). */
+  sessionId?: string;
   createdAt: number;
   /** Exit code, once the PTY has exited. */
   exitCode?: number;
@@ -1180,6 +1354,8 @@ export interface TerminalCreateOptions {
   rows?: number;
   /** Marks an agent-initiated terminal (used for the mirror flow). */
   origin?: TerminalOrigin;
+  /** Owning session — a worktree-backed session's terminals spawn in its worktree. */
+  sessionId?: string;
 }
 
 /** Status of a mirrored agent command record. */
@@ -1685,7 +1861,10 @@ export interface VoiceTtsChunk {
  */
 export type CommandId =
   | 'session.new'
+  | 'session.newInWorktree'
   | 'session.duplicate'
+  | 'session.nextTab'
+  | 'session.prevTab'
   | 'drawer.toggleFiles'
   | 'drawer.toggleChanges'
   | 'drawer.toggleTasks'
@@ -1706,4 +1885,5 @@ export type CommandId =
   | 'plan.approve'
   | 'terminal.toggle'
   | 'terminal.new'
+  | 'worktree.prune'
   | 'voice.toggle';

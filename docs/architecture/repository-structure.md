@@ -48,8 +48,12 @@ src/
 |   |-- window/            createWindow.ts (frameless, sandbox) + windowState.ts
 |   |-- db/                database.ts (SQLite schema + migrations)
 |   |-- managers/          one manager per responsibility (+ git/, fs/, memory/,
-|   |                      workspace/ submodules)
-|   `-- ipc/               registry.ts (handle wrapper) + *Handlers + registerAllIpc
+|   |                      search/, voice/, workspace/, worktree/ (worktree
+|   |                      lifecycle + limboo.json), services/ (Scripts &
+|   |                      Services supervisor + localhost proxy) submodules;
+|   |                      git/refs.ts sanitizes user-supplied refs)
+|   `-- ipc/               registry.ts (handle wrapper) + *Handlers (incl.
+|                          worktreeHandlers, serviceHandlers) + registerAllIpc
 |-- preload/
 |   `-- index.ts           the ONLY bridge — exposes window.limboo.*
 `-- renderer/            React UI (presentation only)

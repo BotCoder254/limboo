@@ -42,6 +42,7 @@ import type { WorkspaceManager } from './WorkspaceManager';
 import type { SettingsManager } from './SettingsManager';
 import type { MemoryManager } from './memory/MemoryManager';
 import { assertInsideRepo, gitText, runGit } from './git/exec';
+import { sanitizeRef } from './git/refs';
 import {
   LOG_FORMAT,
   parseBlame,
@@ -70,6 +71,12 @@ export class GitManager {
   private readonly rootCache = new Map<string, string | null>();
   /** Optional Local Memory System — commits become proposed memories. */
   private memory?: MemoryManager;
+  /**
+   * Resolves the workspace's *effective* root — the active session's worktree
+   * when it owns one, else the workspace path. Injected by the composition
+   * root; the root cache is invalidated there on every active-session change.
+   */
+  private activeRootResolver: ((workspaceId: string) => string | null) | null = null;
 
   constructor(
     private readonly workspace: WorkspaceManager,
@@ -81,13 +88,24 @@ export class GitManager {
     this.memory = memory;
   }
 
+  /** Inject the active-root resolver (worktree-backed sessions). */
+  setActiveRootResolver(resolve: (workspaceId: string) => string | null): void {
+    this.activeRootResolver = resolve;
+  }
+
   private get db(): Database.Database {
     return getDb();
   }
 
   /* ----------------------------------------------------------- repo root */
 
-  /** Resolve the git repository root for a workspace, or null when not a repo. */
+  /**
+   * Resolve the git root every operation runs in. For a plain session this is
+   * the workspace repo root; when the active session owns a worktree it is the
+   * worktree checkout (rev-parse inside a linked worktree returns the worktree
+   * path, and all 30+ git ops inherit it with no further changes). The cache is
+   * invalidated on `init` and on every active-session change.
+   */
   private async resolveRoot(workspaceId: string): Promise<string | null> {
     if (this.rootCache.has(workspaceId)) return this.rootCache.get(workspaceId) ?? null;
     const ws = this.workspace.getById(workspaceId);
@@ -95,7 +113,8 @@ export class GitManager {
       this.rootCache.set(workspaceId, null);
       return null;
     }
-    const top = await gitText(ws.path, ['rev-parse', '--show-toplevel']);
+    const base = this.activeRootResolver?.(workspaceId) ?? ws.path;
+    const top = await gitText(base, ['rev-parse', '--show-toplevel']);
     const root = top ? path.normalize(top) : null;
     this.rootCache.set(workspaceId, root);
     return root;
@@ -685,21 +704,6 @@ function rowToCheckpoint(row: CheckpointRow): GitCheckpoint {
     files,
     createdAt: row.created_at,
   };
-}
-
-/**
- * Reject ref/revision strings that try to smuggle options (leading `-`) or shell
- * metacharacters. Refs are still passed as a single argv element, so this is
- * defense in depth against `--upload-pack=…`-style argument injection.
- */
-function sanitizeRef(ref: string): string {
-  if (typeof ref !== 'string' || ref.length === 0 || ref.length > GIT_LIMITS.refNameMax) {
-    throw new Error('git: invalid ref');
-  }
-  if (ref.startsWith('-') || /[\s~^:?*[\\\0]/.test(ref)) {
-    throw new Error('git: unsafe ref');
-  }
-  return ref;
 }
 
 /**
