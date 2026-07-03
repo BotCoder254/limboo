@@ -64,12 +64,17 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   );
   const defaultMode: SessionPermissionMode = workspaceDefaultMode ?? globalDefaultMode;
 
-  // Per-session composer mode, defaulting to the resolved Plan-first default.
-  // Reset to the default whenever the active session changes.
-  const [mode, setMode] = useState<SessionPermissionMode>(defaultMode);
-  useEffect(() => {
-    setMode(defaultMode);
-  }, [sessionId, defaultMode]);
+  // Per-session composer mode, owned by the agent store so plan approval can
+  // flip a session out of Plan mode (see composerModeBySession). A session with
+  // no stored entry uses the resolved Plan-first default.
+  const storedMode = useAgentStore((s) =>
+    sessionId ? s.composerModeBySession[sessionId] : undefined,
+  );
+  const setComposerMode = useAgentStore((s) => s.setComposerMode);
+  const mode: SessionPermissionMode = storedMode ?? defaultMode;
+  const setMode = (next: SessionPermissionMode) => {
+    if (sessionId) setComposerMode(sessionId, next);
+  };
 
   const busy = !!phase && RUNNING_PHASES.has(phase);
   const restricted = lifecycle === 'rate-limited' || lifecycle === 'auth-required';

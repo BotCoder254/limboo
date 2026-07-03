@@ -45,6 +45,10 @@ export interface PlanOutline {
   phases: OutlinePhase[];
   taskCount: number;
   completed: number;
+  /** How many live harness todos were matched onto outline tasks by
+   *  {@link applyRuntime} — lets the panel detect a failed overlay and fall
+   *  back to showing the raw checklist. */
+  matched: number;
 }
 
 const HEADING = /^(#{1,6})\s+(.*)$/;
@@ -161,7 +165,7 @@ export function parsePlanOutline(markdown: string): PlanOutline {
   }
 
   const taskCount = phases.reduce((n, p) => n + p.tasks.length, 0);
-  return { phases, taskCount, completed: 0 };
+  return { phases, taskCount, completed: 0, matched: 0 };
 }
 
 export interface OutlineRuntime {
@@ -175,36 +179,87 @@ export interface OutlineRuntime {
   running?: boolean;
 }
 
-const STATUS_RANK: Record<TaskStatus, number> = { pending: 0, in_progress: 1, completed: 2 };
+/** Words too generic to signal that a todo and an outline task are the same. */
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'to', 'and', 'of', 'in', 'for', 'with', 'on',
+  'fix', 'add', 'update', 'implement', 'create', 'make',
+]);
+
+/** Distinctive word tokens of a label (normalized, stopwords dropped). */
+function tokens(s: string): Set<string> {
+  return new Set(norm(s).split(' ').filter((w) => w.length > 1 && !STOPWORDS.has(w)));
+}
+
+/** Jaccard similarity between two token sets (0..1). */
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter += 1;
+  return inter / (a.size + b.size - inter);
+}
+
+/** Minimum similarity for a todo↔task pairing to count as a match. */
+const MATCH_THRESHOLD = 0.5;
 
 /**
  * Overlay live execution status from the harness `TaskItem[]` onto a parsed
- * outline by fuzzy title match. When the outline can't be matched (no plan text),
- * callers fall back to rendering the flat checklist instead.
+ * outline. The agent's TodoWrite labels rarely repeat the plan's bullet titles
+ * verbatim, so exact/substring matching alone left the outline frozen while the
+ * run completed. Matching is now a deterministic greedy best-match assignment:
+ * exact/substring on the normalized labels scores 1, otherwise word-token
+ * Jaccard overlap; pairs under {@link MATCH_THRESHOLD} are dropped, and each
+ * todo/task participates in at most one pairing. `matched` reports how many
+ * todos landed, so the panel can fall back to the flat checklist when the
+ * overlay failed. Pure + deterministic — safe to run on every streamed delta.
  */
 export function applyRuntime(outline: PlanOutline, runtime: OutlineRuntime): PlanOutline {
-  const todos = runtime.tasks ?? [];
-  const normedTodos = todos.map((t) => ({ n: norm(t.label), status: t.status ?? (t.done ? 'completed' : 'pending') }));
+  const todos = (runtime.tasks ?? []).map((t, i) => ({
+    index: i,
+    n: norm(t.label),
+    toks: tokens(t.label),
+    status: (t.status ?? (t.done ? 'completed' : 'pending')) as TaskStatus,
+  }));
 
-  const match = (title: string): TaskStatus | undefined => {
-    const n = norm(title);
-    if (!n) return undefined;
-    let best: { status: TaskStatus; rank: number } | undefined;
-    for (const td of normedTodos) {
-      if (!td.n) continue;
-      if (td.n === n || td.n.includes(n) || n.includes(td.n)) {
-        const rank = STATUS_RANK[td.status];
-        if (!best || rank > best.rank) best = { status: td.status, rank };
-      }
+  const flat: Array<{ task: OutlineTask; n: string; toks: Set<string> }> = [];
+  for (const p of outline.phases) {
+    for (const t of p.tasks) flat.push({ task: t, n: norm(t.title), toks: tokens(t.title) });
+  }
+
+  // Score every (todo, task) pair, keep the plausible ones, then assign
+  // greedily by (score desc, todo index asc, task order asc) — deterministic.
+  const pairs: Array<{ score: number; todo: number; taskIdx: number }> = [];
+  for (const td of todos) {
+    if (!td.n) continue;
+    for (let i = 0; i < flat.length; i++) {
+      const ot = flat[i];
+      if (!ot.n) continue;
+      const exact = td.n === ot.n || td.n.includes(ot.n) || ot.n.includes(td.n);
+      const score = exact ? 1 : jaccard(td.toks, ot.toks);
+      if (score >= MATCH_THRESHOLD) pairs.push({ score, todo: td.index, taskIdx: i });
     }
-    return best?.status;
-  };
+  }
+  pairs.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.todo - b.todo ||
+      flat[a.taskIdx].task.order - flat[b.taskIdx].task.order,
+  );
+
+  const statusByTaskId = new Map<string, TaskStatus>();
+  const usedTodos = new Set<number>();
+  const usedTasks = new Set<number>();
+  for (const pair of pairs) {
+    if (usedTodos.has(pair.todo) || usedTasks.has(pair.taskIdx)) continue;
+    usedTodos.add(pair.todo);
+    usedTasks.add(pair.taskIdx);
+    statusByTaskId.set(flat[pair.taskIdx].task.id, todos[pair.todo].status);
+  }
 
   let completed = 0;
   const phases = outline.phases.map((p) => ({
     ...p,
     tasks: p.tasks.map((t) => {
-      const live = match(t.title);
+      const live = statusByTaskId.get(t.id);
       let status: TaskExecStatus =
         live === 'completed' ? 'completed' : live === 'in_progress' ? 'active' : 'pending';
       // Layer session-level signals onto the currently-active task only.
@@ -215,7 +270,7 @@ export function applyRuntime(outline: PlanOutline, runtime: OutlineRuntime): Pla
     }),
   }));
 
-  return { phases, taskCount: outline.taskCount, completed };
+  return { phases, taskCount: outline.taskCount, completed, matched: usedTodos.size };
 }
 
 /** Serialize an outline to a stable JSON structure for the Export → JSON action. */

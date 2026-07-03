@@ -10,6 +10,7 @@ import type { AppSettings, DeepPartial } from '@shared/types';
 import {
   AGENT_CONNECTION_LIMITS,
   AGENT_LIMITS,
+  CHAT_FONTS,
   DEFAULT_SETTINGS,
   FONT_SCALE_LIMITS,
   GIT_LIMITS,
@@ -95,6 +96,10 @@ export class SettingsManager {
       FONT_SCALE_LIMITS.min,
       FONT_SCALE_LIMITS.max,
     );
+    // Allowlist — a renderer-supplied font id must never inject arbitrary CSS.
+    if (!CHAT_FONTS.some((f) => f.id === merged.appearance.chatFont)) {
+      merged.appearance.chatFont = DEFAULT_SETTINGS.appearance.chatFont;
+    }
     merged.layout.leftWidth = clamp(
       merged.layout.leftWidth,
       LAYOUT_LIMITS.left.min,

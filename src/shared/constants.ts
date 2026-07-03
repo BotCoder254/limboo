@@ -164,6 +164,28 @@ export const VOICE_LIMITS = {
 
 export const FONT_SCALE_LIMITS = { min: 0.85, max: 1.3, default: 1 } as const;
 
+/**
+ * Chat/LLM-stream fonts offered in Settings › Appearance. `family` is the CSS
+ * family name (empty = pure system fallback stack); `google` is the Google
+ * Fonts css2 family query used to load it (absent = no network load). This is
+ * an ALLOWLIST: the main process rejects any `chatFont` id not listed here, so
+ * a renderer-supplied value can never inject arbitrary CSS or URLs.
+ */
+export const CHAT_FONTS = [
+  { id: 'roboto', label: 'Roboto', family: '"Roboto"', google: 'Roboto:ital,wght@0,100..900;1,100..900' },
+  { id: 'inter', label: 'Inter', family: '"Inter"', google: 'Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900' },
+  { id: 'open-sans', label: 'Open Sans', family: '"Open Sans"', google: 'Open+Sans:ital,wght@0,300..800;1,300..800' },
+  { id: 'lato', label: 'Lato', family: '"Lato"', google: 'Lato:ital,wght@0,300;0,400;0,700;1,400' },
+  { id: 'source-sans-3', label: 'Source Sans 3', family: '"Source Sans 3"', google: 'Source+Sans+3:ital,wght@0,200..900;1,200..900' },
+  { id: 'noto-sans', label: 'Noto Sans', family: '"Noto Sans"', google: 'Noto+Sans:ital,wght@0,100..900;1,100..900' },
+  { id: 'ibm-plex-sans', label: 'IBM Plex Sans', family: '"IBM Plex Sans"', google: 'IBM+Plex+Sans:ital,wght@0,100..700;1,100..700' },
+  { id: 'system', label: 'System default', family: '' },
+] as const;
+
+/** Offline / pre-load fallback stack appended after every chat font. */
+export const CHAT_FONT_FALLBACK =
+  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
 /** Minimum window size enforced by the main process. */
 export const WINDOW_MIN = { width: 1024, height: 640 } as const;
 
@@ -177,6 +199,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     density: 'comfortable',
     fontScale: FONT_SCALE_LIMITS.default,
     reducedMotion: false,
+    chatFont: 'roboto',
   },
   layout: {
     leftWidth: LAYOUT_LIMITS.left.default,

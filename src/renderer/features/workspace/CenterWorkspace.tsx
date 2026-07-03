@@ -50,7 +50,7 @@ export function CenterWorkspace() {
       {/* Scroll region — the single scroller. Messages live entirely above the
           docked composer below, so they are never overlapped or clipped. */}
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-6">
-        <div className="mx-auto flex min-h-full max-w-3xl flex-col">
+        <div className="mx-auto flex min-h-full max-w-3xl flex-col chat-font">
           {session ? (
             messageCount > 0 ? (
               <ConversationView sessionId={session.id} />

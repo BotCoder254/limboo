@@ -14,20 +14,7 @@
  * turn renders as a compact right-aligned bubble.
  */
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import {
-  Check,
-  ChevronRight,
-  CircleAlert,
-  Eye,
-  FilePen,
-  FilePlus,
-  GitBranch,
-  Globe,
-  Search,
-  Terminal,
-  Wrench,
-  type LucideIcon,
-} from 'lucide-react';
+import { Check, ChevronRight, CircleAlert } from 'lucide-react';
 import type { AgentActivityItem, AgentToolCall, ChatMessage, PermissionRequest } from '@shared/types';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Spinner } from '@/renderer/components/ui';
@@ -36,7 +23,7 @@ import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
 import { Markdown } from './Markdown';
-import { MessageSkeleton } from './MessageSkeleton';
+import { MessageSkeleton, ThinkingPulse } from './MessageSkeleton';
 import { InlineApproval } from './InlineApproval';
 
 /** Activity types that surface inline in the conversation as status markers.
@@ -64,26 +51,30 @@ interface Turn {
   blocks: Block[];
 }
 
-function toolIcon(call: AgentToolCall): LucideIcon {
-  switch (call.name) {
-    case 'Read':
-      return Eye;
-    case 'Write':
-      return FilePlus;
-    case 'Edit':
-    case 'MultiEdit':
-      return FilePen;
-    case 'Bash':
-      return Terminal;
-    case 'Grep':
-    case 'Glob':
-      return Search;
-    case 'WebSearch':
-    case 'WebFetch':
-      return Globe;
-    default:
-      return Wrench;
+/** Items actually rendered inside an assistant block: text and markers pass
+ *  through, but consecutive tool calls fold into ONE group so a long run of
+ *  tools reads as a single compact line instead of a wall of rows. */
+type RenderItem =
+  | { kind: 'text'; message: ChatMessage }
+  | { kind: 'marker'; item: AgentActivityItem }
+  | { kind: 'tool-group'; key: string; calls: AgentToolCall[] };
+
+/** Collapse consecutive tool blocks into one group; text/markers break a run.
+ *  The group key is the FIRST call's id — stable while a live group appends. */
+function groupBlocks(blocks: Block[]): RenderItem[] {
+  const out: RenderItem[] = [];
+  for (const b of blocks) {
+    if (b.kind === 'tool') {
+      const last = out[out.length - 1];
+      if (last && last.kind === 'tool-group') last.calls.push(b.call);
+      else out.push({ kind: 'tool-group', key: b.call.id, calls: [b.call] });
+    } else if (b.kind === 'text') {
+      out.push({ kind: 'text', message: b.message });
+    } else {
+      out.push({ kind: 'marker', item: b.item });
+    }
   }
+  return out;
 }
 
 /** Fold the session snapshot into chronological turns. A user message opens a
@@ -256,6 +247,13 @@ const TurnView = memo(function TurnView({
   // The shimmer is the pre-first-token placeholder: only surface it while this
   // turn has produced no blocks of its own (a tool row or streamed text replaces it).
   const showSkeleton = !!thinking && turn.blocks.length === 0;
+  // Mid-turn gap: the run is still active but nothing in this turn is visibly
+  // in flight (no streaming text, no running tool) — e.g. between a tool ending
+  // and the next token. Surface a compact pulse so "working" never looks stalled.
+  const hasStreamingText = turn.blocks.some((b) => b.kind === 'text' && b.message.streaming);
+  const hasRunningTool = turn.blocks.some((b) => b.kind === 'tool' && b.call.status === 'running');
+  const showGapPulse =
+    !!thinking && turn.blocks.length > 0 && !hasStreamingText && !hasRunningTool;
   const showAssistant = turn.blocks.length > 0 || !!approval || !!waiting || showSkeleton;
   const trailing = approval ? (
     <InlineApproval request={approval} />
@@ -263,6 +261,8 @@ const TurnView = memo(function TurnView({
     <WaitingForDecision />
   ) : showSkeleton ? (
     <MessageSkeleton />
+  ) : showGapPulse ? (
+    <ThinkingPulse />
   ) : null;
   return (
     <div className="flex flex-col gap-4">
@@ -336,16 +336,19 @@ const AssistantBlock = memo(function AssistantBlock({
   trailing?: ReactNode;
 }) {
   const streaming = blocks.some((b) => b.kind === 'text' && b.message.streaming);
+  // Grouping is derived per render of an already-invalidated turn — settled
+  // turns never reach this (TurnView's memo comparator short-circuits them).
+  const items = useMemo(() => groupBlocks(blocks), [blocks]);
   return (
     <div className="flex gap-3 animate-fade-in">
       <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2">
         <Logo size={16} className={streaming ? 'animate-pulse' : undefined} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5">
-        {blocks.map((block) => {
-          if (block.kind === 'text') return <AssistantText key={block.message.id} message={block.message} />;
-          if (block.kind === 'tool') return <InlineEventRow key={block.call.id} call={block.call} />;
-          return <InlineMarkerRow key={block.item.id} item={block.item} />;
+        {items.map((it) => {
+          if (it.kind === 'text') return <AssistantText key={it.message.id} message={it.message} />;
+          if (it.kind === 'marker') return <InlineMarkerRow key={it.item.id} item={it.item} />;
+          return <ToolGroup key={it.key} calls={it.calls} />;
         })}
         {trailing}
       </div>
@@ -374,10 +377,10 @@ function openGit(path?: string): void {
 }
 
 /** A de-carded tool invocation: a lightweight inline row that reads as a
- *  continuation of the assistant's message rather than a bordered card. Keeps the
+ *  continuation of the assistant's message rather than a bordered card. No
+ *  icons by design — the tool NAME (subtle mono) is the identifier. Keeps the
  *  expandable detail and the Git / terminal click-throughs. */
 function InlineEventRow({ call }: { call: AgentToolCall }) {
-  const Icon = toolIcon(call);
   const isWeb = call.name === 'WebSearch' || call.name === 'WebFetch';
   const [open, setOpen] = useState(false);
   const expandable = !!call.detail && call.detail !== call.target;
@@ -394,7 +397,14 @@ function InlineEventRow({ call }: { call: AgentToolCall }) {
             expandable ? 'transition-colors hover:bg-surface-2' : 'cursor-default',
           )}
         >
-          <Icon size={13} className={cn('shrink-0', call.risk === 'command' ? 'text-warning' : 'text-faint')} />
+          <span
+            className={cn(
+              'shrink-0 font-mono text-[11px] font-medium leading-none',
+              call.risk === 'command' ? 'text-warning' : 'text-faint',
+            )}
+          >
+            {call.name}
+          </span>
           <span className="shrink-0 text-[12px] text-muted">{call.summary}</span>
           {call.target && (
             <span
@@ -414,9 +424,8 @@ function InlineEventRow({ call }: { call: AgentToolCall }) {
               type="button"
               title="Focus terminal"
               onClick={() => useLayoutStore.getState().setActiveTab('terminal')}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-faint transition-colors hover:bg-elevated hover:text-fg"
+              className="rounded-md px-1.5 py-0.5 text-[10px] text-faint transition-colors hover:bg-elevated hover:text-fg"
             >
-              <Terminal size={11} />
               Terminal
             </button>
           )}
@@ -425,9 +434,8 @@ function InlineEventRow({ call }: { call: AgentToolCall }) {
               type="button"
               title="Review change in Git"
               onClick={() => openGit(call.target)}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-faint transition-colors hover:bg-elevated hover:text-fg"
+              className="rounded-md px-1.5 py-0.5 text-[10px] text-faint transition-colors hover:bg-elevated hover:text-fg"
             >
-              <GitBranch size={11} />
               Git
             </button>
           )}
@@ -441,6 +449,58 @@ function InlineEventRow({ call }: { call: AgentToolCall }) {
         <pre className="ml-6 max-h-48 overflow-auto rounded-md border border-line bg-[#0a0a0a] px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
           {call.detail}
         </pre>
+      )}
+    </div>
+  );
+}
+
+/** A run of consecutive tool calls, kept compact the way Claude Code keeps its
+ *  transcript clean: while running, only the header counter + the currently
+ *  running row(s) show; once every call settles the rows fold away into a
+ *  single "Ran N tools" summary line, expandable via the chevron. */
+function ToolGroup({ calls }: { calls: AgentToolCall[] }) {
+  const [open, setOpen] = useState(false);
+  if (calls.length === 1) return <InlineEventRow call={calls[0]} />;
+
+  const running = calls.filter((c) => c.status === 'running');
+  const settled = running.length === 0;
+  const failed = calls.some((c) => c.status === 'error' || c.status === 'denied');
+  const done = calls.length - running.length;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded px-1 py-0.5 text-left text-[12px] text-muted transition-colors hover:bg-surface-2"
+      >
+        <ChevronRight
+          size={13}
+          className={cn('shrink-0 text-faint transition-transform', open && 'rotate-90')}
+        />
+        <span>{settled ? `Ran ${calls.length} tools` : `Running tools… ${done}/${calls.length}`}</span>
+        <span className="ml-auto flex shrink-0 items-center">
+          {settled ? (
+            <span className={cn('h-1.5 w-1.5 rounded-full', failed ? 'bg-danger' : 'bg-success')} />
+          ) : (
+            <Spinner size={12} />
+          )}
+        </span>
+      </button>
+      {open ? (
+        <div className="ml-1.5 flex flex-col gap-1 border-l border-line pl-2">
+          {calls.map((c) => (
+            <InlineEventRow key={c.id} call={c} />
+          ))}
+        </div>
+      ) : (
+        !settled && (
+          <div className="ml-1.5 flex flex-col gap-1 border-l border-line pl-2">
+            {running.map((c) => (
+              <InlineEventRow key={c.id} call={c} />
+            ))}
+          </div>
+        )
       )}
     </div>
   );

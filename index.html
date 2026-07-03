@@ -11,7 +11,15 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' 'unsafe-inline' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self' ws: http: https:; img-src 'self' data: blob:; object-src 'none'; frame-src 'none';"
+      content="default-src 'self' 'unsafe-inline' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; worker-src 'self' blob:; connect-src 'self' ws: http: https:; img-src 'self' data: blob:; object-src 'none'; frame-src 'none';"
+    />
+    <!-- Default chat font (Roboto). Non-default picks are injected at runtime by
+         the settings store; offline, display=swap falls back to the system stack. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap"
     />
     <title>Limboo</title>
   </head>

@@ -1,8 +1,8 @@
-/** Appearance settings — density, font scale, reduced motion. Dark-only by rule. */
+/** Appearance settings — density, font scale, chat font, reduced motion. Dark-only by rule. */
 import type { UiDensity } from '@shared/types';
-import { FONT_SCALE_LIMITS } from '@shared/constants';
+import { CHAT_FONTS, FONT_SCALE_LIMITS } from '@shared/constants';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
-import { Section, Field, StackedField, Toggle, SegmentedControl } from '../controls';
+import { Section, Field, StackedField, Toggle, SegmentedControl, Select } from '../controls';
 
 export function AppearancePanel() {
   const settings = useSettingsStore((s) => s.settings);
@@ -39,6 +39,18 @@ export function AppearancePanel() {
           className="w-full max-w-xs accent-accent"
         />
       </StackedField>
+
+      <Field
+        id="chatFont"
+        label="Chat font"
+        hint="Typeface for the conversation stream. Google fonts load when online; offline falls back to your system font."
+      >
+        <Select
+          value={settings.appearance.chatFont}
+          options={CHAT_FONTS.map((f) => ({ value: f.id, label: f.label }))}
+          onChange={(chatFont) => void update({ appearance: { chatFont } })}
+        />
+      </Field>
 
       <Field
         id="reducedMotion"

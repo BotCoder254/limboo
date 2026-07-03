@@ -316,6 +316,17 @@ function PlanView({
         tasks.length > 0 && <TaskChecklist tasks={tasks} />
       )}
 
+      {/* The fuzzy overlay can fail when the agent's TodoWrite labels don't
+          resemble the plan bullets — if fewer than half the live todos matched
+          the outline, ALSO show the raw checklist so live progress is never
+          invisible while (or after) the run executes. */}
+      {hasOutline &&
+        tasks.length > 0 &&
+        (plan.status === 'implementing' || plan.status === 'completed') &&
+        outline.matched < Math.ceil(tasks.length / 2) && (
+          <TaskChecklist tasks={tasks} title="Live progress" />
+        )}
+
       {/* Revision history */}
       {historyOpen && sessionId && <HistorySection sessionId={sessionId} plan={plan} />}
     </div>
@@ -708,12 +719,12 @@ function PlanMetaRow({ meta, highlightRisk }: { meta: PlanMeta; highlightRisk: b
   );
 }
 
-function TaskChecklist({ tasks }: { tasks: TaskItem[] }) {
+function TaskChecklist({ tasks, title = 'Checklist' }: { tasks: TaskItem[]; title?: string }) {
   const done = tasks.filter((t) => t.done).length;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wider text-faint">
-        <span>Checklist</span>
+        <span>{title}</span>
         <span>
           {done}/{tasks.length}
         </span>

@@ -242,10 +242,15 @@ function hardenSession(): void {
       ? MAIN_WINDOW_VITE_DEV_SERVER_URL
       : undefined;
   const isDev = !!devUrl || !app.isPackaged;
+  // Google Fonts is the ONE remote origin the renderer may load from — the
+  // stylesheet from fonts.googleapis.com (style-src) and the woff2 files from
+  // fonts.gstatic.com (font-src) power the user-selectable chat font. Nothing
+  // else is opened: connect/script/img stay locked down.
   const policy = isDev
     ? "default-src 'self' 'unsafe-inline' data: blob:; " +
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; " +
-      "style-src 'self' 'unsafe-inline'; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' data: https://fonts.gstatic.com; " +
       "worker-src 'self' blob:; " +
       "connect-src 'self' ws: http: https:; img-src 'self' data: blob:;"
     : "default-src 'self'; " +
@@ -256,7 +261,8 @@ function hardenSession(): void {
       // script loading otherwise stays locked to 'self'. worker-src is kept as
       // defensive, spec-compliant coverage.
       "script-src 'self' blob:; " +
-      "style-src 'self' 'unsafe-inline'; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' https://fonts.gstatic.com; " +
       "worker-src 'self' blob:; " +
       // media-src is defensive: voice playback uses Web Audio AudioBuffers (no
       // <audio> element), but a blob-backed fallback must never be CSP-broken.

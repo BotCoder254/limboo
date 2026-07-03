@@ -57,6 +57,8 @@ export interface AppSettings {
     fontScale: number;
     /** Honor reduced-motion / disable non-essential animations. */
     reducedMotion: boolean;
+    /** Chat/LLM-stream typeface — an id from the CHAT_FONTS allowlist. */
+    chatFont: string;
   };
   layout: {
     /** Left sessions sidebar width in px. */

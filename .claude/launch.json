@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
       "port": 5173
+    },
+    {
+      "name": "renderer-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--config", "vite.renderer.config.mts", "--port", "5273", "--strictPort"],
+      "port": 5273
     }
   ]
 }

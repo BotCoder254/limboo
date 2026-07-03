@@ -8,7 +8,7 @@
  */
 import { create } from 'zustand';
 import type { AppSettings, DeepPartial } from '@shared/types';
-import { DEFAULT_SETTINGS } from '@shared/constants';
+import { CHAT_FONTS, CHAT_FONT_FALLBACK, DEFAULT_SETTINGS } from '@shared/constants';
 import { useLayoutStore } from './useLayoutStore';
 
 interface SettingsState {
@@ -26,6 +26,33 @@ function applyAppearance(appearance: AppSettings['appearance']): void {
   root.style.setProperty('--limboo-font-scale', String(appearance.fontScale));
   root.dataset.reducedMotion = String(appearance.reducedMotion);
   root.dataset.density = appearance.density;
+  // Chat/LLM-stream typeface (see the `chat-font` utility in styles/index.css).
+  // Unknown ids fall back to the default entry — main clamps to the allowlist,
+  // but the optimistic local update must never apply an off-list value either.
+  const font = CHAT_FONTS.find((f) => f.id === appearance.chatFont) ?? CHAT_FONTS[0];
+  root.style.setProperty(
+    '--limboo-chat-font',
+    font.family ? `${font.family}, ${CHAT_FONT_FALLBACK}` : CHAT_FONT_FALLBACK,
+  );
+  ensureGoogleFontLink(font);
+}
+
+/**
+ * Inject (once) the Google Fonts stylesheet for a non-default selection.
+ * Roboto ships via the static <link> in index.html and 'system' loads nothing;
+ * every other pick gets a deduped runtime <link>. Links are left in place when
+ * switching away — cheap, and toggling back needs no refetch. Offline the
+ * request just fails and the fallback stack takes over (display=swap).
+ */
+function ensureGoogleFontLink(font: { id: string; google?: string }): void {
+  if (!font.google || font.id === 'roboto') return;
+  const id = `limboo-chat-font-${font.id}`;
+  if (document.getElementById(id)) return;
+  const link = document.createElement('link');
+  link.id = id;
+  link.rel = 'stylesheet';
+  link.href = `https://fonts.googleapis.com/css2?family=${font.google}&display=swap`;
+  document.head.appendChild(link);
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

@@ -54,7 +54,10 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Limboo
-  menuCategory: true
+  # Root-level Start-menu shortcut (no vendor subfolder) — the modern Windows
+  # standard, and it keeps "Recently added" from resolving into a stale
+  # subfolder entry left by older installs (installer.nsh scrubs those).
+  menuCategory: false
   runAfterFinish: true
   # Preserve the user's workspaces / limboo.db / memories / logs / terminal
   # history on uninstall — never wipe userData automatically.

@@ -41,3 +41,23 @@ export function MessageSkeleton() {
     </div>
   );
 }
+
+/**
+ * Compact single-line shimmer for mid-turn gaps — the run is active but no text
+ * is streaming and no tool is running (between a tool ending and the next
+ * token). Deliberately quieter than the full skeleton so it reads as "still
+ * working", not "new reply". The fade-in is delayed slightly so a sub-150ms gap
+ * between consecutive events never flashes it.
+ */
+export function ThinkingPulse() {
+  return (
+    <div
+      className="py-0.5 animate-fade-in"
+      style={{ animationDelay: '150ms', animationFillMode: 'backwards' }}
+      aria-label="Working"
+      aria-busy
+    >
+      <Line className="w-[34%]" />
+    </div>
+  );
+}

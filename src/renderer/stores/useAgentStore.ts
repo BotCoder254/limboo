@@ -64,7 +64,14 @@ interface AgentStoreState {
   pendingBySession: Record<string, PermissionRequest>;
   /** Pending AskUserQuestion clarifications, keyed by sessionId (same reasoning). */
   pendingClarificationBySession: Record<string, ClarificationRequest>;
+  /** Per-session composer permission mode. Absent = the Composer falls back to
+   *  the resolved Plan-first default (workspace override ?? global setting).
+   *  Owned here (not Composer-local state) so plan approval can flip a session
+   *  out of Plan mode the moment implementation begins. */
+  composerModeBySession: Record<string, SessionPermissionMode>;
   hydrated: boolean;
+
+  setComposerMode: (sessionId: string, mode: SessionPermissionMode) => void;
 
   hydrate: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
@@ -171,6 +178,20 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     flushDeltasNow();
 
     set((state) => {
+      const patch: Partial<AgentStoreState> = {};
+      // Plan approved (possibly from another surface or a reloaded window):
+      // once implementation starts, a composer still parked on 'plan' must flip
+      // to the ask-before-edits execution mode. approvePlan() below sets the
+      // user's explicit choice first, so this only fills the gap.
+      if (event.kind === 'plan' && event.plan.status === 'implementing') {
+        const cur = state.composerModeBySession[event.sessionId];
+        if (!cur || cur === 'plan') {
+          patch.composerModeBySession = {
+            ...state.composerModeBySession,
+            [event.sessionId]: 'default',
+          };
+        }
+      }
       const prev = state.bySession[event.sessionId] ?? emptySnapshot();
       const next: AgentSessionSnapshot = {
         messages: prev.messages,
@@ -215,7 +236,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
           break;
       }
 
-      return { bySession: { ...state.bySession, [event.sessionId]: next } };
+      return { ...patch, bySession: { ...state.bySession, [event.sessionId]: next } };
     });
 
     // Only a genuine hard failure raises a danger toast; rate-limit / auth /
@@ -238,7 +259,13 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     diagnostics: [],
     pendingBySession: {},
     pendingClarificationBySession: {},
+    composerModeBySession: {},
     hydrated: false,
+
+    setComposerMode: (sessionId, mode) =>
+      set((state) => ({
+        composerModeBySession: { ...state.composerModeBySession, [sessionId]: mode },
+      })),
 
     hydrate: async () => {
       if (get().hydrated) return;
@@ -409,6 +436,12 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     approvePlan: (sessionId, execMode) => {
       const api = window.limboo?.agent;
       if (!api?.approvePlan) return;
+      // Flip the composer out of Plan mode immediately — mirror main's coercion
+      // (approving never starts another planning pass) so the composer shows the
+      // exact mode the implementation run will use.
+      const mode: SessionPermissionMode =
+        !execMode || execMode === 'plan' ? 'default' : execMode;
+      get().setComposerMode(sessionId, mode);
       api.approvePlan(sessionId, execMode).catch((err: unknown) => {
         useUIStore.getState().addToast({
           title: 'Could not start implementation',

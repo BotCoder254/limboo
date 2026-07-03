@@ -116,6 +116,13 @@ html[data-reduced-motion="true"] *::after {
   -webkit-app-region: no-drag;
 }
 
+/* Chat/LLM-stream typeface, driven by settings.appearance.chatFont (the
+   settings store sets --limboo-chat-font). Applied to the conversation column
+   only — app chrome keeps the base sans; code blocks keep --font-mono. */
+@utility chat-font {
+  font-family: var(--limboo-chat-font, var(--font-sans));
+}
+
 /* Lightweight fade/scale used by overlays (command palette, modals). */
 @keyframes limboo-fade-in {
   from { opacity: 0; }
