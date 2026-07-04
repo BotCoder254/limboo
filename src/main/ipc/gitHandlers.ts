@@ -8,6 +8,7 @@
 import { IpcChannels } from '@shared/ipc-channels';
 import { GIT_LIMITS } from '@shared/constants';
 import type {
+  GenerateCommitMessageResult,
   GitBlameLine,
   GitBranch,
   GitCheckoutResult,
@@ -23,6 +24,7 @@ import type {
 } from '@shared/types';
 import { handle } from './registry';
 import type { GitManager } from '../managers/GitManager';
+import type { AgentManager } from '../managers/AgentManager';
 
 function assertId(id: unknown, label = 'id'): asserts id is string {
   if (typeof id !== 'string' || id.length === 0 || id.length > 128) {
@@ -55,7 +57,7 @@ function assertText(value: unknown, max: number, label: string): asserts value i
   }
 }
 
-export function registerGitHandlers(git: GitManager): void {
+export function registerGitHandlers(git: GitManager, agent: AgentManager): void {
   handle<[string], GitStatus>(IpcChannels.gitStatus, (_e, wsId) => {
     assertId(wsId, 'workspaceId');
     return git.status(wsId);
@@ -98,6 +100,26 @@ export function registerGitHandlers(git: GitManager): void {
     assertId(wsId, 'workspaceId');
     assertText(message, GIT_LIMITS.commitMessageMax, 'commit message');
     return git.commit(wsId, message);
+  });
+
+  // AI commit-message generation: the ONLY renderer input is the workspace id —
+  // all git context (status / staged diff / recent subjects) is assembled in the
+  // main process by GitManager and size-capped by GIT_LIMITS.commitGen. The
+  // sub-agent run is tool-less and only proposes text; it never commits.
+  handle<[string], GenerateCommitMessageResult>(
+    IpcChannels.gitCommitMessageGenerate,
+    async (_e, wsId) => {
+      assertId(wsId, 'workspaceId');
+      const ctx = await git.buildCommitContext(wsId);
+      if (!ctx) return { ok: false, reason: 'error', error: 'Not a git repository' };
+      if (ctx.files.length === 0) return { ok: false, reason: 'no-staged' };
+      return agent.generateCommitMessage(wsId, ctx);
+    },
+  );
+
+  handle<[string], void>(IpcChannels.gitCommitMessageCancel, (_e, wsId) => {
+    assertId(wsId, 'workspaceId');
+    agent.cancelCommitMessage(wsId);
   });
 
   handle<[string, { limit?: number; offset?: number }?], GitCommit[]>(

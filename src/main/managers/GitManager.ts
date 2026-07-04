@@ -28,6 +28,7 @@ import type {
   GitCheckoutResult,
   GitCheckpoint,
   GitCommit,
+  GitCommitContext,
   GitCommitDetail,
   GitFileChange,
   GitFileDiff,
@@ -279,6 +280,71 @@ export class GitManager {
       });
     }
     return commit;
+  }
+
+  /**
+   * Assemble the size-capped, redacted context the AI commit-message sub-agent
+   * prompts with. Read-only: entirely `runGit` output, nothing renderer-supplied
+   * beyond the workspace id, and no `notifyChanged`. Returns null for non-repos;
+   * a repo with nothing staged returns `files: []` (the handler maps that to a
+   * `no-staged` result before any model run starts).
+   */
+  async buildCommitContext(workspaceId: string): Promise<GitCommitContext | null> {
+    const root = await this.resolveRoot(workspaceId);
+    if (!root) return null;
+    const caps = GIT_LIMITS.commitGen;
+
+    const status = await this.status(workspaceId);
+    const stagedFiles = status.files.filter((f) => f.staged).slice(0, caps.filesMax);
+    if (stagedFiles.length === 0) {
+      return { root, branch: status.branch, files: [], diff: '', diffTruncated: false, recentSubjects: [] };
+    }
+
+    // Binary detection: numstat prints `-` for binary files, which parseNumstat
+    // skips — a staged file with zero adds+dels and a non-empty diff is binary
+    // for our purposes; re-check via `--numstat` directly for accuracy.
+    const numstat = await runGit(root, ['diff', '--cached', '--numstat', '-z']);
+    const binaryPaths = new Set<string>();
+    for (const entry of numstat.stdout.split('\0')) {
+      const m = /^-\t-\t(.+)$/.exec(entry);
+      if (m) binaryPaths.add(m[1]);
+    }
+
+    const diffRes = await runGit(root, ['diff', '--cached', '--no-color', '--no-ext-diff'], {
+      maxBuffer: GIT_LIMITS.diffBytesMax + 1024,
+    });
+    const rawDiff = diffRes.stdout;
+    const diffTruncated = rawDiff.length > caps.diffCharsMax;
+    const diff = redactRemote(diffTruncated ? rawDiff.slice(0, caps.diffCharsMax) : rawDiff);
+
+    // Recent subjects for style inference (unborn repo → empty list).
+    const subjectsRes = await runGit(root, [
+      'log',
+      '-n',
+      String(caps.subjectsMax),
+      '--pretty=format:%s',
+    ]);
+    const recentSubjects = subjectsRes.ok
+      ? subjectsRes.stdout
+          .split('\n')
+          .map((s) => redactRemote(s).trim())
+          .filter(Boolean)
+      : [];
+
+    return {
+      root,
+      branch: status.branch,
+      files: stagedFiles.map((f) => ({
+        path: f.path,
+        status: f.status,
+        adds: f.adds,
+        dels: f.dels,
+        binary: binaryPaths.has(f.path) || undefined,
+      })),
+      diff,
+      diffTruncated,
+      recentSubjects,
+    };
   }
 
   /** `-c user.name/email` overrides from settings (blank = inherit git config). */
@@ -748,7 +814,7 @@ function classifyPullError(out: string): Partial<GitPullResult> {
 }
 
 /** Strip any embedded credentials from a remote URL before it reaches the UI/log. */
-function redactRemote(text: string): string {
+export function redactRemote(text: string): string {
   if (typeof text !== 'string') return '';
   return text.replace(/(https?:\/\/)[^/@\s]+@/gi, '$1');
 }

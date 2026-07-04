@@ -16,14 +16,18 @@ import {
   GitBranch,
   History,
   ListChecks,
+  Minus,
+  Plus,
   RefreshCw,
   Save,
+  Sparkles,
   UploadCloud,
   X,
 } from 'lucide-react';
 import type { GitFileChange } from '@shared/types';
 import { EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
+import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useGitStore, type GitView } from '@/renderer/stores/useGitStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
@@ -301,14 +305,20 @@ function ChangesView() {
   const stageAll = useGitStore((s) => s.stageAll);
   const unstageAll = useGitStore((s) => s.unstageAll);
   const commit = useGitStore((s) => s.commit);
+  const message = useGitStore((s) => s.commitMessage);
+  const setMessage = useGitStore((s) => s.setCommitMessage);
+  const generating = useGitStore((s) => s.generatingMessage);
+  const generateMessage = useGitStore((s) => s.generateCommitMessage);
+  const cancelGenerate = useGitStore((s) => s.cancelCommitMessage);
+  const agentReady = useAgentStore((s) => s.install.installed);
   const template = useSettingsStore((s) => s.settings.git.commitMessageTemplate);
   const addToast = useUIStore((s) => s.addToast);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [message, setMessage] = useState('');
   const [committing, setCommitting] = useState(false);
 
   useEffect(() => {
-    setMessage((m) => (m === '' && template ? template : m));
+    const { commitMessage, setCommitMessage } = useGitStore.getState();
+    if (commitMessage === '' && template) setCommitMessage(template);
   }, [template]);
 
   const { staged, unstaged } = useMemo(() => splitFiles(status?.files ?? []), [status?.files]);
@@ -322,7 +332,7 @@ function ChangesView() {
 
   const doCommit = async () => {
     const trimmed = message.trim();
-    if (!trimmed) return;
+    if (!trimmed || generating) return;
     setCommitting(true);
     try {
       const ok = await commit(trimmed);
@@ -414,22 +424,73 @@ function ChangesView() {
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Commit message"
+          readOnly={generating}
+          placeholder={generating ? 'Generating commit message…' : 'Commit message'}
           rows={3}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void doCommit();
           }}
           className="w-full resize-y rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-fg placeholder:text-faint focus:border-line-strong focus:outline-none"
         />
-        <button
-          type="button"
-          disabled={staged.length === 0 || !message.trim() || committing}
-          onClick={() => void doCommit()}
-          className="flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90 disabled:opacity-40"
-        >
-          <Check size={13} />
-          {committing ? 'Committing…' : `Commit ${staged.length} file${staged.length === 1 ? '' : 's'}`}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={staged.length === 0 || !message.trim() || committing || generating}
+            onClick={() => void doCommit()}
+            title={`Commit ${staged.length} staged file${staged.length === 1 ? '' : 's'}`}
+            className="flex shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            <Check size={13} />
+            {committing ? 'Committing…' : `Commit ${staged.length}`}
+          </button>
+          <button
+            type="button"
+            disabled={unstaged.length === 0}
+            onClick={() => void stageAll()}
+            title="Stage all changes"
+            className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-muted transition-colors hover:text-fg disabled:opacity-40"
+          >
+            <Plus size={12} />
+            Stage all
+          </button>
+          <button
+            type="button"
+            disabled={staged.length === 0}
+            onClick={() => void unstageAll()}
+            title="Unstage all changes"
+            className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-muted transition-colors hover:text-fg disabled:opacity-40"
+          >
+            <Minus size={12} />
+            Unstage all
+          </button>
+          <div className="flex-1" />
+          {generating ? (
+            <button
+              type="button"
+              onClick={cancelGenerate}
+              title="Cancel generation"
+              className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-muted transition-colors hover:text-fg"
+            >
+              <X size={12} />
+              Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={staged.length === 0 || !agentReady || committing}
+              onClick={() => void generateMessage()}
+              title={
+                agentReady
+                  ? 'Generate a commit message with the agent'
+                  : 'Claude Code is not available — sign in to generate commit messages'
+              }
+              className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-accent transition-colors hover:border-line-strong disabled:opacity-40"
+            >
+              <Sparkles size={12} />
+              Generate
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

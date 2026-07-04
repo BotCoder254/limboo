@@ -25,12 +25,14 @@ import type {
   FileHistoryEntry,
   FileReadResult,
   FileTree,
+  GenerateCommitMessageResult,
   GitBlameLine,
   GitBranch,
   GitCheckoutResult,
   GitCheckpoint,
   GitCommit,
   GitCommitDetail,
+  GitCommitMessageStreamEvent,
   GitFileChange,
   GitFileDiff,
   GitPullResult,
@@ -365,6 +367,10 @@ const gitApi = {
     ipcRenderer.invoke(IpcChannels.gitDiscard, workspaceId, path),
   commit: (workspaceId: string, message: string): Promise<GitCommit | null> =>
     ipcRenderer.invoke(IpcChannels.gitCommit, workspaceId, message),
+  generateCommitMessage: (workspaceId: string): Promise<GenerateCommitMessageResult> =>
+    ipcRenderer.invoke(IpcChannels.gitCommitMessageGenerate, workspaceId),
+  cancelCommitMessage: (workspaceId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.gitCommitMessageCancel, workspaceId),
   log: (workspaceId: string, opts?: { limit?: number; offset?: number }): Promise<GitCommit[]> =>
     ipcRenderer.invoke(IpcChannels.gitLog, workspaceId, opts),
   commitDetail: (workspaceId: string, hash: string): Promise<GitCommitDetail | null> =>
@@ -418,6 +424,8 @@ const gitApi = {
     subscribe<{ workspaceId: string }>(IpcEvents.gitChanged, cb),
   onCheckpointsChanged: (cb: (payload: { sessionId: string }) => void): (() => void) =>
     subscribe<{ sessionId: string }>(IpcEvents.gitCheckpointsChanged, cb),
+  onCommitMessageStream: (cb: (ev: GitCommitMessageStreamEvent) => void): (() => void) =>
+    subscribe<GitCommitMessageStreamEvent>(IpcEvents.gitCommitMessageStream, cb),
 };
 
 const memoryApi = {

@@ -802,6 +802,43 @@ export interface GitPushResult {
   error?: string;
 }
 
+/**
+ * Context assembled in the MAIN process for AI commit-message generation. It is
+ * built entirely from `runGit` output (never renderer-supplied) and size-capped
+ * by `GIT_LIMITS.commitGen` before it reaches the sub-agent prompt.
+ */
+export interface GitCommitContext {
+  /** Resolved repo root (worktree-aware) the one-shot run uses as cwd. */
+  root: string;
+  branch?: string;
+  /** Staged files (capped at commitGen.filesMax). */
+  files: Array<{ path: string; status: GitFileStatus; adds?: number; dels?: number; binary?: boolean }>;
+  /** Staged unified diff, capped at commitGen.diffCharsMax and redacted. */
+  diff: string;
+  diffTruncated: boolean;
+  /** Recent commit subjects (newest first) for style inference, redacted. */
+  recentSubjects: string[];
+}
+
+/** One frame of the streaming AI commit-message proposal. */
+export interface GitCommitMessageStreamEvent {
+  workspaceId: string;
+  requestId: string;
+  kind: 'delta' | 'done' | 'error' | 'canceled';
+  /** delta: appended chunk; done: the FULL authoritative message (replace). */
+  text?: string;
+  /** Set when kind === 'error' (already redacted). */
+  error?: string;
+}
+
+/** Terminal result of a commit-message generation request. */
+export interface GenerateCommitMessageResult {
+  ok: boolean;
+  message?: string;
+  reason?: 'no-staged' | 'agent-unavailable' | 'busy' | 'rate-limited' | 'canceled' | 'error';
+  error?: string;
+}
+
 /** Result of `git pull` — decodes fast-forward / conflict / divergence cases. */
 export interface GitPullResult {
   ok: boolean;

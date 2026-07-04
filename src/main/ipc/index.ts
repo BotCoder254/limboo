@@ -59,7 +59,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAgentHandlers(deps.agent);
   registerFsHandlers(deps.fs);
   registerTerminalHandlers(deps.terminal);
-  registerGitHandlers(deps.git);
+  registerGitHandlers(deps.git, deps.agent);
   registerWorktreeHandlers(deps.worktree);
   registerServiceHandlers(deps.services);
   registerMemoryHandlers(deps.memory);

@@ -119,6 +119,8 @@ export const IpcChannels = {
   gitUnstageAll: 'git:unstageAll',
   gitDiscard: 'git:discard',
   gitCommit: 'git:commit',
+  gitCommitMessageGenerate: 'git:commitMessage:generate',
+  gitCommitMessageCancel: 'git:commitMessage:cancel',
   gitLog: 'git:log',
   gitCommitDetail: 'git:commitDetail',
   gitBranches: 'git:branches',
@@ -238,6 +240,8 @@ export const IpcEvents = {
   terminalCommand: 'terminal:command',
   /** The active workspace's git state changed (status/branch/commit/stage). */
   gitChanged: 'git:changed',
+  /** Streaming AI commit-message proposal (delta / done / error / canceled). */
+  gitCommitMessageStream: 'git:commit-message-stream',
   /** A session's git checkpoints changed (created / restored / pruned). */
   gitCheckpointsChanged: 'git:checkpoints-changed',
   /** The set of session worktrees changed (created / removed / pruned / missing). */

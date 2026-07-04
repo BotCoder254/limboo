@@ -84,6 +84,17 @@ export const GIT_LIMITS = {
   refNameMax: 255,
   /** Timeout (ms) for network git ops (push / pull / fetch). */
   networkTimeoutMs: 120_000,
+  /** Caps for AI commit-message generation context (main-side enforced). */
+  commitGen: {
+    /** Max chars of staged diff text included in the prompt. */
+    diffCharsMax: 60_000,
+    /** Recent log subjects included for commit-style inference. */
+    subjectsMax: 20,
+    /** Max staged file entries listed in the prompt. */
+    filesMax: 200,
+    /** Cap on the final proposed message (post-processed). */
+    messageMax: 2_000,
+  },
 } as const;
 
 /**
