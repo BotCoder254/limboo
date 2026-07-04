@@ -44,6 +44,9 @@ import type {
   DiagnosticSeverity,
   FileChange,
   FileChangeStatus,
+  GenerateCommitMessageResult,
+  GitCommitContext,
+  GitCommitMessageStreamEvent,
   PermissionDecision,
   PermissionRequest,
   PlanMeta,
@@ -59,7 +62,7 @@ import type {
   TerminalCommandRecord,
   ToolRisk,
 } from '@shared/types';
-import { ACTIVITY_LIMITS, AGENT_LIMITS } from '@shared/constants';
+import { ACTIVITY_LIMITS, AGENT_LIMITS, GIT_LIMITS } from '@shared/constants';
 import { IpcEvents } from '@shared/ipc-channels';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
@@ -171,6 +174,26 @@ const IDLE_REQUEST: RequestState = {
  */
 const DELTA_FLUSH_CHARS = 24;
 const DELTA_FLUSH_MS = 16;
+
+/* ------------------------------------------------------------------ */
+/* Git commit-message sub-agent — an isolated, tool-less one-shot run. */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Pinned haiku-class model for utility one-shots (commit messages). Deliberately
+ * NOT the user's configured chat model: summarizing a staged diff into a ≤72-char
+ * subject is fast-model work, and pinning keeps latency/cost predictable.
+ */
+const COMMIT_MESSAGE_MODEL = 'claude-haiku-4-5-20251001';
+
+const COMMIT_SYSTEM_PROMPT =
+  'You write git commit messages. Output ONLY the commit message text — no ' +
+  'preamble, no explanations, no code fences, no surrounding quotes. First ' +
+  'line: an imperative-mood subject of at most 72 characters. If the change ' +
+  'needs explanation, add one blank line then a short body wrapped at ~72 ' +
+  'columns. If the repository\'s recent commit subjects follow a consistent ' +
+  'convention (e.g. "feat:", "fix(scope):"), match it; otherwise use a plain ' +
+  'imperative subject.';
 
 function classifyTool(name: string): ToolRisk {
   if (WRITE_TOOLS.has(name)) return 'write';
@@ -350,6 +373,15 @@ export class AgentManager {
    * whichever session most recently touched the state.
    */
   private readonly requests = new Map<string, RequestState>();
+  /**
+   * One in-flight commit-message generation per workspace. Kept fully apart
+   * from {@link runs}: these one-shots never touch lifecycle, transcripts,
+   * plans, or the conversation event stream.
+   */
+  private readonly commitGenRuns = new Map<
+    string,
+    { abort: AbortController; query: { close?: () => void } | null }
+  >();
   /** Pending permission prompts awaiting a renderer decision, keyed by request id. */
   private readonly pending = new Map<
     string,
@@ -858,9 +890,200 @@ export class AgentManager {
   /** Abort every active run + stop all supervision timers. Called on quit. */
   cleanup(): void {
     for (const sessionId of [...this.runs.keys()]) this.stop(sessionId);
+    for (const workspaceId of [...this.commitGenRuns.keys()]) this.cancelCommitMessage(workspaceId);
     this.stopHeartbeat();
     this.clearRateLimitTimer();
     this.clearIdleTimer();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Git commit-message sub-agent (isolated one-shot)                 */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Generate a commit message for the staged changes described by `ctx` (built
+   * main-side by GitManager — never renderer-supplied). Runs an isolated,
+   * tool-less, single-turn SDK query and streams the text to the renderer over
+   * `IpcEvents.gitCommitMessageStream`. It only PROPOSES a message: nothing here
+   * ever calls `git commit`. The run never touches lifecycle, transcripts,
+   * memory/search context, MCP servers, or the conversation event stream.
+   */
+  async generateCommitMessage(
+    workspaceId: string,
+    ctx: GitCommitContext,
+  ): Promise<GenerateCommitMessageResult> {
+    const install = this.getInstall();
+    if (!install.installed) {
+      return { ok: false, reason: 'agent-unavailable', error: install.error };
+    }
+    if (this.state.lifecycle === 'rate-limited') {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        error: this.state.rateLimit?.message ?? 'The agent is rate limited right now.',
+      };
+    }
+    if (this.commitGenRuns.has(workspaceId)) {
+      return { ok: false, reason: 'busy', error: 'A commit message is already being generated.' };
+    }
+
+    const requestId = newId();
+    const abort = new AbortController();
+    const run: { abort: AbortController; query: { close?: () => void } | null } = {
+      abort,
+      query: null,
+    };
+    this.commitGenRuns.set(workspaceId, run);
+
+    const emit = (ev: Omit<GitCommitMessageStreamEvent, 'workspaceId' | 'requestId'>): void => {
+      const payload: GitCommitMessageStreamEvent = { workspaceId, requestId, ...ev };
+      this.broadcastChannel(IpcEvents.gitCommitMessageStream, payload);
+    };
+
+    // Coalesced-delta state, mirroring runOnce's DELTA_FLUSH_* pattern.
+    let pendingDelta = '';
+    let flushTimer: NodeJS.Timeout | null = null;
+    const flushDelta = (): void => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (pendingDelta.length === 0) return;
+      const text = pendingDelta;
+      pendingDelta = '';
+      emit({ kind: 'delta', text });
+    };
+    const queueDelta = (text: string): void => {
+      pendingDelta += text;
+      if (pendingDelta.length >= DELTA_FLUSH_CHARS) flushDelta();
+      else if (!flushTimer) flushTimer = setTimeout(flushDelta, DELTA_FLUSH_MS);
+    };
+
+    try {
+      const prompt = buildCommitPrompt(ctx);
+      if (prompt.length > AGENT_LIMITS.promptMax) {
+        // Belt + braces: GitManager's commitGen caps keep us far below this.
+        throw new Error('Commit context too large.');
+      }
+      const sdk = await loadSdk();
+      const options = this.buildUtilityOptions(ctx.root, abort);
+      const q = sdk.query({ prompt, options }) as unknown as AsyncIterable<SDKMessage> & {
+        close?: () => void;
+      };
+      run.query = q;
+
+      let finalText = '';
+      let resultOk: boolean | null = null;
+      let resultText = '';
+      for await (const msg of q) {
+        if (abort.signal.aborted) break;
+        switch (msg.type) {
+          case 'stream_event': {
+            const ev = msg.event as unknown as {
+              type?: string;
+              delta?: { type?: string; text?: string };
+            };
+            if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
+              queueDelta(ev.delta.text);
+            }
+            break;
+          }
+          case 'assistant': {
+            if (msg.error) throw new Error(String(msg.error));
+            const content = (msg.message?.content ?? []) as unknown as Array<Record<string, unknown>>;
+            const text = content
+              .filter((b) => b.type === 'text' && typeof b.text === 'string')
+              .map((b) => b.text as string)
+              .join('');
+            if (text.trim().length > 0) finalText = text;
+            break;
+          }
+          case 'result': {
+            resultOk = msg.subtype === 'success';
+            resultText = 'result' in msg && typeof msg.result === 'string' ? msg.result : '';
+            break;
+          }
+          default:
+            break;
+        }
+      }
+      flushDelta();
+
+      if (abort.signal.aborted) {
+        emit({ kind: 'canceled' });
+        return { ok: false, reason: 'canceled' };
+      }
+      if (resultOk === false) {
+        throw new Error(resultText || 'The commit-message run ended with errors.');
+      }
+      const message = polishCommitMessage(finalText || resultText);
+      if (!message) throw new Error('The model returned an empty commit message.');
+      emit({ kind: 'done', text: message });
+      return { ok: true, message };
+    } catch (err) {
+      if (abort.signal.aborted) {
+        emit({ kind: 'canceled' });
+        return { ok: false, reason: 'canceled' };
+      }
+      const raw = err instanceof Error ? err.message : String(err);
+      const safe = redact(raw);
+      logger.warn('[claude:commit-msg] generation failed', safe);
+      const cls = classifyAgentError(raw);
+      const reason: GenerateCommitMessageResult['reason'] =
+        cls.outcome === 'auth-required'
+          ? 'agent-unavailable'
+          : cls.outcome === 'rate-limited'
+            ? 'rate-limited'
+            : 'error';
+      emit({ kind: 'error', error: safe });
+      return { ok: false, reason, error: safe };
+    } finally {
+      if (flushTimer) clearTimeout(flushTimer);
+      this.commitGenRuns.delete(workspaceId);
+    }
+  }
+
+  /** Abort an in-flight commit-message generation for a workspace. */
+  cancelCommitMessage(workspaceId: string): void {
+    const run = this.commitGenRuns.get(workspaceId);
+    if (!run) return;
+    run.abort.abort();
+    try {
+      run.query?.close?.();
+    } catch {
+      /* already closed */
+    }
+  }
+
+  /**
+   * Options for utility one-shots — deliberately parallel to (not shared with)
+   * {@link buildOptions}; the divergence list is the point: tool-less
+   * (`allowedTools: []` AND a deny-all canUseTool, belt + braces), single-turn,
+   * no thinking, plain-string system prompt (no claude_code preset, no
+   * memory/search append), no settings sources, no resume, no MCP servers.
+   * The model can only emit text.
+   */
+  private buildUtilityOptions(cwd: string, abort: AbortController): Options {
+    const options: Options = {
+      cwd,
+      model: COMMIT_MESSAGE_MODEL,
+      maxTurns: 1,
+      includePartialMessages: true,
+      abortController: abort,
+      thinking: { type: 'disabled' },
+      systemPrompt: COMMIT_SYSTEM_PROMPT,
+      allowedTools: [],
+      canUseTool: async () => ({
+        behavior: 'deny' as const,
+        message: 'Tools are disabled for commit-message generation.',
+      }),
+      settingSources: [],
+      env: { ...process.env, CLAUDE_CODE_ENABLE_TASKS: '0' },
+      stderr: (data: string) => logger.warn('[claude:commit-msg]', redact(data)),
+    };
+    const claudeExe = resolveClaudeExecutable();
+    if (claudeExe) options.pathToClaudeCodeExecutable = claudeExe;
+    return options;
   }
 
   /**
@@ -2240,6 +2463,49 @@ export class AgentManager {
 /* ------------------------------------------------------------------ */
 /* Pure helpers                                                        */
 /* ------------------------------------------------------------------ */
+
+/** Render the main-side git context into the sub-agent's user prompt. */
+function buildCommitPrompt(ctx: GitCommitContext): string {
+  const parts: string[] = [];
+  if (ctx.branch) parts.push(`Branch: ${ctx.branch}`);
+
+  const fileLines = ctx.files.map((f) => {
+    const counts =
+      f.binary
+        ? ' (binary)'
+        : typeof f.adds === 'number' || typeof f.dels === 'number'
+          ? ` (+${f.adds ?? 0} -${f.dels ?? 0})`
+          : '';
+    return `- ${f.status}: ${f.path}${counts}`;
+  });
+  parts.push(`Staged files (${ctx.files.length}):\n${fileLines.join('\n')}`);
+
+  if (ctx.recentSubjects.length > 0) {
+    parts.push(`Recent commit subjects (newest first):\n${ctx.recentSubjects.map((s) => `- ${s}`).join('\n')}`);
+  } else {
+    parts.push("This is the repository's first commit.");
+  }
+
+  if (ctx.diff.trim().length > 0) {
+    parts.push(
+      `Staged diff${ctx.diffTruncated ? ' (truncated)' : ''}:\n\`\`\`diff\n${ctx.diff}\n\`\`\``,
+    );
+  }
+
+  parts.push('Write the commit message for these staged changes.');
+  return parts.join('\n\n');
+}
+
+/** Normalize the model's output into a clean, size-capped commit message. */
+function polishCommitMessage(raw: string): string {
+  let text = (raw ?? '').trim();
+  // Strip a single wrapping code fence the model may have added despite orders.
+  const fence = /^```[a-z]*\n([\s\S]*?)\n?```$/i.exec(text);
+  if (fence) text = fence[1].trim();
+  // Strip one pair of wrapping quotes.
+  if (/^"[\s\S]*"$/.test(text) || /^'[\s\S]*'$/.test(text)) text = text.slice(1, -1).trim();
+  return text.slice(0, GIT_LIMITS.commitGen.messageMax);
+}
 
 function mapThinking(thinking: 'off' | 'on' | 'adaptive'): Options['thinking'] {
   if (thinking === 'off') return { type: 'disabled' };

@@ -41,8 +41,15 @@ interface GitState {
   /** Drives which sub-view + file the GitPanel reveals (activity-card jumps). */
   focus: GitFocus | null;
   hydrated: boolean;
+  /** The commit composer's draft (streams live during AI generation). */
+  commitMessage: string;
+  /** True while the commit-message sub-agent is streaming a proposal. */
+  generatingMessage: boolean;
 
   hydrate: () => void;
+  setCommitMessage: (text: string) => void;
+  generateCommitMessage: () => Promise<void>;
+  cancelCommitMessage: () => void;
   refresh: () => Promise<void>;
   loadDiff: (path: string, staged: boolean) => Promise<GitFileDiff | null>;
   stage: (path: string) => Promise<void>;
@@ -79,6 +86,14 @@ function activeSession(): string | null {
   return useSessionStore.getState().selectedId;
 }
 
+/**
+ * Generation-scoped bookkeeping (module-local, not store state): the user's
+ * pre-generation draft — restored when a run errors/cancels before any text
+ * arrived — and whether the in-flight run produced at least one delta.
+ */
+let draftBackup = '';
+let sawDelta = false;
+
 export const useGitStore = create<GitState>((set, get) => ({
   status: null,
   log: [],
@@ -89,6 +104,8 @@ export const useGitStore = create<GitState>((set, get) => ({
   loading: false,
   focus: null,
   hydrated: false,
+  commitMessage: '',
+  generatingMessage: false,
 
   hydrate: () => {
     if (get().hydrated) return;
@@ -106,13 +123,82 @@ export const useGitStore = create<GitState>((set, get) => ({
     api.onCheckpointsChanged(({ sessionId }) => {
       if (sessionId === activeSession()) void get().loadCheckpoints();
     });
+    api.onCommitMessageStream?.((ev) => {
+      if (ev.workspaceId !== activeWs()) return;
+      if (ev.kind === 'delta') {
+        sawDelta = true;
+        set((s) => ({ commitMessage: s.commitMessage + (ev.text ?? '') }));
+      } else if (ev.kind === 'done') {
+        // The done frame carries the full authoritative message — replace.
+        set({ commitMessage: ev.text ?? get().commitMessage, generatingMessage: false });
+      } else {
+        // error / canceled: a failed run must not eat the user's draft.
+        set({
+          generatingMessage: false,
+          ...(sawDelta ? {} : { commitMessage: draftBackup }),
+        });
+      }
+    });
 
     // Initial pull + follow active-workspace switches.
     void get().refresh();
     window.limboo?.workspace.onChanged(() => {
-      set({ diffs: {}, log: [], branches: [], tags: [] });
+      get().cancelCommitMessage();
+      set({ diffs: {}, log: [], branches: [], tags: [], commitMessage: '', generatingMessage: false });
       void get().refresh();
     });
+  },
+
+  setCommitMessage: (text) => set({ commitMessage: text }),
+
+  generateCommitMessage: async () => {
+    const api = gitApi();
+    const wsId = activeWs();
+    const toast = useUIStore.getState().addToast;
+    if (!api?.generateCommitMessage || !wsId || get().generatingMessage) return;
+    draftBackup = get().commitMessage;
+    sawDelta = false;
+    set({ generatingMessage: true, commitMessage: '' });
+    try {
+      const r = await api.generateCommitMessage(wsId);
+      if (!r.ok && r.reason !== 'canceled') {
+        if (r.reason === 'no-staged') {
+          toast({ title: 'Nothing staged', description: 'Stage changes first.', tone: 'warning' });
+        } else if (r.reason === 'agent-unavailable') {
+          toast({
+            title: 'Claude Code unavailable',
+            description: r.error ?? 'Sign in to Claude Code to generate commit messages.',
+            tone: 'danger',
+          });
+        } else if (r.reason === 'busy') {
+          toast({ title: 'Already generating', description: 'A commit message is being generated.', tone: 'warning' });
+        } else if (r.reason === 'rate-limited') {
+          toast({ title: 'Rate limited', description: r.error, tone: 'warning' });
+        } else {
+          toast({ title: 'Generation failed', description: r.error, tone: 'danger' });
+        }
+      }
+    } catch (err) {
+      toast({
+        title: 'Generation failed',
+        description: err instanceof Error ? err.message : String(err),
+        tone: 'danger',
+      });
+    } finally {
+      // Backstop — the stream's terminal frame normally clears this first; if it
+      // never arrived (e.g. an early invoke error), restore the user's draft.
+      if (get().generatingMessage) {
+        set({
+          generatingMessage: false,
+          ...(sawDelta ? {} : { commitMessage: draftBackup }),
+        });
+      }
+    }
+  },
+
+  cancelCommitMessage: () => {
+    const wsId = activeWs();
+    if (wsId && get().generatingMessage) void gitApi()?.cancelCommitMessage?.(wsId);
   },
 
   refresh: async () => {
