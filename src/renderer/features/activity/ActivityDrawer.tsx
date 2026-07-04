@@ -31,7 +31,7 @@ export function ActivityDrawer({ tab }: { tab: ActivityTab }) {
   if (tab === 'memory') return <MemoryPanel />;
 
   return (
-    <section className="flex h-full min-h-0 flex-col border-l border-line bg-surface">
+    <section className="flex h-full min-h-0 flex-col bg-surface">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-3 text-[11px] font-semibold uppercase tracking-wider text-fg">
         <meta.icon size={13} className="text-muted" />
         <span>{meta.label}</span>

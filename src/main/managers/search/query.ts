@@ -13,9 +13,17 @@ export { toFtsQuery };
 
 /** Lowercased detected language for a workspace-relative path, or undefined. */
 export function langForPath(path: string): string | undefined {
-  const dot = path.lastIndexOf('.');
+  const slash = path.lastIndexOf('/');
+  const base = (slash >= 0 ? path.slice(slash + 1) : path).toLowerCase();
+  // Well-known basenames first (Dockerfile, Makefile, .env, …), including
+  // dotted variants like `dockerfile.dev` / `.env.local`.
+  const named = FILE_LANG[base];
+  if (named) return named;
+  if (base.startsWith('dockerfile.')) return 'dockerfile';
+  if (base.startsWith('.env.')) return 'ini';
+  const dot = base.lastIndexOf('.');
   if (dot < 0) return undefined;
-  const ext = path.slice(dot + 1).toLowerCase();
+  const ext = base.slice(dot + 1);
   return EXT_LANG[ext];
 }
 
@@ -88,10 +96,78 @@ const EXT_LANG: Record<string, string> = {
   sql: 'sql',
   vue: 'vue',
   svelte: 'svelte',
+  astro: 'astro',
+  dart: 'dart',
+  lua: 'lua',
+  r: 'r',
+  pl: 'perl',
+  pm: 'perl',
+  ex: 'elixir',
+  exs: 'elixir',
+  erl: 'erlang',
+  hs: 'haskell',
+  clj: 'clojure',
+  cljs: 'clojure',
+  groovy: 'groovy',
+  gradle: 'groovy',
+  ps1: 'powershell',
+  psm1: 'powershell',
+  psd1: 'powershell',
+  bat: 'batch',
+  cmd: 'batch',
+  fish: 'shell',
+  ini: 'ini',
+  cfg: 'ini',
+  conf: 'ini',
+  properties: 'ini',
+  env: 'ini',
+  graphql: 'graphql',
+  gql: 'graphql',
+  proto: 'protobuf',
+  prisma: 'prisma',
+  tf: 'terraform',
+  tfvars: 'terraform',
+  xml: 'xml',
+  plist: 'xml',
+  csproj: 'xml',
+  xaml: 'xml',
+  less: 'css',
+  styl: 'css',
+  sass: 'scss',
+  zig: 'zig',
+  nim: 'nim',
+  jl: 'julia',
+  m: 'objective-c',
+  mm: 'objective-c',
+  sol: 'solidity',
+  txt: 'text',
+  rst: 'restructuredtext',
+  tex: 'latex',
+  cmake: 'cmake',
+  mk: 'make',
+};
+
+/**
+ * Well-known basenames that carry a language without (or despite) an extension.
+ * Consulted before the extension map; keys are lowercased basenames.
+ */
+const FILE_LANG: Record<string, string> = {
+  dockerfile: 'dockerfile',
+  makefile: 'make',
+  'cmakelists.txt': 'cmake',
+  gemfile: 'ruby',
+  rakefile: 'ruby',
+  'go.mod': 'go',
+  'go.sum': 'go',
+  '.gitignore': 'gitignore',
+  '.gitattributes': 'gitignore',
+  '.env': 'ini',
+  'limboo.json': 'json',
 };
 
 /** True for text extensions treated as documentation (drives the `doc` kind). */
 export function isDocPath(path: string): boolean {
   const lang = langForPath(path);
-  return lang === 'markdown' || /(^|\/)(readme|changelog|contributing|license)/i.test(path);
+  if (lang === 'markdown' || lang === 'restructuredtext') return true;
+  return /(^|\/)(readme|changelog|contributing|license|docs\/)/i.test(path);
 }

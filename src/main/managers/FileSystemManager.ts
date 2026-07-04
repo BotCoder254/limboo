@@ -3,12 +3,13 @@
  * workspace file operation passes (the File Explorer Service of CLAUDE.md §8).
  * Lives in the main process; the renderer and agent reach it only via IPC.
  *
- * Responsibilities (read + watch + index foundation): build & cache the directory
- * tree, read files through the centralized reader, watch the active workspace for
- * external changes, maintain per-workspace File History, and broadcast progress +
- * tree-changed events to every window. Mutating operations (write/create/delete/
- * rename/move/copy) are intentionally NOT implemented here yet — they are gated
- * behind the future Permission Engine.
+ * Responsibilities (read + write + watch + index): build & cache the directory
+ * tree, read files through the centralized reader, mutate files through the
+ * guarded File Writer (write/create/delete/rename/copy — atomic, boundary- and
+ * symlink-checked, `.git` protected), watch the active workspace for external
+ * changes, maintain per-workspace File History, and broadcast progress +
+ * tree-changed events to every window. Watched change bursts are batched so the
+ * Search Engine can reindex incrementally (full pass on structural changes).
  *
  * Security (CLAUDE.md §6): all path/boundary/symlink/ignore/cap enforcement lives
  * in the modules under `fs/`; this class never logs file contents and disposes
@@ -17,10 +18,13 @@
 import path from 'node:path';
 import { BrowserWindow, shell } from 'electron';
 import { IpcEvents } from '@shared/ipc-channels';
+import { FS_LIMITS } from '@shared/constants';
 import type {
   FileHistoryEntry,
   FileReadResult,
   FileTree,
+  FileWriteResult,
+  FsMutationOptions,
   IndexProgress,
   Workspace,
 } from '@shared/types';
@@ -30,8 +34,16 @@ import type { SessionManager } from './SessionManager';
 import { buildIgnoreMatcher, type IgnoreMatcher } from './fs/ignore';
 import { buildTree } from './fs/tree';
 import { readWorkspaceFile } from './fs/reader';
+import {
+  copyWorkspaceEntry,
+  createWorkspaceDir,
+  createWorkspaceFile,
+  deleteWorkspaceEntry,
+  renameWorkspaceEntry,
+  writeWorkspaceFile,
+} from './fs/writer';
 import { FileHistory } from './fs/history';
-import { WorkspaceWatcher } from './fs/watcher';
+import { WorkspaceWatcher, type WatchBatch } from './fs/watcher';
 import { gitStatus } from './git/status';
 import type { GitManager } from './GitManager';
 import type { SearchManager } from './search/SearchManager';
@@ -121,6 +133,92 @@ export class FileSystemManager {
     shell.showItemInFolder(target);
   }
 
+  /* ------------------------------------------------------- mutations */
+
+  /** Atomically write a UTF-8 file through the guarded File Writer. */
+  async writeFile(
+    workspaceId: string,
+    relPath: string,
+    content: string,
+    opts: FsMutationOptions = {},
+  ): Promise<FileWriteResult> {
+    const ws = this.requireWorkspace(workspaceId);
+    const result = writeWorkspaceFile(this.rootFor(ws), relPath, content, {
+      overwrite: opts.overwrite,
+    });
+    this.historyFor(workspaceId).record(result.path, 'write');
+    this.afterMutation(ws, [result.path]);
+    return result;
+  }
+
+  /** Create an empty file (fails if anything exists at the path). */
+  async createFile(workspaceId: string, relPath: string): Promise<FileWriteResult> {
+    const ws = this.requireWorkspace(workspaceId);
+    const result = createWorkspaceFile(this.rootFor(ws), relPath);
+    this.historyFor(workspaceId).record(result.path, 'create');
+    this.afterMutation(ws, [result.path]);
+    return result;
+  }
+
+  /** Create a directory (and missing intermediates) inside the workspace. */
+  async createDir(workspaceId: string, relPath: string): Promise<FileWriteResult> {
+    const ws = this.requireWorkspace(workspaceId);
+    const result = createWorkspaceDir(this.rootFor(ws), relPath);
+    this.historyFor(workspaceId).record(result.path, 'create');
+    // Directory creation is structural — the search pass resolves it wholesale.
+    this.afterMutation(ws, []);
+    return result;
+  }
+
+  /** Delete a file/symlink/directory (non-empty dirs require `recursive`). */
+  async deleteEntry(
+    workspaceId: string,
+    relPath: string,
+    opts: FsMutationOptions = {},
+  ): Promise<void> {
+    const ws = this.requireWorkspace(workspaceId);
+    deleteWorkspaceEntry(this.rootFor(ws), relPath, { recursive: opts.recursive });
+    const posix = relPath.split(path.sep).join('/');
+    this.historyFor(workspaceId).record(posix, 'delete');
+    // Deletes may remove whole subtrees — treat as structural for search.
+    this.afterMutation(ws, opts.recursive ? [] : [posix]);
+  }
+
+  /** Rename or move an entry (destination is a full workspace-relative path). */
+  async rename(
+    workspaceId: string,
+    fromRel: string,
+    toRel: string,
+    opts: FsMutationOptions = {},
+  ): Promise<FileWriteResult> {
+    const ws = this.requireWorkspace(workspaceId);
+    const result = renameWorkspaceEntry(this.rootFor(ws), fromRel, toRel, {
+      overwrite: opts.overwrite,
+    });
+    this.historyFor(workspaceId).record(result.path, 'rename');
+    // A dir rename moves every descendant path — only a file rename is a
+    // two-path incremental update.
+    const fromPosix = fromRel.split(path.sep).join('/');
+    this.afterMutation(ws, result.size === undefined ? [] : [fromPosix, result.path]);
+    return result;
+  }
+
+  /** Copy a file or (bounded) directory inside the workspace. */
+  async copy(
+    workspaceId: string,
+    fromRel: string,
+    toRel: string,
+    opts: FsMutationOptions = {},
+  ): Promise<FileWriteResult> {
+    const ws = this.requireWorkspace(workspaceId);
+    const result = copyWorkspaceEntry(this.rootFor(ws), fromRel, toRel, {
+      overwrite: opts.overwrite,
+    });
+    this.historyFor(workspaceId).record(result.path, 'copy');
+    this.afterMutation(ws, result.size === undefined ? [] : [result.path]);
+    return result;
+  }
+
   /* --------------------------------------------------------- indexing */
 
   /**
@@ -204,7 +302,7 @@ export class FileSystemManager {
     this.activeWatcher = new WorkspaceWatcher({
       root: nextRoot,
       matcher: this.matcherFor(ws, nextRoot),
-      onChange: () => this.onWatchedChange(ws.id),
+      onChange: (batch) => this.onWatchedChange(ws.id, batch),
     });
     this.activeWatcher.start();
 
@@ -235,7 +333,7 @@ export class FileSystemManager {
 
   /* --------------------------------------------------------- internals */
 
-  private onWatchedChange(workspaceId: string): void {
+  private onWatchedChange(workspaceId: string, batch: WatchBatch): void {
     this.historyFor(workspaceId).record('', 'change');
     // A change burst settled — rebuild and re-push the tree. Re-indexing also
     // re-emits progress, which the UI treats as a brief refresh.
@@ -245,10 +343,35 @@ export class FileSystemManager {
     if (ws) this.refreshGitStatus(ws);
     // Refresh the Git workspace (status/diff lists) live as the tree changes.
     this.git?.notifyChanged(workspaceId);
-    // Rebuild the search index (coalesced; off the hot path — errors are logged).
-    void this.search?.indexWorkspace(workspaceId).catch((err) =>
-      logger.warn('search reindex on change failed', err),
-    );
+    // Refresh the search index: incremental for small file batches, full pass
+    // for structural/large ones (coalesced; off the hot path — errors logged).
+    this.scheduleSearchIndex(workspaceId, batch.paths, batch.structural);
+  }
+
+  /**
+   * Post-mutation coordination — the same signal path a watched external change
+   * takes, fed with the known changed paths. The watcher will also echo the
+   * mutation; its debounce coalesces the double signal harmlessly.
+   */
+  private afterMutation(ws: Workspace, changedRelPaths: string[]): void {
+    void this.index(ws.id).catch((err) => logger.warn('reindex after mutation failed', err));
+    this.refreshGitStatus(ws);
+    this.git?.notifyChanged(ws.id);
+    this.scheduleSearchIndex(ws.id, changedRelPaths, changedRelPaths.length === 0);
+  }
+
+  /** Route a change set to the incremental or full search index pass. */
+  private scheduleSearchIndex(workspaceId: string, paths: string[], structural: boolean): void {
+    if (!this.search) return;
+    if (structural || paths.length === 0 || paths.length > FS_LIMITS.incrementalIndexMax) {
+      void this.search.indexWorkspace(workspaceId).catch((err) =>
+        logger.warn('search reindex on change failed', err),
+      );
+    } else {
+      void this.search.indexFiles(workspaceId, paths).catch((err) =>
+        logger.warn('incremental search index failed', err),
+      );
+    }
   }
 
   /**

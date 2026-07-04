@@ -146,7 +146,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   };
 
   return (
-    <div className="bg-base px-4 pb-6 pt-1">
+    <div className="bg-surface px-4 pb-6 pt-1">
       <div className="mx-auto w-full max-w-3xl">
         <ComposerBanner />
         <div className="flex flex-col gap-2">

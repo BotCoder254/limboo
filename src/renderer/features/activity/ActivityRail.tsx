@@ -25,7 +25,7 @@ export function ActivityRail() {
   };
 
   return (
-    <nav className="flex h-full w-12 shrink-0 flex-col items-center gap-1 border-l border-line bg-surface py-2">
+    <nav className="flex h-full w-12 shrink-0 flex-col items-center gap-1 bg-base py-2">
       {ACTIVITY_TABS.map((tab) => {
         const isActive = activeTab === tab.id;
         const badge = badgeFor(tab.id);
@@ -42,7 +42,7 @@ export function ActivityRail() {
             )}
           >
             {isActive && (
-              <span className="absolute -right-2 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
+              <span className="absolute -right-1.5 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
             )}
             <tab.icon size={17} />
             {badge > 0 && (

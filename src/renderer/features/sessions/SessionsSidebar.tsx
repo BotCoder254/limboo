@@ -109,7 +109,7 @@ export function SessionsSidebar() {
   const isEmpty = live.length === 0 && archived.length === 0 && trashed.length === 0;
 
   return (
-    <aside className="flex h-full min-h-0 flex-col border-r border-line bg-surface">
+    <aside className="flex h-full min-h-0 flex-col bg-base">
       <div className="flex h-9 shrink-0 items-center justify-between gap-1 px-3">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">
           Sessions
@@ -451,7 +451,7 @@ export function CollapsedSessionsRail() {
   const createSession = useSessionStore((s) => s.createSession);
   const setSessionsCollapsed = useLayoutStore((s) => s.setSessionsCollapsed);
   return (
-    <div className="flex h-full w-9 flex-col items-center gap-1 border-r border-line bg-surface py-2">
+    <div className="flex h-full w-9 flex-col items-center gap-1 bg-base py-2">
       <IconButton label="Expand sidebar" size="sm" onClick={() => setSessionsCollapsed(false)}>
         <PanelLeftOpen size={14} />
       </IconButton>
