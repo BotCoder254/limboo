@@ -47,7 +47,7 @@ export function CenterWorkspace() {
   }, [session?.id, loadSession]);
 
   return (
-    <main className="flex h-full min-h-0 flex-col bg-base">
+    <main className="flex h-full min-h-0 flex-col bg-surface">
       {/* Editor-style tabs for worktree-backed sessions (hidden when none exist). */}
       <WorktreeTabs />
       {session && <SessionHeader sessionId={session.id} title={session.title} branch={session.branch} adds={session.adds} dels={session.dels} />}
@@ -101,7 +101,7 @@ export function CenterWorkspace() {
           is waiting on an AskUserQuestion, the clarification card takes the focus
           directly above the composer (which is disabled until it's answered). */}
       <div className="shrink-0">
-        <div className="pointer-events-none h-3 bg-gradient-to-t from-base to-transparent" />
+        <div className="pointer-events-none h-3 bg-gradient-to-t from-surface to-transparent" />
         {clarification && <ClarificationCard key={clarification.id} request={clarification} />}
         <Composer disabled={!session || !!clarification} />
       </div>

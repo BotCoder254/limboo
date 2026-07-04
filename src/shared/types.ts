@@ -1334,9 +1334,27 @@ export interface FileReadResult {
 export interface FileHistoryEntry {
   /** Workspace-relative path (POSIX separators). */
   path: string;
-  action: 'read' | 'index' | 'change';
+  action: 'read' | 'index' | 'change' | 'write' | 'create' | 'delete' | 'rename' | 'copy';
   /** Epoch ms. */
   at: number;
+}
+
+/** Result of a File Writer mutation. */
+export interface FileWriteResult {
+  /** Workspace-relative POSIX path of the (final) target. */
+  path: string;
+  /** Size on disk in bytes after the write (files only). */
+  size?: number;
+  /** True when the entry did not exist before the operation. */
+  created: boolean;
+}
+
+/** Options accepted by the File Writer mutation channels. */
+export interface FsMutationOptions {
+  /** Allow replacing an existing destination (write/rename/copy). */
+  overwrite?: boolean;
+  /** Allow deleting a non-empty directory (fs:delete only). */
+  recursive?: boolean;
 }
 
 /* ------------------------------------------------------------------ */

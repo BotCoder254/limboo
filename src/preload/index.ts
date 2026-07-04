@@ -25,6 +25,8 @@ import type {
   FileHistoryEntry,
   FileReadResult,
   FileTree,
+  FileWriteResult,
+  FsMutationOptions,
   GenerateCommitMessageResult,
   GitBlameLine,
   GitBranch,
@@ -302,6 +304,39 @@ const fsApi = {
   /** Reveal the workspace root (no relPath) or a path in the OS file manager. */
   reveal: (workspaceId: string, relPath?: string): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.fsReveal, workspaceId, relPath),
+  /** Atomically write a UTF-8 file through the guarded File Writer. */
+  writeFile: (
+    workspaceId: string,
+    relPath: string,
+    content: string,
+    opts?: FsMutationOptions,
+  ): Promise<FileWriteResult> =>
+    ipcRenderer.invoke(IpcChannels.fsWriteFile, workspaceId, relPath, content, opts),
+  /** Create an empty file (fails if anything exists at the path). */
+  createFile: (workspaceId: string, relPath: string): Promise<FileWriteResult> =>
+    ipcRenderer.invoke(IpcChannels.fsCreateFile, workspaceId, relPath),
+  /** Create a directory (and missing intermediates) inside the workspace. */
+  createDir: (workspaceId: string, relPath: string): Promise<FileWriteResult> =>
+    ipcRenderer.invoke(IpcChannels.fsCreateDir, workspaceId, relPath),
+  /** Delete a file/symlink/directory (non-empty dirs need `recursive: true`). */
+  remove: (workspaceId: string, relPath: string, opts?: FsMutationOptions): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.fsDelete, workspaceId, relPath, opts),
+  /** Rename or move an entry (destination is a full workspace-relative path). */
+  rename: (
+    workspaceId: string,
+    fromRel: string,
+    toRel: string,
+    opts?: FsMutationOptions,
+  ): Promise<FileWriteResult> =>
+    ipcRenderer.invoke(IpcChannels.fsRename, workspaceId, fromRel, toRel, opts),
+  /** Copy a file or (bounded) directory inside the workspace. */
+  copy: (
+    workspaceId: string,
+    fromRel: string,
+    toRel: string,
+    opts?: FsMutationOptions,
+  ): Promise<FileWriteResult> =>
+    ipcRenderer.invoke(IpcChannels.fsCopy, workspaceId, fromRel, toRel, opts),
   onIndexProgress: (cb: (progress: IndexProgress) => void): (() => void) =>
     subscribe<IndexProgress>(IpcEvents.fsIndexProgress, cb),
   onTreeChanged: (cb: (tree: FileTree) => void): (() => void) =>

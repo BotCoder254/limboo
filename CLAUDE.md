@@ -190,22 +190,40 @@ black for primary content. When adding a new surface, step up the gray ramp
 
 ---
 
-## 4b. App shell layout (Codex-style)
+## 4b. App shell layout (floating app shell)
 
 The shell lives in [`src/renderer/app/AppShell.tsx`](src/renderer/app/AppShell.tsx),
-composed by [`src/renderer/App.tsx`](src/renderer/App.tsx). It is a single column
-with a custom title bar on top and a horizontal row of resizable regions below it:
+composed by [`src/renderer/App.tsx`](src/renderer/App.tsx). It is a **two-layer
+floating app shell**: persistent chrome sits on the pure-black root background,
+and the workspace floats above it as one detached card:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  TitleBar (frameless, draggable)         [search][_][□][x]    │
-├────────┬──────────────────────────────────────────┬──────────┤
-│Sessions│  header / conversation / Composer         │ drawer │▐ rail
-└────────┴──────────────────────────────────────────┴──────────┘
+│  TitleBar (root bg, frameless, draggable)  [search][_][□][x]  │
+│        ╷ ┌────────────────────────────────────────┐          │
+│Sessions│ │ header / conversation / Composer │drawer│  ▐ rail  │
+│(root bg)│ │      floating card (bg-surface)        │ (root bg)│
+│        ╵ └────────────────────────────────────────┘          │
+└──────────────────────────────────────────────────────────────┘
 ```
 
+- **Root background layer** (`bg-base`, borderless): the TitleBar, the Sessions
+  sidebar (+ its collapsed rail), and the right `ActivityRail` icon strip. They
+  visually merge with the black canvas — architectural, not content.
+- **Floating workspace card**: the center column **and the right `ActivityDrawer`
+  together** — `bg-surface`, `border-line`, **`rounded-md` (strictly 6px)**,
+  `overflow-hidden`, framed by an 8px side gutter and a 16px bottom gutter
+  (`px-2 pb-4`, `pt-1` under the title bar) so it never touches the window
+  edges. Separation comes from the gutter +
+  border + surface step, not shadows (invisible on `#000` anyway).
+- The sidebar↔card gutter doubles as the resize grab area (`ResizeHandle ghost`);
+  the card↔drawer divider stays a 1px `bg-line` handle **inside** the card, so
+  the drawer (and the full-bleed Terminal/Git/Memory panels) carry no `border-l`
+  of their own.
 - **Left + right columns are full height**; the **Composer lives only inside the
-  center column** (it does not span the whole window).
+  center column** (it does not span the whole window). Center-column surfaces sit
+  on `bg-surface` (the card), not `bg-base` — e.g. the composer fade is
+  `from-surface`.
 - **Right side = a fixed ~48px icon rail (`ActivityRail`) + a collapsible drawer
   (`ActivityDrawer`)**. Tabs: Files / Changes / Tasks / Activity. Clicking the
   active tab toggles the drawer closed (`activeTab` in the layout store, nullable);
@@ -484,8 +502,17 @@ the real (no-mock) UI. Each owns one responsibility:
   `@electron/rebuild` accordingly. `createForCommand` runs one command in a
   PTY (`origin: 'hook' | 'service'`) with an exit callback; terminal `cwd` is
   the session's effective root.
-- **File System Layer** (`managers/FileSystemManager.ts`) — `chokidar` watch +
-  tree index + guarded reads; pushes live git status into sessions.
+- **File System Layer** (`managers/FileSystemManager.ts`) — the single gateway
+  for workspace file operations: `chokidar` watch + tree index + guarded reads
+  (`fs/reader.ts`) **+ guarded writes** (`fs/writer.ts`: atomic write / create
+  file / create dir / delete / rename+move / copy — workspace-boundary,
+  symlink-escape, and `.git`-segment protected, bounded by `FS_LIMITS`);
+  records mutations in the File History ring and pushes live git status into
+  sessions. Watcher bursts are batched (`WatchBatch`) so small file changes
+  reindex search **incrementally** (`SearchManager.indexFiles`) while
+  structural/large batches fall back to a coalesced full pass. The Files tree
+  has per-language icons (`renderer/lib/fileIcons.tsx`) and a right-click File
+  Writer context menu (`FileTreeMenu.tsx`).
 - **Agent Manager** (`managers/AgentManager.ts`) — drives `@anthropic-ai/claude-
   agent-sdk` (plan/implement modes), risk-gated `canUseTool`, path-guarded to the
   workspace, persists transcript/activity/diagnostics, resumes SDK sessions.
@@ -562,9 +589,9 @@ ones at query time (memory, git, sessions, commands).
 
 **Still open / future** — Repository clone/track UI, a dedicated Permission System
 beyond the agent's `canUseTool`, merge-conflict resolution UI, remote management, and
-stash. True per-file incremental search indexing (v1 does a coalesced full reindex on
-change) and local vector embeddings on top of BM25 (both Memory and Search rankings
-are already fusion-ready) are natural follow-ups.
+stash. Local vector embeddings on top of BM25 (both Memory and Search rankings are
+already fusion-ready) and recording File Writer mutations into the session activity
+timeline (today they land in the in-memory File History ring) are natural follow-ups.
 
 ---
 

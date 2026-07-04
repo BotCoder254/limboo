@@ -473,6 +473,14 @@ export const FS_LIMITS = {
   historyMax: 200,
   /** Per-relative-path length cap for `fs:readFile` requests. */
   relPathMax: 4096,
+  /** Max bytes a single `fs:writeFile` may accept (matches the read cap). */
+  maxWriteBytes: 2 * 1024 * 1024,
+  /** Max entries a recursive copy/delete may touch (bounded like the tree walk). */
+  maxCopyEntries: 10_000,
+  /** Changed-path batches larger than this fall back to a full search reindex. */
+  incrementalIndexMax: 50,
+  /** Cap on distinct paths accumulated per watcher debounce window. */
+  watchBatchMax: 500,
 } as const;
 
 /** Directories never walked for stats and excluded by default from indexing. */

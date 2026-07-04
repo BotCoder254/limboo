@@ -123,6 +123,8 @@ export class SearchManager {
 
   /** In-flight index passes, keyed by workspace id — concurrent callers coalesce. */
   private readonly indexing = new Map<string, Promise<void>>();
+  /** Per-workspace incremental-pass chain so file batches apply in order. */
+  private readonly incremental = new Map<string, Promise<void>>();
   /** Workspaces whose index is fresh this session (drives status). */
   private readonly indexed = new Set<string>();
   private readonly gitCache = new Map<string, GitCache>();
@@ -175,6 +177,135 @@ export class SearchManager {
     } finally {
       this.indexing.delete(workspaceId);
     }
+  }
+
+  /**
+   * Incrementally upsert/delete individual files in the index — the fast path
+   * the watcher takes for small change batches (large/structural batches go
+   * through {@link indexWorkspace}). Per-workspace batches are chained so they
+   * apply in order, and a full pass in flight is awaited first so the
+   * incremental update never races the walk.
+   */
+  async indexFiles(workspaceId: string, relPaths: string[]): Promise<void> {
+    if (!this.settings.getAll().search.enabled) return;
+    const prev = this.incremental.get(workspaceId) ?? Promise.resolve();
+    const run = prev
+      .catch(() => undefined)
+      .then(() => this.runIncremental(workspaceId, relPaths));
+    this.incremental.set(workspaceId, run);
+    try {
+      await run;
+    } finally {
+      if (this.incremental.get(workspaceId) === run) this.incremental.delete(workspaceId);
+    }
+  }
+
+  private async runIncremental(workspaceId: string, relPaths: string[]): Promise<void> {
+    // A full pass in flight may predate these changes — let it finish, then
+    // re-apply the per-file updates on top.
+    const inFlight = this.indexing.get(workspaceId);
+    if (inFlight) await inFlight.catch(() => undefined);
+
+    const ws = this.workspace.getById(workspaceId);
+    if (!ws) return;
+    // Never been indexed — an incremental patch has no base; do the full pass.
+    if (!this.indexed.has(workspaceId) && this.getStatus(workspaceId).files === 0) {
+      return this.indexWorkspace(workspaceId);
+    }
+
+    const cfg = this.settings.getAll().search;
+    const root = this.activeRootResolver?.(workspaceId) ?? ws.path;
+    const matcher = cfg.includeIgnored ? null : buildIgnoreMatcher(root, ws.config);
+    const maxBytes = Math.min(cfg.maxFileSizeKb * 1024, FS_LIMITS.maxReadBytes);
+    const now = Date.now();
+
+    // Re-validate every path even though batches come from our own watcher
+    // (defense in depth): bounded, relative, contained, not always-ignored.
+    const paths: string[] = [];
+    for (const rel of new Set(relPaths)) {
+      if (paths.length >= FS_LIMITS.incrementalIndexMax) break;
+      if (typeof rel !== 'string' || !rel || rel.length > FS_LIMITS.relPathMax) continue;
+      const segments = rel.split('/');
+      if (segments.some((s) => s === '..' || ALWAYS_IGNORE.has(s))) continue;
+      if (path.isAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) continue;
+      if (!isInsideRoot(root, path.resolve(root, rel))) continue;
+      if (matcher && matcher.ignores(rel)) continue;
+      paths.push(rel);
+    }
+    if (paths.length === 0) return;
+
+    const deleteFile = this.db.prepare(
+      'DELETE FROM search_files WHERE workspace_id = ? AND path = ?',
+    );
+    const deleteSymbols = this.db.prepare(
+      'DELETE FROM search_symbols WHERE workspace_id = ? AND path = ?',
+    );
+    const insertFile = this.db.prepare(
+      `INSERT INTO search_files (id, workspace_id, path, lang, size, content, updated_at)
+         VALUES (@id, @workspace_id, @path, @lang, @size, @content, @updated_at)`,
+    );
+    const insertSymbol = this.db.prepare(
+      `INSERT INTO search_symbols (id, workspace_id, path, name, kind, lang, line, signature, updated_at)
+         VALUES (@id, @workspace_id, @path, @name, @kind, @lang, @line, @signature, @updated_at)`,
+    );
+
+    const tx = this.db.transaction(() => {
+      for (const rel of paths) {
+        // Delete-then-insert: a deleted/unreadable file simply stays deleted.
+        deleteFile.run(workspaceId, rel);
+        deleteSymbols.run(workspaceId, rel);
+
+        let res: ReturnType<typeof readWorkspaceFile>;
+        try {
+          res = readWorkspaceFile(root, rel);
+        } catch {
+          continue; // gone or unreadable — rows stay removed
+        }
+        const lang = langForPath(rel) ?? null;
+        let content = '';
+        if (
+          cfg.indexContents &&
+          res.content &&
+          !res.isBinary &&
+          !res.tooLarge &&
+          res.size <= maxBytes
+        ) {
+          content = res.content.slice(0, SEARCH_LIMITS.contentIndexChars);
+        }
+        insertFile.run({
+          id: crypto.randomUUID(),
+          workspace_id: workspaceId,
+          path: rel,
+          lang,
+          size: res.size,
+          content,
+          updated_at: now,
+        });
+        if (content) {
+          for (const sym of extractSymbols(content, lang ?? undefined)) {
+            insertSymbol.run({
+              id: crypto.randomUUID(),
+              workspace_id: workspaceId,
+              path: rel,
+              name: sym.name,
+              kind: sym.kind,
+              lang,
+              line: sym.line,
+              signature: sym.signature,
+              updated_at: now,
+            });
+          }
+        }
+      }
+    });
+    try {
+      tx();
+    } catch (err) {
+      logger.warn('search: incremental index failed', err);
+      return;
+    }
+    // Sub-second and silent — no progress sweep; just refresh consumers.
+    this.notifyChanged();
   }
 
   private async runIndex(workspaceId: string): Promise<void> {

@@ -65,7 +65,8 @@ export function extractSymbols(content: string, lang: string | undefined): Extra
 }
 
 function isIdentifier(s: string): boolean {
-  return s.length > 0 && s.length <= 128 && /^[A-Za-z_$][\w$]*$/.test(s);
+  // Internal hyphens are allowed for PowerShell-style Verb-Noun names.
+  return s.length > 0 && s.length <= 128 && /^[A-Za-z_$][\w$]*(?:-[\w$]+)*$/.test(s);
 }
 
 /* -------------------------------------------------------- language rule sets */
@@ -121,6 +122,15 @@ const RUBY_RULES: Rule[] = [
   { re: /^\s*def\s+([A-Za-z_][\w?!]*)/, kind: 'method' },
 ];
 
+const POWERSHELL_RULES: Rule[] = [
+  { re: /^\s*function\s+(?:[A-Za-z]+:)?([A-Za-z_][\w-]*)/i, kind: 'function' },
+  { re: /^\s*class\s+([A-Za-z_][\w]*)/i, kind: 'class' },
+];
+
+const LUA_RULES: Rule[] = [
+  { re: /^\s*(?:local\s+)?function\s+(?:[\w.:]+[.:])?([A-Za-z_][\w]*)/, kind: 'function' },
+];
+
 /** Conservative fallback for languages without a dedicated rule set. */
 const GENERIC_RULES: Rule[] = [
   { re: /\b(?:class|struct|interface|enum|trait)\s+([A-Za-z_][\w]*)/, kind: 'class' },
@@ -140,4 +150,7 @@ const RULES: Record<string, Rule[]> = {
   scala: JVM_RULES,
   csharp: JVM_RULES,
   ruby: RUBY_RULES,
+  astro: TS_RULES,
+  powershell: POWERSHELL_RULES,
+  lua: LUA_RULES,
 };

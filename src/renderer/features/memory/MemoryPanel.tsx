@@ -78,7 +78,7 @@ export function MemoryPanel() {
   }, [searching, results, memories, tierFilter]);
 
   return (
-    <section className="flex h-full min-h-0 flex-col border-l border-line bg-surface">
+    <section className="flex h-full min-h-0 flex-col bg-surface">
       {/* Header */}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line pl-2 pr-1.5">
         <Brain size={13} className="shrink-0 text-muted" />

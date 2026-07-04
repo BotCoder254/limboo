@@ -15,11 +15,22 @@ import { FS_LIMITS } from '@shared/constants';
 import { logger } from '../../logger';
 import type { IgnoreMatcher } from './ignore';
 
+/** One settled burst of filesystem events, batched for incremental indexing. */
+export interface WatchBatch {
+  /** Workspace-relative POSIX file paths touched in the settle window. */
+  paths: string[];
+  /**
+   * True when a directory-level event (addDir/unlinkDir) occurred or the batch
+   * overflowed {@link FS_LIMITS.watchBatchMax} — callers should do a full pass.
+   */
+  structural: boolean;
+}
+
 export interface WorkspaceWatcherOptions {
   root: string;
   matcher: IgnoreMatcher;
   /** Debounced callback fired after a burst of filesystem events settles. */
-  onChange: () => void;
+  onChange: (batch: WatchBatch) => void;
 }
 
 /**
@@ -30,6 +41,10 @@ export interface WorkspaceWatcherOptions {
 export class WorkspaceWatcher {
   private watcher: FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
+  /** Distinct rel-POSIX file paths accumulated in the current settle window. */
+  private pending = new Set<string>();
+  /** Set on dir-level events / overflow — the batch needs a full pass. */
+  private structural = false;
 
   constructor(private readonly options: WorkspaceWatcherOptions) {}
 
@@ -54,20 +69,41 @@ export class WorkspaceWatcher {
       if (this.timer) clearTimeout(this.timer);
       this.timer = setTimeout(() => {
         this.timer = null;
+        const batch = { paths: [...this.pending], structural: this.structural };
+        this.pending.clear();
+        this.structural = false;
         try {
-          this.options.onChange();
+          this.options.onChange(batch);
         } catch (err) {
           logger.warn('workspace watcher onChange failed', err);
         }
       }, FS_LIMITS.watchDebounceMs);
     };
 
+    // Accumulate the workspace-relative POSIX path of a file-level event; past
+    // the batch cap the window degrades to a structural (full-pass) signal.
+    const collect = (entry: string) => {
+      const rel = path.relative(root, entry);
+      if (!rel || rel.startsWith('..')) {
+        this.structural = true;
+      } else if (this.pending.size >= FS_LIMITS.watchBatchMax) {
+        this.structural = true;
+      } else {
+        this.pending.add(rel.split(path.sep).join('/'));
+      }
+      schedule();
+    };
+    const collectStructural = () => {
+      this.structural = true;
+      schedule();
+    };
+
     this.watcher
-      .on('add', schedule)
-      .on('change', schedule)
-      .on('unlink', schedule)
-      .on('addDir', schedule)
-      .on('unlinkDir', schedule)
+      .on('add', collect)
+      .on('change', collect)
+      .on('unlink', collect)
+      .on('addDir', collectStructural)
+      .on('unlinkDir', collectStructural)
       .on('error', (err) => logger.warn('workspace watcher error', err));
   }
 
@@ -76,6 +112,8 @@ export class WorkspaceWatcher {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.pending.clear();
+    this.structural = false;
     if (this.watcher) {
       const w = this.watcher;
       this.watcher = null;

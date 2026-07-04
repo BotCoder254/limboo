@@ -92,11 +92,18 @@ Coding-agent orchestration and the structured event stream.
 
 ## fs
 
-File System Layer: read, watch, index.
+File System Layer: read, write, watch, index.
 
 - `index(workspaceId)`, `getTree(workspaceId)`, `readFile(workspaceId, relPath)`
 - `getHistory(workspaceId)`, `reveal(workspaceId, relPath?)`
-- `onIndexProgress(cb)`, `onTreeChanged(cb)` — subscriptions.
+- `writeFile(workspaceId, relPath, content, opts?)`, `createFile(workspaceId, relPath)`,
+  `createDir(workspaceId, relPath)` — guarded File Writer mutations (atomic writes,
+  workspace-boundary + symlink + `.git` protection in main)
+- `remove(workspaceId, relPath, opts?)` (non-empty dirs need `{ recursive: true }`),
+  `rename(workspaceId, fromRel, toRel, opts?)` (rename AND move),
+  `copy(workspaceId, fromRel, toRel, opts?)`
+- `onIndexProgress(cb)`, `onTreeChanged(cb)` — subscriptions (mutations surface
+  through `onTreeChanged`; no dedicated mutation events).
 
 ## terminal
 

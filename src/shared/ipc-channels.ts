@@ -100,6 +100,14 @@ export const IpcChannels = {
   fsReadFile: 'fs:readFile',
   fsGetHistory: 'fs:getHistory',
   fsReveal: 'fs:reveal',
+  // File Writer — guarded workspace mutations (no new push events; mutations
+  // surface through the existing fs:tree-changed / search:changed flow).
+  fsWriteFile: 'fs:writeFile',
+  fsCreateFile: 'fs:createFile',
+  fsCreateDir: 'fs:createDir',
+  fsDelete: 'fs:delete',
+  fsRename: 'fs:rename',
+  fsCopy: 'fs:copy',
 
   // Integrated Terminal — workspace-scoped PTY sessions (node-pty in main).
   terminalCreate: 'terminal:create',

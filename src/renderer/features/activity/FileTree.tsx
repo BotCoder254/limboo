@@ -1,44 +1,76 @@
 /**
- * Read-only file explorer for the Files drawer. Renders the synchronized
- * directory tree the File System Layer builds in the main process. Rows follow
- * the same flat, message-style language as the other drawer panels (small type,
- * `hover:bg-surface-2`, truncation). Directories expand/collapse locally; files
- * are leaves (opening/preview is wired in a later phase).
+ * File explorer for the Files drawer. Renders the synchronized directory tree
+ * the File System Layer builds in the main process, with per-language file
+ * icons (see lib/fileIcons). Rows follow the same flat, message-style language
+ * as the other drawer panels (small type, `hover:bg-surface-2`, truncation).
+ * Directories expand/collapse locally; right-click opens the File Writer
+ * context menu (new file/folder, rename, delete, copy path, reveal).
  */
 import { useState } from 'react';
-import { ChevronRight, File, Folder, FolderOpen, Link2 } from 'lucide-react';
+import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
 import type { FileNode } from '@shared/types';
 import { cn } from '@/renderer/lib/cn';
+import { getFileIcon } from '@/renderer/lib/fileIcons';
+import { FileTreeMenu } from './FileTreeMenu';
 
 const INDENT = 12;
 
-export function FileTree({ nodes }: { nodes: FileNode[] }) {
+interface MenuState {
+  node: FileNode | null;
+  point: { x: number; y: number };
+}
+
+export function FileTree({ workspaceId, nodes }: { workspaceId: string; nodes: FileNode[] }) {
+  const [menu, setMenu] = useState<MenuState | null>(null);
+
+  const openMenu = (node: FileNode | null) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ node, point: { x: e.clientX, y: e.clientY } });
+  };
+
   return (
-    <ul className="flex flex-col">
-      {nodes.map((node) => (
-        <TreeRow key={node.path} node={node} depth={0} />
-      ))}
-    </ul>
+    <div className="flex min-h-full flex-1 flex-col" onContextMenu={openMenu(null)}>
+      <ul className="flex flex-col">
+        {nodes.map((node) => (
+          <TreeRow key={node.path} node={node} depth={0} onMenu={openMenu} />
+        ))}
+      </ul>
+      {menu && (
+        <FileTreeMenu
+          workspaceId={workspaceId}
+          node={menu.node}
+          point={menu.point}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </div>
   );
 }
 
-function TreeRow({ node, depth }: { node: FileNode; depth: number }) {
+function TreeRow({
+  node,
+  depth,
+  onMenu,
+}: {
+  node: FileNode;
+  depth: number;
+  onMenu: (node: FileNode | null) => (e: React.MouseEvent) => void;
+}) {
   const [open, setOpen] = useState(false);
   const pad = 6 + depth * INDENT;
 
   if (node.type === 'file') {
+    const { icon: Icon, className } = getFileIcon(node.name, node.isSymlink);
     return (
       <li>
         <div
           className="flex items-center gap-1.5 rounded-md py-1 pr-2 text-[12px] text-fg hover:bg-surface-2"
           style={{ paddingLeft: pad + 14 }}
           title={node.path}
+          onContextMenu={onMenu(node)}
         >
-          {node.isSymlink ? (
-            <Link2 size={13} className="shrink-0 text-faint" />
-          ) : (
-            <File size={13} className="shrink-0 text-faint" />
-          )}
+          <Icon size={13} className={cn('shrink-0', className)} />
           <span className="min-w-0 flex-1 truncate">{node.name}</span>
         </div>
       </li>
@@ -51,6 +83,7 @@ function TreeRow({ node, depth }: { node: FileNode; depth: number }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        onContextMenu={onMenu(node)}
         className="flex w-full items-center gap-1 rounded-md py-1 pr-2 text-[12px] text-fg hover:bg-surface-2"
         style={{ paddingLeft: pad }}
         title={node.path}
@@ -70,7 +103,7 @@ function TreeRow({ node, depth }: { node: FileNode; depth: number }) {
         (children.length > 0 ? (
           <ul className="flex flex-col">
             {children.map((child) => (
-              <TreeRow key={child.path} node={child} depth={depth + 1} />
+              <TreeRow key={child.path} node={child} depth={depth + 1} onMenu={onMenu} />
             ))}
           </ul>
         ) : (

@@ -92,8 +92,8 @@ export function FilesPanel() {
   }
 
   return (
-    <div className="flex flex-col">
-      <FileTree nodes={children} />
+    <div className="flex min-h-full flex-col">
+      <FileTree workspaceId={activeId} nodes={children} />
       {tree?.truncated && (
         <p className="px-2 py-2 text-[11px] italic text-faint">
           Large repository — only the first {tree.nodeCount.toLocaleString()} entries are shown.
