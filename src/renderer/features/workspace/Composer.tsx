@@ -13,7 +13,7 @@
  * rate limits, expired auth, pending approvals, and context warnings.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { ArrowUp, CircleStop, Mic, Paperclip, Sparkles, Volume2 } from 'lucide-react';
 import type { SessionPermissionMode } from '@shared/types';
 import { cn } from '@/renderer/lib/cn';
@@ -24,12 +24,15 @@ import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
 import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
+import { useAttachmentStore, draftAttachments } from '@/renderer/stores/useAttachmentStore';
+import { useFileDragActive } from '@/renderer/hooks/usePreventFileDrop';
 import { lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
 import { RUNNING_PHASES } from '@/renderer/features/sessions/useSessionRunning';
 import { ComposerControls } from './ComposerControls';
 import { ComposerModeSwitch } from './ComposerModeSwitch';
 import { ComposerBanner } from './ComposerBanner';
 import { ComposerVoiceOverlay } from './ComposerVoiceOverlay';
+import { AttachmentStrip } from './AttachmentStrip';
 
 /** Voice phases during which the composer shows the recording overlay. */
 const VOICE_CAPTURE_PHASES = new Set(['starting', 'listening', 'recording', 'transcribing']);
@@ -80,6 +83,45 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   const restricted = lifecycle === 'rate-limited' || lifecycle === 'auth-required';
   const blocked = disabled || !installed || busy || restricted;
 
+  // Attachments — ChatGPT-style file chips above the input. Drafts belong to
+  // the SESSION (main-process Attachment Manager), so they survive reloads and
+  // session switches until sent or removed.
+  const attachmentsEnabled = useSettingsStore((s) => s.settings.attachments.enabled);
+  const sessionAttachments = useAttachmentStore((s) =>
+    sessionId ? s.bySession[sessionId] : undefined,
+  );
+  const drafts = draftAttachments(sessionAttachments);
+  // Only fully staged drafts ride a send; uploads still in flight stay behind.
+  const readyDraftIds = drafts
+    .filter((d) => d.status !== 'uploading' && d.status !== 'error')
+    .map((d) => d.id);
+  const pickFiles = useAttachmentStore((s) => s.pickFiles);
+  const addDropped = useAttachmentStore((s) => s.addDropped);
+  const pasteImage = useAttachmentStore((s) => s.pasteImage);
+  const canAttach = !blocked && attachmentsEnabled && !!sessionId;
+
+  // Highlight the card as a drop target only while a file drag is in flight.
+  const fileDragActive = useFileDragActive();
+  const [dragOver, setDragOver] = useState(false);
+
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (!canAttach || !sessionId) return;
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length > 0) void addDropped(sessionId, files);
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!canAttach || !sessionId) return;
+    const images = Array.from(e.clipboardData?.files ?? []).filter((f) =>
+      f.type.startsWith('image/'),
+    );
+    if (images.length === 0) return;
+    e.preventDefault();
+    for (const img of images) void pasteImage(sessionId, img);
+  };
+
   // Voice — speech is another input for the SAME session (never a separate
   // conversation). The mic is the DEFAULT primary button while the textarea is
   // empty; typing morphs it into the send arrow (ChatGPT-style).
@@ -129,8 +171,9 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
 
   const submit = () => {
     const text = value.trim();
-    if (!text || blocked || !sessionId) return;
-    void send(sessionId, text, mode);
+    // Attachments-only sends are allowed (main substitutes a review prompt).
+    if ((!text && readyDraftIds.length === 0) || blocked || !sessionId) return;
+    void send(sessionId, text, mode, readyDraftIds.length > 0 ? readyDraftIds : undefined);
     setValue('');
     if (ref.current) {
       ref.current.style.height = 'auto';
@@ -150,16 +193,42 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
       <div className="mx-auto w-full max-w-3xl">
         <ComposerBanner />
         <div className="flex flex-col gap-2">
-          <div className="flex items-end gap-2 rounded-3xl border border-line bg-surface-2 px-4 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors focus-within:border-line-strong">
+          <div
+            data-dropzone
+            onDragOver={(e) => {
+              if (!canAttach) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'copy';
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            className={cn(
+              'flex flex-col rounded-3xl border bg-surface-2 px-4 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors focus-within:border-line-strong',
+              fileDragActive && canAttach
+                ? dragOver
+                  ? 'border-accent'
+                  : 'border-line-strong border-dashed'
+                : 'border-line',
+            )}
+          >
+            {sessionId && <AttachmentStrip sessionId={sessionId} drafts={drafts} />}
+            <div className="flex items-end gap-2">
             {voiceCapturing ? (
               <ComposerVoiceOverlay phase={voicePhase} />
             ) : (
               <>
                 <button
                   type="button"
+                  onClick={() => sessionId && canAttach && void pickFiles(sessionId)}
+                  title={
+                    attachmentsEnabled
+                      ? 'Attach files (or drag & drop / paste an image)'
+                      : 'Attachments are disabled in Settings'
+                  }
                   className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label="Attach"
-                  disabled={blocked}
+                  disabled={blocked || !attachmentsEnabled}
                 >
                   <Paperclip size={15} />
                 </button>
@@ -173,6 +242,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                     autoGrow();
                   }}
                   onKeyDown={onKeyDown}
+                  onPaste={onPaste}
                   placeholder={composerPlaceholder(disabled, installed, restricted, mode)}
                   className="flex-1 resize-none bg-transparent py-1 text-[13px] leading-relaxed text-fg placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
                   style={{ maxHeight: MAX_HEIGHT }}
@@ -186,9 +256,9 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                     <CircleStop size={14} />
                     Stop
                   </button>
-                ) : value.trim().length === 0 ? (
-                  /* Default (empty) state: the voice button — typing morphs it
-                     into the send arrow, ChatGPT-style. */
+                ) : value.trim().length === 0 && readyDraftIds.length === 0 ? (
+                  /* Default (empty) state: the voice button — typing (or a
+                     staged attachment) morphs it into the send arrow. */
                   <button
                     type="button"
                     onClick={beginVoice}
@@ -228,6 +298,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                 )}
               </>
             )}
+            </div>
           </div>
 
           {/* One-line footer: as the center column narrows (side panels dragged

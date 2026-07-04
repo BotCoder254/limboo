@@ -6,7 +6,7 @@
  * prototype-polluting keys.
  */
 import { IpcChannels } from '@shared/ipc-channels';
-import { AGENT_LIMITS } from '@shared/constants';
+import { AGENT_LIMITS, ATTACHMENT_LIMITS } from '@shared/constants';
 import type {
   AgentDiagnostic,
   AgentInstall,
@@ -65,16 +65,37 @@ export function registerAgentHandlers(agent: AgentManager): void {
     agent.getSnapshot(assertSessionId(sessionId)),
   );
 
-  handle<[string, string, SessionPermissionMode?, string?], void>(
+  handle<[string, string, SessionPermissionMode?, string?, string[]?], void>(
     IpcChannels.agentSend,
-    async (_event, sessionId, prompt, mode, clientMessageId) => {
+    async (_event, sessionId, prompt, mode, clientMessageId, attachmentIds) => {
       const id = assertSessionId(sessionId);
-      if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+      // Attachment ids are optional; each must be a short, plain token. The
+      // Attachment Manager re-validates session ownership before use.
+      let attachIds: string[] | undefined;
+      if (attachmentIds !== undefined) {
+        if (!Array.isArray(attachmentIds) || attachmentIds.length > ATTACHMENT_LIMITS.maxFilesPerMessage.max) {
+          throw new Error('Invalid attachment list');
+        }
+        attachIds = attachmentIds.filter(
+          (a): a is string =>
+            typeof a === 'string' &&
+            a.length > 0 &&
+            a.length <= ATTACHMENT_LIMITS.idMax &&
+            /^[A-Za-z0-9_-]+$/.test(a),
+        );
+        if (attachIds.length !== attachmentIds.length) {
+          throw new Error('Invalid attachment id');
+        }
+        if (attachIds.length === 0) attachIds = undefined;
+      }
+      if (typeof prompt !== 'string' || (prompt.trim().length === 0 && !attachIds)) {
         throw new Error('Prompt must be a non-empty string');
       }
       if (prompt.length > AGENT_LIMITS.promptMax) {
         throw new Error('Prompt is too long');
       }
+      // An attachments-only send gets a minimal instruction as the visible turn.
+      const effective = prompt.trim().length === 0 ? 'Review the attached files.' : prompt;
       // Optional renderer-supplied id so the optimistic bubble and the persisted
       // message share one id (dedup on echo). Validated: a short, plain string.
       const clientId =
@@ -83,7 +104,7 @@ export function registerAgentHandlers(agent: AgentManager): void {
         clientMessageId.length <= 64
           ? clientMessageId
           : undefined;
-      await agent.send(id, prompt, assertMode(mode), clientId);
+      await agent.send(id, effective, assertMode(mode), clientId, attachIds);
     },
   );
 

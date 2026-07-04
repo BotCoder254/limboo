@@ -344,6 +344,40 @@ export interface AppSettings {
     openOnClick: boolean;
   };
   /**
+   * Attachment Manager — user-supplied files attached in the composer become
+   * session-owned staged copies under `userData/attachments/<sessionId>/`. The
+   * agent reads them on demand through its tool loop (never inlined wholesale);
+   * images can additionally ride the prompt as vision blocks. Attaching never
+   * executes anything and archives are never extracted.
+   */
+  attachments: {
+    /** Master switch for attaching files (composer button, drop, paste). */
+    enabled: boolean;
+    /** Per-file size cap (MB). */
+    maxFileSizeMB: number;
+    /** Files attachable to a single message. */
+    maxFilesPerMessage: number;
+    /** Total attachments a session may accumulate. */
+    maxTotalPerSession: number;
+    /** Per-category attach permissions (archives are off by default). */
+    categories: {
+      images: boolean;
+      documents: boolean;
+      code: boolean;
+      archives: boolean;
+    };
+    images: {
+      /** Send attached images to the model as vision content blocks. */
+      attachAsVision: boolean;
+      /** Downscale images above this size (MB) before the vision send. */
+      downscaleThresholdMB: number;
+    };
+    /** Index text attachments into the Search Engine (hook point; off = never). */
+    autoIndex: boolean;
+    /** Executables/scripts: refuse outright, or stage flagged with a warning. */
+    elevatedRiskPolicy: 'block' | 'warn';
+  };
+  /**
    * In-app auto-update (electron-updater + GitHub releases). Only ever active in
    * a packaged build; a no-op in dev. Limboo downloads updates over HTTPS from
    * its own GitHub Releases and verifies the signed installer before applying.
@@ -1598,6 +1632,61 @@ export interface ChatMessage {
   /** True while assistant tokens are still streaming in. */
   streaming: boolean;
   createdAt: number;
+  /** Files the user attached to this turn (hydrated main-side; user role only). */
+  attachments?: AttachmentMeta[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Attachment Manager                                                  */
+/* ------------------------------------------------------------------ */
+
+/** Coarse file classification driving icons, category gates, and handling. */
+export type AttachmentCategory = 'image' | 'code' | 'document' | 'data' | 'archive' | 'other';
+
+/**
+ * Lifecycle of an attachment: `uploading` while hashing/staging, `ready` once
+ * staged, `referenced` when sent with a message, `read` once the agent actually
+ * opened it through a read tool, `error` when staging failed.
+ */
+export type AttachmentStatus = 'uploading' | 'ready' | 'referenced' | 'read' | 'error';
+
+/** How the file entered the workspace. */
+export type AttachmentOrigin = 'pick' | 'drop' | 'paste';
+
+/** Elevated = executable/script/installer class; staged only under `warn` policy. */
+export type AttachmentRisk = 'safe' | 'elevated';
+
+/** Metadata record for one session-owned attachment (the staged copy is on disk). */
+export interface AttachmentMeta {
+  id: string;
+  sessionId: string;
+  workspaceId: string;
+  /** Sanitized display name (original basename). */
+  name: string;
+  /** On-disk name inside the session staging dir (`<hash12>-<name>`). */
+  storedName: string;
+  mime: string;
+  category: AttachmentCategory;
+  size: number;
+  sha256: string;
+  status: AttachmentStatus;
+  origin: AttachmentOrigin;
+  risk: AttachmentRisk;
+  /** Null while a composer draft; set when sent with a user message. */
+  messageId: string | null;
+  /** Tiny base64 data-URL thumbnail (images only, capped). */
+  thumb?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Staging progress pushed while a file is hashed + copied. */
+export interface AttachmentProgress {
+  sessionId: string;
+  id: string;
+  /** 0–100. */
+  percent: number;
 }
 
 /** Risk class used to gate a tool call. */

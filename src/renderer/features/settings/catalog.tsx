@@ -17,6 +17,7 @@ import {
   Info,
   ListTodo,
   Mic,
+  Paperclip,
   TerminalSquare,
   ArrowUpCircle,
   type LucideIcon,
@@ -30,6 +31,7 @@ import { PlanTasksPanel } from './panels/PlanTasksPanel';
 import { TerminalPanel } from './panels/TerminalPanel';
 import { GitPanel } from './panels/GitPanel';
 import { MemoryPanel } from './panels/MemoryPanel';
+import { AttachmentsPanel } from './panels/AttachmentsPanel';
 import { VoicePanel } from './panels/VoicePanel';
 import { ShortcutsPanel } from './panels/ShortcutsPanel';
 import { UpdatesPanel } from './panels/UpdatesPanel';
@@ -231,6 +233,27 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
       { id: 'gitCommandApproval', label: 'Require approval for git operations', keywords: ['safety', 'confirm', 'destructive'] },
     ],
     Panel: GitPanel,
+  },
+  {
+    id: 'attachments',
+    label: 'Attachments',
+    icon: Paperclip,
+    keywords: ['file', 'files', 'upload', 'attach', 'attachment', 'image', 'screenshot', 'paste', 'drag', 'drop', 'vision', 'pdf', 'document', 'archive', 'staging'],
+    fields: [
+      { id: 'attEnabled', label: 'Enable attachments', keywords: ['on', 'off', 'toggle', 'master'] },
+      { id: 'attMaxFileSize', label: 'Max file size', keywords: ['size', 'mb', 'limit', 'cap'] },
+      { id: 'attMaxPerMessage', label: 'Files per message', keywords: ['count', 'limit', 'multiple'] },
+      { id: 'attMaxPerSession', label: 'Files per session', keywords: ['count', 'limit', 'total'] },
+      { id: 'attCatImages', label: 'Images', keywords: ['png', 'jpg', 'screenshot', 'category'] },
+      { id: 'attCatDocuments', label: 'Documents & data', keywords: ['pdf', 'markdown', 'json', 'logs', 'category'] },
+      { id: 'attCatCode', label: 'Source code', keywords: ['code', 'category'] },
+      { id: 'attCatArchives', label: 'Archives', keywords: ['zip', 'tar', 'category', 'extract'] },
+      { id: 'attRiskPolicy', label: 'Executables & scripts', keywords: ['risk', 'block', 'warn', 'security', 'exe', 'script'] },
+      { id: 'attVision', label: 'Send images to the model', keywords: ['vision', 'multimodal', 'see', 'image'] },
+      { id: 'attDownscale', label: 'Downscale above', keywords: ['resize', 'image', 'size', 'vision'] },
+      { id: 'attAutoIndex', label: 'Index into Search', keywords: ['search', 'index', 'find'] },
+    ],
+    Panel: AttachmentsPanel,
   },
   {
     id: 'memory',

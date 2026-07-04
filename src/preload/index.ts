@@ -18,6 +18,8 @@ import type {
   AgentState,
   AppInfo,
   AppSettings,
+  AttachmentMeta,
+  AttachmentProgress,
   ClarificationDecision,
   ClarificationRequest,
   CommandId,
@@ -251,8 +253,9 @@ const agentApi = {
     prompt: string,
     mode?: SessionPermissionMode,
     clientMessageId?: string,
+    attachmentIds?: string[],
   ): Promise<void> =>
-    ipcRenderer.invoke(IpcChannels.agentSend, sessionId, prompt, mode, clientMessageId),
+    ipcRenderer.invoke(IpcChannels.agentSend, sessionId, prompt, mode, clientMessageId, attachmentIds),
   stop: (sessionId: string): Promise<void> => ipcRenderer.invoke(IpcChannels.agentStop, sessionId),
   getPlan: (sessionId: string): Promise<SessionPlan | null> =>
     ipcRenderer.invoke(IpcChannels.agentGetPlan, sessionId),
@@ -489,6 +492,46 @@ const memoryApi = {
   onChanged: (cb: () => void): (() => void) => subscribe<void>(IpcEvents.memoryChanged, cb),
 };
 
+const attachmentApi = {
+  /** All attachments of a session (drafts + sent), oldest first. */
+  list: (sessionId: string): Promise<AttachmentMeta[]> =>
+    ipcRenderer.invoke(IpcChannels.attachmentList, sessionId),
+  /** Open the native multi-file picker and stage the selection. */
+  pickFiles: (sessionId: string): Promise<AttachmentMeta[]> =>
+    ipcRenderer.invoke(IpcChannels.attachmentPickFiles, sessionId),
+  /** Stage dropped files by absolute path (from `getPathForFile`). */
+  addPaths: (sessionId: string, paths: string[]): Promise<AttachmentMeta[]> =>
+    ipcRenderer.invoke(IpcChannels.attachmentAddPaths, sessionId, paths),
+  /** Stage a pasted image (clipboard bytes; validated + capped in main). */
+  addPasted: (
+    sessionId: string,
+    name: string,
+    mime: string,
+    bytes: ArrayBuffer,
+  ): Promise<AttachmentMeta> =>
+    ipcRenderer.invoke(IpcChannels.attachmentAddPasted, sessionId, name, mime, bytes),
+  remove: (sessionId: string, id: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.attachmentRemove, sessionId, id),
+  /** Show the staged copy in the OS file manager. */
+  reveal: (sessionId: string, id: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.attachmentReveal, sessionId, id),
+  /**
+   * Resolve the real path of a dropped/picked File object (Electron 32+ removed
+   * `File.path`). The path is handed straight to the validated attachment IPC —
+   * the renderer never touches the filesystem itself.
+   */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  onChanged: (
+    cb: (payload: { sessionId: string; attachments: AttachmentMeta[] }) => void,
+  ): (() => void) =>
+    subscribe<{ sessionId: string; attachments: AttachmentMeta[] }>(
+      IpcEvents.attachmentsChanged,
+      cb,
+    ),
+  onProgress: (cb: (progress: AttachmentProgress) => void): (() => void) =>
+    subscribe<AttachmentProgress>(IpcEvents.attachmentProgress, cb),
+};
+
 const searchApi = {
   /** Unified, cross-subsystem search — ranked hits grouped by originating source. */
   global: (query: string, opts: SearchQueryOptions): Promise<SearchGroup[]> =>
@@ -602,6 +645,7 @@ const limbooApi = {
   search: searchApi,
   updates: updatesApi,
   voice: voiceApi,
+  attachment: attachmentApi,
 };
 
 contextBridge.exposeInMainWorld('limboo', limbooApi);

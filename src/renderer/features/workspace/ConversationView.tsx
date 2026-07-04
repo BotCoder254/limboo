@@ -15,7 +15,7 @@
  */
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, ChevronRight, CircleAlert } from 'lucide-react';
-import type { AgentActivityItem, AgentToolCall, ChatMessage, PermissionRequest } from '@shared/types';
+import type { AgentActivityItem, AgentToolCall, AttachmentMeta, ChatMessage, PermissionRequest } from '@shared/types';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { Spinner } from '@/renderer/components/ui';
 import { DiffStat } from '@/renderer/components/ui/DiffStat';
@@ -23,6 +23,8 @@ import { cn } from '@/renderer/lib/cn';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
+import { useAttachmentStore } from '@/renderer/stores/useAttachmentStore';
+import { AttachmentChip } from './AttachmentChip';
 import { Markdown } from './Markdown';
 import { MessageSkeleton, ThinkingPulse } from './MessageSkeleton';
 import { InlineApproval } from './InlineApproval';
@@ -326,10 +328,39 @@ function WaitingForDecision() {
 
 function UserBubble({ message }: { message: ChatMessage }) {
   return (
-    <div className="flex justify-end">
+    <div className="flex flex-col items-end gap-1.5">
+      {message.attachments && message.attachments.length > 0 && (
+        <MessageAttachments sessionId={message.sessionId} attachments={message.attachments} />
+      )}
       <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md border border-line bg-surface-2 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg shadow-sm animate-fade-in">
         {message.text}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Read-only attachment chips on a sent user turn. Status is looked up live in
+ * the attachment store (so a chip flips to "read" the moment the agent opens
+ * the file), with the persisted meta on the message as fallback.
+ */
+function MessageAttachments({
+  sessionId,
+  attachments,
+}: {
+  sessionId: string;
+  attachments: AttachmentMeta[];
+}) {
+  const live = useAttachmentStore((s) => s.bySession[sessionId]);
+  const reveal = useAttachmentStore((s) => s.reveal);
+  return (
+    <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+      {attachments.map((meta) => {
+        const current = live?.find((a) => a.id === meta.id) ?? meta;
+        return (
+          <AttachmentChip key={meta.id} meta={current} onClick={() => reveal(sessionId, meta.id)} />
+        );
+      })}
     </div>
   );
 }

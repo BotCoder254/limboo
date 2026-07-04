@@ -26,6 +26,7 @@ import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
+import { useAttachmentStore } from '@/renderer/stores/useAttachmentStore';
 
 export function CenterWorkspace() {
   const session = useSessionStore((s) =>
@@ -43,7 +44,11 @@ export function CenterWorkspace() {
 
   // Restore the transcript whenever the selected session changes.
   useEffect(() => {
-    if (session) void loadSession(session.id);
+    if (session) {
+      void loadSession(session.id);
+      // Restore the session's attachment set (composer drafts + sent chips).
+      void useAttachmentStore.getState().loadSession(session.id);
+    }
   }, [session?.id, loadSession]);
 
   return (

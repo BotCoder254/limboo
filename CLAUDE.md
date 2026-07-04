@@ -516,6 +516,25 @@ the real (no-mock) UI. Each owns one responsibility:
 - **Agent Manager** (`managers/AgentManager.ts`) — drives `@anthropic-ai/claude-
   agent-sdk` (plan/implement modes), risk-gated `canUseTool`, path-guarded to the
   workspace, persists transcript/activity/diagnostics, resumes SDK sessions.
+- **Attachment Manager** (`managers/attachments/AttachmentManager.ts` +
+  `validate.ts`) — ChatGPT-style composer attachments as **session-owned
+  workspace resources**: picker/drag-drop/paste files are validated (realpath +
+  symlink guard, size/count caps, name sanitize, image magic-byte + NUL sniff,
+  elevated-risk extension policy — attaching never executes, archives never
+  extracted), streamed-SHA-256-hashed with live progress (`attachment:progress`
+  → the composer chip's `CircularProgress` ring), deduped per session by hash,
+  staged under `userData/attachments/<sessionId>/`, and recorded in the
+  `attachments` table (schema v9; `message_id` NULL = composer draft). The agent
+  consumes them tool-first: a per-turn `<attachments>` manifest + SDK
+  `additionalDirectories` (this session's staging dir only, read tools only via
+  a scoped `canUseTool` carve-out — writes/Bash stay blocked) so Read/Grep pull
+  content on demand; raster images additionally ride as base64 vision blocks
+  via one-shot streaming input (nativeImage downscale above the threshold). A
+  Read of a staged file flips the chip to `read`. Trash keeps staged files
+  (restore-safe); purge + a boot orphan sweep delete them. UI: `AttachmentStrip`
+  / `AttachmentChip` in the Composer (drop zone + paste + paperclip), read-only
+  chips on sent turns, `useAttachmentStore`, Settings › Attachments
+  (`settings.attachments`, bounds in `ATTACHMENT_LIMITS`).
 - **Memory System** (`managers/memory/MemoryManager.ts`) — the **Local Memory
   System** (see below).
 - **Search Engine** (`managers/search/SearchManager.ts`) — the **Search Engine**
