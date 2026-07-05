@@ -585,6 +585,8 @@ const updatesApi = {
 const voiceApi = {
   /** Current voice runtime state (for hydration on mount). */
   getState: (): Promise<VoiceState> => ipcRenderer.invoke(IpcChannels.voiceGetState),
+  /** Pre-warm the speech engine (fork worker + load models) on mic intent. */
+  warm: (): Promise<void> => ipcRenderer.invoke(IpcChannels.voiceWarm),
   /** Begin a capture session bound to a session (same mode as a typed send). */
   start: (sessionId: string, mode: SessionPermissionMode): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.voiceStart, sessionId, mode),

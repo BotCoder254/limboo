@@ -188,6 +188,7 @@ export const IpcChannels = {
 
   // Voice subsystem — local STT/TTS as another modality for the agent session.
   voiceGetState: 'voice:getState',
+  voiceWarm: 'voice:warm',
   voiceStart: 'voice:start',
   voiceStop: 'voice:stop',
   voiceCancel: 'voice:cancel',

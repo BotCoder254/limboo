@@ -331,8 +331,8 @@ npm run package        # package the app (no installers)
 npm run dist           # package + electron-builder → branded installers in dist/
 npm run gen:icons      # regenerate runtime PNG icons from assets/icon.svg
 npm run gen:installer  # regenerate Windows installer art (.ico + NSIS BMPs)
-npm run make           # legacy Forge makers (unused — makers: [] in forge.config.ts)
-npm run publish        # legacy Forge publish (unused; releases ship via GitLab CI)
+npm run make           # alias for `npm run dist` (Forge has no makers; builds the current-OS installer)
+npm run publish        # alias for `npm run dist:publish` (build + upload to the GitHub release feed)
 ```
 
 There is **no `npm run dev`** — use `npm start` (Electron Forge drives Vite).

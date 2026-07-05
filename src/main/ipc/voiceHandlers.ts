@@ -37,6 +37,10 @@ export function registerVoiceHandlers(
 ): void {
   handle<[], VoiceState>(IpcChannels.voiceGetState, () => voice.getState());
 
+  // Pre-warm the engine (fork worker + load models) on mic intent so the next
+  // startCapture flips to listening instantly. Fire-and-forget, no state change.
+  handle<[], void>(IpcChannels.voiceWarm, () => voice.warm());
+
   handle<[string, string], void>(IpcChannels.voiceStart, async (_event, sessionId, mode) => {
     assertSessionId(sessionId);
     assertMode(mode);

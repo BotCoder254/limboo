@@ -67,6 +67,19 @@ let recognizer: OfflineRecognizer | null = null;
 let tts: OfflineTts | null = null;
 let vad: Vad | null = null;
 
+/**
+ * Resolves once the STT model has finished loading (or failed). STT is loaded
+ * lazily in the background so a capture can start listening before it is ready
+ * (see VoiceManager.startCapture); `transcribe()` awaits this so any segment
+ * captured during the load window is decoded as soon as the model is available
+ * instead of being silently dropped. Resolved on failure too, so the decode
+ * chain never hangs (a null recognizer just yields no transcript).
+ */
+let markSttReady!: () => void;
+const sttReady: Promise<void> = new Promise((resolve) => {
+  markSttReady = resolve;
+});
+
 async function loadStt(paths: SttModelPaths, numThreads: number): Promise<void> {
   recognizer = await OfflineRecognizer.createAsync({
     featConfig: { sampleRate: VOICE_SAMPLE_RATE, featureDim: 80 },
@@ -148,11 +161,16 @@ function resetCapture(): void {
 }
 
 function transcribe(samples: Float32Array): void {
-  const rec = recognizer;
-  if (!rec || samples.length === 0) return;
+  if (samples.length === 0) return;
   const durationMs = Math.round((samples.length / VOICE_SAMPLE_RATE) * 1000);
   decodeChain = decodeChain
     .then(async () => {
+      // STT may still be loading (deferred so listening can start instantly) —
+      // wait for it, then read the recognizer at decode time. Keeps segments in
+      // order and guarantees nothing captured during the load window is lost.
+      await sttReady;
+      const rec = recognizer;
+      if (!rec) return;
       const stream = rec.createStream();
       stream.acceptWaveform({ samples, sampleRate: VOICE_SAMPLE_RATE });
       const result = await rec.decodeAsync(stream);
@@ -357,7 +375,18 @@ parentPort.on('message', (e) => {
       const fail = (err: unknown) =>
         send({ t: 'load-error', kind: msg.kind, message: String(err) });
       try {
-        if (msg.kind === 'stt') void loadStt(msg.paths, msg.numThreads).then(done, fail);
+        if (msg.kind === 'stt')
+          void loadStt(msg.paths, msg.numThreads).then(
+            () => {
+              markSttReady();
+              done();
+            },
+            (err) => {
+              // Unblock any queued transcribe() so the decode chain never hangs.
+              markSttReady();
+              fail(err);
+            },
+          );
         else if (msg.kind === 'tts') void loadTts(msg.paths, msg.numThreads).then(done, fail);
         else {
           loadVad(msg.paths, msg.sensitivity, msg.silenceMs);

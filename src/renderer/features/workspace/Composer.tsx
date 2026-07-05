@@ -134,6 +134,12 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   const voiceReady = voiceEnabled && modelsReady.stt && modelsReady.vad;
   const voiceCapturing = VOICE_CAPTURE_PHASES.has(voicePhase) && voiceSessionId === sessionId;
 
+  // Warm the speech engine when the user reaches for the mic (hover/focus) so the
+  // click flips to listening instantly. No-op if models aren't installed.
+  const warmVoice = () => {
+    void window.limboo?.voice?.warm().catch(() => undefined);
+  };
+
   const beginVoice = () => {
     if (blocked || !sessionId) return;
     if (!voiceReady) {
@@ -262,6 +268,8 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                   <button
                     type="button"
                     onClick={beginVoice}
+                    onPointerEnter={voiceReady ? warmVoice : undefined}
+                    onFocus={voiceReady ? warmVoice : undefined}
                     disabled={blocked}
                     title={
                       voiceReady

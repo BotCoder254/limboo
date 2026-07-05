@@ -15,9 +15,39 @@
  * (e.g. `--publish always`) are forwarded straight to electron-builder.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { writeAppUpdateYml } from './write-app-update-yml.mjs';
+
+/**
+ * Load `.env` (gitignored) from the repo root into `process.env` so a local
+ * `npm run publish` picks up secrets like `GH_TOKEN` regardless of which shell
+ * it runs in (setx / export only affect newly-spawned shells). Only fills keys
+ * that are NOT already set, so CI/CD env variables always take precedence and a
+ * stale local `.env` can never override them. Never logs values.
+ */
+function loadDotEnv() {
+  const envPath = resolve(process.cwd(), '.env');
+  if (!existsSync(envPath)) return;
+  for (const raw of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    if (!key || (process.env[key] ?? '') !== '') continue;
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+loadDotEnv();
 
 // Forge names the packaged dir from packagerConfig.name ('Limboo') + platform/arch.
 const prepackaged = resolve(
