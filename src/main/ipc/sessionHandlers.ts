@@ -18,6 +18,7 @@ import type { SessionManager } from '../managers/SessionManager';
 import type { WorktreeManager } from '../managers/worktree/WorktreeManager';
 import type { ServiceManager } from '../managers/services/ServiceManager';
 import type { TerminalManager } from '../managers/TerminalManager';
+import type { AttachmentManager } from '../managers/attachments/AttachmentManager';
 import { logger } from '../logger';
 
 /** Bounds for session organization inputs (folder / tags). */
@@ -131,6 +132,7 @@ export function registerSessionHandlers(
   worktrees: WorktreeManager,
   services: ServiceManager,
   terminals: TerminalManager,
+  attachments: AttachmentManager,
 ): void {
   handle<[string, boolean?], Session[]>(IpcChannels.sessionList, (_e, workspaceId, trash) => {
     assertValidId(workspaceId);
@@ -214,6 +216,13 @@ export function registerSessionHandlers(
       await worktrees.removeForSession(id, { force: true, deleteBranch: false });
     } catch (err) {
       logger.warn('session:purge worktree removal failed', err);
+    }
+    // Purge is permanent: delete the session's staged attachments too (trash
+    // keeps them so a restored session still has its files).
+    try {
+      await attachments.purgeSession(id);
+    } catch (err) {
+      logger.warn('session:purge attachment cleanup failed', err);
     }
     sessions.purge(id);
   });

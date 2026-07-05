@@ -87,19 +87,55 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     const api = window.limboo?.voice;
     if (!api) return;
     set({ error: null });
+
+    // Open the mic in parallel with the main-side start so getUserMedia + the
+    // AudioWorklet warm up while the worker forks and models load, instead of
+    // strictly after. Buffer PCM until main reports a mic phase — its pushAudio
+    // drops audio until the capture session is armed — then flush, so the very
+    // first sound is never lost.
+    const deviceId = useSettingsStore.getState().settings.voice.input.deviceId;
+    /** ~2 s of 16 kHz mono Int16 (16000 samples/s × 2 bytes × 2 s). */
+    const MAX_BUFFERED_BYTES = 16000 * 2 * 2;
+    let pending: ArrayBuffer[] = [];
+    let pendingBytes = 0;
+    let live = false;
+
+    const onChunk = (pcm: ArrayBuffer) => {
+      if (live) {
+        api.pushAudio(pcm);
+        return;
+      }
+      if (MIC_PHASES.has(get().state.phase)) {
+        live = true;
+        for (const buffered of pending) api.pushAudio(buffered);
+        pending = [];
+        pendingBytes = 0;
+        api.pushAudio(pcm);
+        return;
+      }
+      // Still starting: hold the chunk, keeping only the most recent ~2 s.
+      pending.push(pcm);
+      pendingBytes += pcm.byteLength;
+      while (pendingBytes > MAX_BUFFERED_BYTES && pending.length > 1) {
+        const dropped = pending.shift();
+        if (dropped) pendingBytes -= dropped.byteLength;
+      }
+    };
+
+    const capturePromise = startCapture({ deviceId: deviceId || undefined, onChunk });
+
     try {
-      // Main first: it validates models + settings and flips to `starting`.
+      // Validates models + settings and flips to `starting`/`listening`.
       await api.start(sessionId, mode);
     } catch (err) {
+      // Main rejected (models missing / disabled): tear the mic back down once it opens.
+      void capturePromise.then(() => stopCapture()).catch(() => undefined);
       set({ error: friendlyError(err) });
       throw err;
     }
+
     try {
-      const deviceId = useSettingsStore.getState().settings.voice.input.deviceId;
-      await startCapture({
-        deviceId: deviceId || undefined,
-        onChunk: (pcm) => api.pushAudio(pcm),
-      });
+      await capturePromise;
     } catch (err) {
       // Mic denied / missing: abandon the main-side capture session too.
       await api.cancel().catch(() => undefined);

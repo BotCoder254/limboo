@@ -24,6 +24,7 @@ import type {
   Options,
   PermissionResult,
   SDKMessage,
+  SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   AgentActivityItem,
@@ -74,6 +75,7 @@ import type { SessionManager } from './SessionManager';
 import type { GitManager } from './GitManager';
 import type { MemoryManager } from './memory/MemoryManager';
 import { createMemoryMcpServer } from './memory/memoryTools';
+import type { AttachmentManager } from './attachments/AttachmentManager';
 import type { SearchManager } from './search/SearchManager';
 import { createSearchMcpServer } from './search/searchTools';
 
@@ -345,6 +347,8 @@ interface ActiveRun {
   result?: { ok: boolean; text: string };
   /** Set true once an ExitPlanMode plan was captured (suppresses the failure throw). */
   planCaptured?: boolean;
+  /** Attachments riding this turn (manifest + vision blocks; reused on retry). */
+  attachmentIds?: string[];
 }
 
 export class AgentManager {
@@ -468,6 +472,28 @@ export class AgentManager {
    */
   setMemoryManager(memory: MemoryManager): void {
     this.memory = memory;
+  }
+
+  /** Attachment Manager, wired after construction (session-owned staged files). */
+  private attachments: AttachmentManager | null = null;
+
+  /**
+   * Inject the Attachment Manager. Attachments are a platform service owned by
+   * the app — the agent *consumes* them: a per-turn manifest, read access to the
+   * session's staging dir, vision blocks for images, and read-status tracking.
+   */
+  setAttachmentManager(attachments: AttachmentManager): void {
+    this.attachments = attachments;
+  }
+
+  /** The session's staging dir, or null when it has no attachments. */
+  private attachmentsDirFor(sessionId: string): string | null {
+    if (!this.attachments) return null;
+    try {
+      return this.attachments.hasAny(sessionId) ? this.attachments.sessionDir(sessionId) : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1096,6 +1122,7 @@ export class AgentManager {
     prompt: string,
     permMode: SessionPermissionMode = 'default',
     clientMessageId?: string,
+    attachmentIds?: string[],
   ): Promise<void> {
     const isPlan = permMode === 'plan';
     if (this.runs.has(sessionId)) {
@@ -1126,6 +1153,13 @@ export class AgentManager {
       createdAt: Date.now(),
     };
     this.persistMessage(userMsg);
+    // Bind composer drafts to this turn so the chips ride the echoed message
+    // (ownership is re-validated in the manager; foreign ids are dropped).
+    if (attachmentIds && attachmentIds.length > 0 && this.attachments) {
+      const attached = this.attachments.attachToMessage(sessionId, attachmentIds, userMsg.id);
+      if (attached.length > 0) userMsg.attachments = attached;
+      attachmentIds = attached.map((a) => a.id);
+    }
     this.pushEvent({ kind: 'message-done', sessionId, message: userMsg });
     this.pushActivity(sessionId, 'prompt', 'You', prompt.slice(0, ACTIVITY_LIMITS.labelMax), 'info');
     // Name an untitled session after its first prompt (a no-op once renamed).
@@ -1141,7 +1175,12 @@ export class AgentManager {
 
     const cfg = this.settings.getAll().agent.connection;
     const abort = new AbortController();
-    this.runs.set(sessionId, { abort, query: null, mode: isPlan ? 'plan' : 'implement' });
+    this.runs.set(sessionId, {
+      abort,
+      query: null,
+      mode: isPlan ? 'plan' : 'implement',
+      attachmentIds: attachmentIds && attachmentIds.length > 0 ? attachmentIds : undefined,
+    });
     this.clearIdleTimer();
     this.setRequest(sessionId, {
       phase: 'submitting',
@@ -1367,9 +1406,45 @@ export class AgentManager {
         };
       }
       this.diag('lifecycle', 'debug', 'Handshake — query opened', undefined, sessionId);
-      const q = query({ prompt, options }) as unknown as AsyncIterable<SDKMessage> & {
-        close?: () => void;
-      };
+      // Attachments ride the SDK prompt only (the persisted transcript keeps the
+      // raw prompt): a compact manifest tells the agent what is staged on disk so
+      // it Reads on demand, and raster images are additionally sent as vision
+      // content blocks via a one-shot streaming-input message.
+      const attachIds = this.runs.get(sessionId)?.attachmentIds ?? [];
+      const manifest =
+        attachIds.length > 0 && this.attachments
+          ? this.attachments.manifestFor(sessionId, attachIds)
+          : undefined;
+      const effectivePrompt = manifest ? `${prompt}\n\n${manifest}` : prompt;
+      const imageBlocks =
+        attachIds.length > 0 && this.attachments
+          ? this.attachments.imageBlocksFor(sessionId, attachIds)
+          : [];
+      let q: AsyncIterable<SDKMessage> & { close?: () => void };
+      if (imageBlocks.length > 0) {
+        this.diag('request', 'info', `Attaching ${imageBlocks.length} image(s) for vision`, undefined, sessionId);
+        const userMessage = {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: effectivePrompt }, ...imageBlocks],
+          },
+          parent_tool_use_id: null,
+          session_id: '',
+        } as unknown as SDKUserMessage;
+        // One-shot generator: yields the single multimodal turn, then ends the
+        // input stream (the SDK treats generator return as end-of-input).
+        const oneShot = async function* (): AsyncGenerator<SDKUserMessage> {
+          yield userMessage;
+        };
+        q = query({ prompt: oneShot(), options }) as unknown as AsyncIterable<SDKMessage> & {
+          close?: () => void;
+        };
+      } else {
+        q = query({ prompt: effectivePrompt, options }) as unknown as AsyncIterable<SDKMessage> & {
+          close?: () => void;
+        };
+      }
       if (run) run.query = q;
       this.setLifecycle('streaming');
       this.setRequest(sessionId, { phase: 'streaming' });
@@ -1544,6 +1619,15 @@ export class AgentManager {
     // sees exactly what the agent executes. The Agent SDK does not stream tool
     // stdout, so this is a record (command now, output on result) — not a live PTY.
     if (name === 'Bash') this.mirrorCommandStart(sessionId, id, input);
+
+    // A read tool opening a staged attachment flips its chip to "read" live.
+    if (risk === 'read' && this.attachments) {
+      const file = filePathOf(input);
+      const dir = file ? this.attachmentsDirFor(sessionId) : null;
+      if (file && dir && isInside(dir, file)) {
+        this.attachments.markReadByPath(sessionId, file);
+      }
+    }
 
     // Snapshot the pre-edit state before the first write/command of this run.
     if (risk === 'write' || name === 'Bash') this.maybeAutoCheckpoint(sessionId);
@@ -1989,6 +2073,13 @@ export class AgentManager {
     }
     if (!agent.webSearch) options.disallowedTools = ['WebSearch', 'WebFetch'];
 
+    // Attachments: grant the SDK read access to THIS session's staging dir only
+    // (never the attachments root, never userData) so Read/Grep/Glob can open
+    // staged files on demand. Applied on every turn — prior-turn attachments
+    // stay readable across resumed conversations.
+    const attachmentsDir = this.attachmentsDirFor(sessionId);
+    if (attachmentsDir) options.additionalDirectories = [attachmentsDir];
+
     // Resume the Claude Code session so multi-turn conversations keep context.
     const sdkSessionId = this.loadSdkSession(sessionId);
     if (sdkSessionId) options.resume = sdkSessionId;
@@ -2018,6 +2109,23 @@ export class AgentManager {
           if (run) run.planCaptured = true;
         }
         return { behavior: 'deny', message: 'Plan captured for your review.', interrupt: true };
+      }
+
+      // Attachment carve-out (before the app-data guard, which would otherwise
+      // block the staging dir inside userData): READ tools may open files inside
+      // THIS session's own attachments dir. Writes/edits there stay denied below,
+      // and Bash referencing userData is still blocked by touchesAppData.
+      {
+        const attachmentsDir = this.attachmentsDirFor(sessionId);
+        const attachmentTarget = attachmentsDir ? filePathOf(input) : null;
+        if (
+          attachmentsDir &&
+          attachmentTarget &&
+          classifyTool(toolName) === 'read' &&
+          isInside(attachmentsDir, attachmentTarget)
+        ) {
+          return { behavior: 'allow', updatedInput: input };
+        }
       }
 
       // App-data guard (defense in depth): the agent must never reach Limboo's own
@@ -2143,13 +2251,24 @@ export class AgentManager {
         'SELECT id, session_id, role, text, created_at FROM agent_messages WHERE session_id = ? ORDER BY created_at ASC',
       )
       .all(sessionId) as Array<{ id: string; session_id: string; role: string; text: string; created_at: number }>;
+    // Rehydrate the attachment chips of sent turns (message_id links the rows).
+    const byMessage = new Map<string, ChatMessage['attachments']>();
+    if (this.attachments) {
+      for (const meta of this.attachments.list(sessionId)) {
+        if (!meta.messageId) continue;
+        const bucket = byMessage.get(meta.messageId) ?? [];
+        bucket.push(meta);
+        byMessage.set(meta.messageId, bucket);
+      }
+    }
     return rows.map((r) => ({
       id: r.id,
       sessionId: r.session_id,
-      role: r.role === 'assistant' ? 'assistant' : 'user',
+      role: r.role === 'assistant' ? ('assistant' as const) : ('user' as const),
       text: r.text,
       streaming: false,
       createdAt: r.created_at,
+      attachments: byMessage.get(r.id),
     }));
   }
 

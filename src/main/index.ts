@@ -30,6 +30,7 @@ import { SearchManager } from './managers/search/SearchManager';
 import { AutoUpdateManager } from './managers/AutoUpdateManager';
 import { VoiceManager } from './managers/voice/VoiceManager';
 import { VoiceModelManager } from './managers/voice/VoiceModelManager';
+import { AttachmentManager } from './managers/attachments/AttachmentManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -84,6 +85,7 @@ function bootstrap(): void {
   let services: ServiceManager;
   let proxy: ProxyServer;
   let memory: MemoryManager;
+  let attachments: AttachmentManager;
   let search: SearchManager;
   let updates: AutoUpdateManager;
   let voiceModels: VoiceModelManager;
@@ -133,6 +135,10 @@ function bootstrap(): void {
     // into prompts before they reach the harness.
     memory = new MemoryManager(settings);
     memory.seedDefaults(null); // global / user-scope starters
+    // The Attachment Manager — session-owned files staged for the agent's tool
+    // loop. Sweeps orphaned staging dirs shortly after boot (off the hot path).
+    attachments = new AttachmentManager(sessions, settings);
+    void attachments.sweepOrphans().catch((err) => logger.warn('attachment sweep failed', err));
     // The Search Engine — a platform service owned by the app. Maintains the local
     // file/symbol index and federates every other subsystem behind one query
     // interface; also the primary context provider for the coding agent.
@@ -149,6 +155,9 @@ function bootstrap(): void {
     // new memories from commits. Both treat memory as an optional collaborator.
     agent.setMemoryManager(memory);
     git.setMemoryManager(memory);
+    // The agent consumes attachments: manifest + staging-dir read access per
+    // prompt, vision blocks for images, and read-status tracking on tool use.
+    agent.setAttachmentManager(attachments);
     // The Search Engine federates memory / git / sessions at query time, powers the
     // Global Search UI, and feeds ranked context into the agent prompt.
     search.setMemoryManager(memory);
@@ -189,6 +198,7 @@ function bootstrap(): void {
       worktree: worktrees,
       services,
       memory,
+      attachments,
       search,
       updates,
       voice,

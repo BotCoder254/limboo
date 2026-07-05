@@ -331,6 +331,36 @@ function migrate(database: Database.Database): void {
         VALUES (new.rowid, new.name, new.signature);
     END;
 
+    -- Attachment Manager (schema v9) — session-owned files attached in the
+    -- composer. The staged copy lives under userData/attachments/<session_id>/
+    -- <stored_name>; this table is the metadata + lifecycle record. message_id
+    -- is NULL while the attachment is a composer draft and set when it is sent
+    -- with a user turn. Deduped per session by content hash. All values bound.
+    CREATE TABLE IF NOT EXISTS attachments (
+      id           TEXT PRIMARY KEY,
+      session_id   TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      name         TEXT NOT NULL,
+      stored_name  TEXT NOT NULL,
+      mime         TEXT NOT NULL,
+      category     TEXT NOT NULL,
+      size         INTEGER NOT NULL,
+      sha256       TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'ready',
+      origin       TEXT NOT NULL,
+      risk         TEXT NOT NULL DEFAULT 'safe',
+      message_id   TEXT,
+      thumb        TEXT,
+      error        TEXT,
+      meta         TEXT NOT NULL DEFAULT '{}',
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_attachments_session
+      ON attachments (session_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_dedupe
+      ON attachments (session_id, sha256);
+
     -- Recent searches (most-recent-first) per scope. workspace_id NULL = global.
     CREATE TABLE IF NOT EXISTS search_history (
       id           TEXT PRIMARY KEY,

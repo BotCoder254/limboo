@@ -10,12 +10,13 @@ Every method maps to a channel name in
 [IPC channels reference](ipc-channels.md). Subscriptions (the `on*` methods) return
 an unsubscribe function.
 
-The API has 17 namespaces:
+The API has 18 namespaces:
 
 ```
 window.limboo.{ window, settings, system, app, events,
                workspace, session, agent, fs, terminal, git,
-               worktree, services, memory, search, updates, voice }
+               worktree, services, memory, search, updates, voice,
+               attachment }
 ```
 
 ## window
@@ -181,6 +182,18 @@ Local voice subsystem: runtime controls (`getState`, `start`, `stop`,
 `cancel`, `speak`, `stopSpeaking`), model management (`models.*`), and the
 `voice:*` event subscriptions. Mic audio streams main-ward over the
 fire-and-forget `voice:audio-chunk` send channel.
+
+## attachment
+
+Attachment Manager — session-owned files staged for the agent's tool loop.
+
+- `list(sessionId)` — all attachments (drafts + sent), oldest first.
+- `pickFiles(sessionId)` — native multi-file picker → stage.
+- `addPaths(sessionId, paths)` — stage dropped files (paths from `getPathForFile`).
+- `addPasted(sessionId, name, mime, bytes)` — stage a pasted image.
+- `remove(sessionId, id)`, `reveal(sessionId, id)`
+- `getPathForFile(file)` — resolve a dropped `File`'s real path (webUtils).
+- `onChanged(cb)` / `onProgress(cb)` — subscriptions (set changes / staging %).
 
 ## Usage note
 

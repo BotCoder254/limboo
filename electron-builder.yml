@@ -23,10 +23,19 @@ directories:
 
 # Publish provider for releases AND the auto-update feed electron-updater reads
 # (it fetches latest*.yml from this repo's GitHub Releases).
+#
+# releaseType: release — publish straight to a full GitHub Release (which
+# auto-creates the `v${version}` tag) rather than the electron-builder default
+# `draft`. This matches the repo's existing releases (all non-draft), so a local
+# `npm run publish` never hits the "existing type not compatible with publishing
+# type" mismatch, and the auto-generated tag (v<version>) stays consistent with
+# package.json. The version is the single source of truth: bump it (git tag or
+# `node ci/scripts/apply-tag-version.mjs vX.Y.Z`) and the tag follows.
 publish:
   provider: github
   owner: BotCoder254
   repo: limboo
+  releaseType: release
 
 # ---------------------------------------------------------------------------
 # Windows — the branded, multi-page NSIS wizard (the "first screen of the app").

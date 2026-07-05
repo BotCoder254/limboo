@@ -1,7 +1,7 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 11;
+export const SETTINGS_VERSION = 12;
 
 /** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
 export type AgentProvider = 'anthropic';
@@ -210,6 +210,55 @@ export const VOICE_LIMITS = {
   progressThrottleMs: 150,
 } as const;
 
+/**
+ * Bounds + caps for the Attachment Manager (main + renderer both clamp).
+ * Attachments are session-owned staged copies under
+ * `userData/attachments/<sessionId>/` — never executed, never extracted.
+ */
+export const ATTACHMENT_LIMITS = {
+  /** Per-file size cap the user can tune (MB). */
+  maxFileSizeMB: { min: 1, max: 100, default: 25 },
+  /** Files attachable to a single message. */
+  maxFilesPerMessage: { min: 1, max: 20, default: 10 },
+  /** Total attachments a session may accumulate. */
+  maxTotalPerSession: { min: 10, max: 500, default: 100 },
+  /** Messages API hard cap per image content block (decoded bytes). */
+  imageVisionMaxBytes: 5 * 1024 * 1024,
+  /** Threshold (MB) above which an image is downscaled before vision send. */
+  downscaleThresholdMB: { min: 1, max: 5, default: 3 },
+  /** Longest edge (px) of the chip thumbnail. */
+  thumbEdgePx: 96,
+  /** Cap on the stored thumbnail data URL (chars). */
+  thumbDataUrlMax: 65_536,
+  /** Display-name length cap (sanitized basename). */
+  nameMax: 120,
+  /** Source-path length cap accepted from the renderer. */
+  pathMax: 4096,
+  /** Attachment id length cap. */
+  idMax: 64,
+  /** Char budget of the `<attachments>` manifest appended to a prompt. */
+  manifestCharBudget: 4_000,
+  /** Max bytes accepted for one pasted (in-memory) image over IPC. */
+  pasteBytesMax: 32 * 1024 * 1024,
+  /** Min interval (ms) between staging-progress pushes to the renderer. */
+  progressThrottleMs: 100,
+} as const;
+
+/**
+ * Extensions classified as elevated risk (executables / scripts / installers).
+ * Attaching NEVER executes anything; policy `block` refuses these, `warn`
+ * stages them flagged so the UI shows a warning tone.
+ */
+export const ATTACHMENT_ELEVATED_EXTENSIONS = [
+  'exe', 'dll', 'msi', 'scr', 'com', 'bat', 'cmd', 'ps1', 'psm1', 'vbs',
+  'vbe', 'jse', 'wsf', 'jar', 'lnk', 'sh', 'app', 'dmg', 'pkg', 'deb', 'rpm',
+] as const;
+
+/** Archive extensions — attachable when enabled, but never auto-extracted. */
+export const ATTACHMENT_ARCHIVE_EXTENSIONS = [
+  'zip', 'tar', 'gz', 'tgz', '7z', 'rar', 'bz2', 'xz', 'zst',
+] as const;
+
 export const FONT_SCALE_LIMITS = { min: 0.85, max: 1.3, default: 1 } as const;
 
 /**
@@ -375,6 +424,24 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fuzzy: true,
     openOnClick: true,
   },
+  attachments: {
+    enabled: true,
+    maxFileSizeMB: ATTACHMENT_LIMITS.maxFileSizeMB.default,
+    maxFilesPerMessage: ATTACHMENT_LIMITS.maxFilesPerMessage.default,
+    maxTotalPerSession: ATTACHMENT_LIMITS.maxTotalPerSession.default,
+    categories: {
+      images: true,
+      documents: true,
+      code: true,
+      archives: false,
+    },
+    images: {
+      attachAsVision: true,
+      downscaleThresholdMB: ATTACHMENT_LIMITS.downscaleThresholdMB.default,
+    },
+    autoIndex: false,
+    elevatedRiskPolicy: 'block',
+  },
   updates: {
     autoCheck: true,
     autoDownload: true,
@@ -427,7 +494,7 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 8;
+export const WORKSPACE_SCHEMA_VERSION = 9;
 
 /** Input caps the main process enforces on renderer-supplied session values. */
 export const SESSION_LIMITS = {

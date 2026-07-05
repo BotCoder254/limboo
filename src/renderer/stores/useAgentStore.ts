@@ -29,6 +29,7 @@ import type {
   SessionPermissionMode,
 } from '@shared/types';
 import { useUIStore } from './useUIStore';
+import { useAttachmentStore } from './useAttachmentStore';
 
 function emptySnapshot(): AgentSessionSnapshot {
   return { messages: [], activity: [], changes: [], tasks: [], toolCalls: [], plan: null };
@@ -76,7 +77,12 @@ interface AgentStoreState {
   hydrate: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
   loadDiagnostics: (sessionId?: string | null) => Promise<void>;
-  send: (sessionId: string, prompt: string, mode?: SessionPermissionMode) => Promise<void>;
+  send: (
+    sessionId: string,
+    prompt: string,
+    mode?: SessionPermissionMode,
+    attachmentIds?: string[],
+  ) => Promise<void>;
   stop: (sessionId: string) => void;
   clear: (sessionId: string) => void;
   clearRateLimit: () => void;
@@ -342,7 +348,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       set({ diagnostics: diagnostics.slice(-MAX_DIAGNOSTICS) });
     },
 
-    send: async (sessionId, prompt, mode) => {
+    send: async (sessionId, prompt, mode, attachmentIds) => {
       const api = window.limboo?.agent;
       if (!api) return;
       // Optimistic render: show the user's turn the instant Send is clicked,
@@ -353,13 +359,22 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
           : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // Attachment chips render on the optimistic bubble too; the echoed message
+      // carries the authoritative (main-validated) set.
+      const draftMetas = attachmentIds?.length
+        ? (useAttachmentStore.getState().bySession[sessionId] ?? []).filter((a) =>
+            attachmentIds.includes(a.id),
+          )
+        : undefined;
       const optimistic: ChatMessage = {
         id: clientMessageId,
         sessionId,
         role: 'user',
-        text: prompt,
+        // An attachments-only send shows main's substituted instruction.
+        text: prompt.trim().length === 0 && attachmentIds?.length ? 'Review the attached files.' : prompt,
         streaming: false,
         createdAt: Date.now(),
+        attachments: draftMetas && draftMetas.length > 0 ? draftMetas : undefined,
       };
       set((state) => {
         const snapshot = state.bySession[sessionId] ?? emptySnapshot();
@@ -374,7 +389,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         };
       });
       try {
-        await api.send(sessionId, prompt, mode, clientMessageId);
+        await api.send(sessionId, prompt, mode, clientMessageId, attachmentIds);
       } catch (err) {
         useUIStore.getState().addToast({
           title: 'Could not reach the agent',

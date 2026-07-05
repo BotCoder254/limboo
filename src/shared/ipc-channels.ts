@@ -178,8 +178,17 @@ export const IpcChannels = {
   searchSavedCreate: 'search:savedCreate',
   searchSavedDelete: 'search:savedDelete',
 
+  // Attachment Manager — session-owned files staged for the agent's tool loop.
+  attachmentList: 'attachment:list',
+  attachmentPickFiles: 'attachment:pickFiles',
+  attachmentAddPaths: 'attachment:addPaths',
+  attachmentAddPasted: 'attachment:addPasted',
+  attachmentRemove: 'attachment:remove',
+  attachmentReveal: 'attachment:reveal',
+
   // Voice subsystem — local STT/TTS as another modality for the agent session.
   voiceGetState: 'voice:getState',
+  voiceWarm: 'voice:warm',
   voiceStart: 'voice:start',
   voiceStop: 'voice:stop',
   voiceCancel: 'voice:cancel',
@@ -262,6 +271,10 @@ export const IpcEvents = {
   searchChanged: 'search:changed',
   /** Progress of an in-flight search index pass. */
   searchIndexProgress: 'search:index-progress',
+  /** A session's attachment set changed (staged / sent / read / removed). */
+  attachmentsChanged: 'attachment:changed',
+  /** Staging progress for one attachment (hash + copy percent). */
+  attachmentProgress: 'attachment:progress',
   /** The auto-update lifecycle advanced (checking / available / progress / ready). */
   updateStatus: 'update:status',
   /** The voice runtime state changed (idle / listening / transcribing / speaking). */

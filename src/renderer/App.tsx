@@ -28,6 +28,7 @@ import { useMemoryStore } from '@/renderer/stores/useMemoryStore';
 import { useSearchStore } from '@/renderer/stores/useSearchStore';
 import { useUpdateStore } from '@/renderer/stores/useUpdateStore';
 import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
+import { useAttachmentStore } from '@/renderer/stores/useAttachmentStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -70,6 +71,8 @@ export function App() {
     void useVoiceStore.getState().hydrate();
     // Subscribe to supervised-service lifecycle pushes (Services strip).
     useServiceStore.getState().hydrate();
+    // Subscribe to attachment set + staging-progress pushes (composer chips).
+    useAttachmentStore.getState().hydrate();
   }, []);
 
   return (

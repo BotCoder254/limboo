@@ -133,21 +133,49 @@ export class VoiceManager {
     this.applyInterruption();
 
     this.setState({ phase: 'starting', sessionId, error: undefined });
+    const activation = voice.input.activation;
     try {
       await this.ensureWorker();
-      await this.ensureLoaded('vad');
-      await this.ensureLoaded('stt');
+      // Auto mode needs the VAD loaded before audio flows (the worker feeds every
+      // chunk through it to detect speech). Manual mode just accumulates raw audio,
+      // so it needs neither VAD nor STT to begin — start listening instantly.
+      if (activation === 'auto') await this.ensureLoaded('vad');
     } catch (err) {
       this.setState({ phase: 'unavailable', error: String(err) });
       throw err;
     }
 
+    // STT (Parakeet, ~600 MB) is the slow model and is only needed at transcription
+    // time, not to start listening — load it in the background. The worker queues any
+    // segment captured before it finishes (see worker.ts `sttReady`), so nothing is
+    // lost. Manual mode also warms the VAD lazily (harmless if unused).
+    void this.ensureLoaded('stt').catch((err) => logger.warn('voice: stt load failed', err));
+    if (activation !== 'auto') {
+      void this.ensureLoaded('vad').catch(() => undefined);
+    }
+
     this.captureSessionId = sessionId;
     this.captureMode = mode;
-    const activation = voice.input.activation;
     this.post({ t: 'capture-start', mode: activation === 'auto' ? 'auto' : 'manual' });
     this.setState({ phase: activation === 'auto' ? 'listening' : 'recording', sessionId });
     this.touchActivity();
+  }
+
+  /**
+   * Warm the speech engine ahead of an actual capture: fork the worker and load
+   * the VAD + STT models in the background so the next `startCapture` flips to
+   * listening instantly. Fire-and-forget, no state change; safe to call on mic
+   * hover/focus. Model memory is still reclaimed by the idle timer.
+   */
+  warm(): void {
+    const voice = this.settings.getAll().voice;
+    if (!voice.enabled) return;
+    this.refreshModelsReady();
+    if (!this.state.modelsReady.stt || !this.state.modelsReady.vad) return;
+    void this.ensureWorker()
+      .then(() => Promise.all([this.ensureLoaded('vad'), this.ensureLoaded('stt')]))
+      .then(() => this.touchActivity())
+      .catch((err) => logger.warn('voice: warm failed', err));
   }
 
   /** One mic PCM chunk from the renderer (already size-capped by the handler). */

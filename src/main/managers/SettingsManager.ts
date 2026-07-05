@@ -10,6 +10,7 @@ import type { AppSettings, DeepPartial } from '@shared/types';
 import {
   AGENT_CONNECTION_LIMITS,
   AGENT_LIMITS,
+  ATTACHMENT_LIMITS,
   CHAT_FONTS,
   DEFAULT_SETTINGS,
   FONT_SCALE_LIMITS,
@@ -203,6 +204,34 @@ export class SettingsManager {
       plan.defaultMode = plan.defaultMode === ('implement' as unknown) ? 'default' : 'plan';
     }
     plan.historyLimit = Math.round(clamp(plan.historyLimit, 1, 100));
+
+    // Attachments — clamp the numeric caps, coerce the toggles, and whitelist
+    // the elevated-risk policy (renderer-supplied values gate real file I/O).
+    const att = merged.attachments;
+    const A = ATTACHMENT_LIMITS;
+    att.enabled = !!att.enabled;
+    att.maxFileSizeMB = Math.round(
+      clamp(att.maxFileSizeMB, A.maxFileSizeMB.min, A.maxFileSizeMB.max),
+    );
+    att.maxFilesPerMessage = Math.round(
+      clamp(att.maxFilesPerMessage, A.maxFilesPerMessage.min, A.maxFilesPerMessage.max),
+    );
+    att.maxTotalPerSession = Math.round(
+      clamp(att.maxTotalPerSession, A.maxTotalPerSession.min, A.maxTotalPerSession.max),
+    );
+    for (const key of Object.keys(att.categories) as (keyof typeof att.categories)[]) {
+      att.categories[key] = !!att.categories[key];
+    }
+    att.images.attachAsVision = !!att.images.attachAsVision;
+    att.images.downscaleThresholdMB = clamp(
+      att.images.downscaleThresholdMB,
+      A.downscaleThresholdMB.min,
+      A.downscaleThresholdMB.max,
+    );
+    att.autoIndex = !!att.autoIndex;
+    if (!['block', 'warn'].includes(att.elevatedRiskPolicy)) {
+      att.elevatedRiskPolicy = 'block';
+    }
 
     merged.updates.autoCheck = !!merged.updates.autoCheck;
     merged.updates.autoDownload = !!merged.updates.autoDownload;
