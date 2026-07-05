@@ -17,6 +17,10 @@ model. It is the environment around one.
 [Roadmap](ROADMAP.md) ·
 [Security](SECURITY.md)
 
+<br />
+
+<img src="assets/screenshots/01-main-shell.png" alt="Limboo — sessions, the conversation-first workspace, and the composer on the pure-black shell" width="920" />
+
 </div>
 
 ---
@@ -65,6 +69,23 @@ project, its history, and its memory belong to the developer.
   conversation, tool calls, and status.
 - **Pure-black, dark-only UI** — a minimal three-pane shell tuned for a true
   `#000000` background.
+
+## Screenshots
+
+A tour of the shell: sessions on the left, the conversation in the center, and
+the activity rail on the right — every panel below is one click on the rail.
+
+| | |
+| --- | --- |
+| **Files** — the indexed workspace tree with per-language icons<br /><img src="assets/screenshots/02-files-panel.png" alt="Files panel — indexed workspace tree" /> | **Changes** — live git status with per-file diff stats<br /><img src="assets/screenshots/03-changes-panel.png" alt="Changes panel — live git status" /> |
+| **Git** — stage, commit, history, branches, and checkpoints<br /><img src="assets/screenshots/04-git-panel.png" alt="Git panel — staging and commit" /> | **Memory** — durable project knowledge with tiered proposals<br /><img src="assets/screenshots/05-memory-panel.png" alt="Memory panel — project knowledge" /> |
+| **Tasks** — the agent's live plan and progress<br /><img src="assets/screenshots/06-tasks-panel.png" alt="Tasks panel — agent plan" /> | **Terminal** — workspace-scoped PTY sessions<br /><img src="assets/screenshots/07-terminal-panel.png" alt="Terminal panel — integrated PTY" /> |
+| **Command palette** — every command behind <kbd>Ctrl/Cmd</kbd>+<kbd>K</kbd><br /><img src="assets/screenshots/08-command-palette.png" alt="Command palette overlay" /> | **Global search** — files, symbols, docs, memory, commits, sessions<br /><img src="assets/screenshots/09-global-search.png" alt="Global search overlay" /> |
+
+**Settings** — general, appearance, agent, git, memory, and advanced JSON editing
+in one modal:
+
+<img src="assets/screenshots/10-settings.png" alt="Settings modal" width="920" />
 
 ## Architecture at a glance
 
