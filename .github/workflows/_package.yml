@@ -95,7 +95,7 @@ jobs:
 
       - name: Attest SBOM
         if: ${{ inputs.attest }}
-        uses: actions/attest-sbom@v1
+        uses: actions/attest-sbom@v4
         with:
           subject-path: dist/SHA256SUMS
           sbom-path: dist/limboo-sbom.cdx.json
