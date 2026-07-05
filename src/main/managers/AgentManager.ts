@@ -1221,6 +1221,7 @@ export class AgentManager {
     permMode: SessionPermissionMode,
   ): Promise<void> {
     let attempt = 0;
+    let resumeDropped = false;
     for (;;) {
       try {
         await this.runOnce(sessionId, prompt, abort, permMode);
@@ -1250,6 +1251,28 @@ export class AgentManager {
           return;
         }
         const raw = err instanceof Error ? err.message : String(err);
+
+        // Corrupted-resume self-heal: the CLI's `[ede_diagnostic] … stop_reason=
+        // tool_use` result means the resumed transcript ends in a tool_use with
+        // no tool_result (a prior run died mid-tool). Resuming it fails the same
+        // way every turn, so drop the stored SDK session id once and retry with
+        // a fresh SDK session (Limboo's own transcript/history is unaffected).
+        const resumeCorrupted =
+          raw.includes('ede_diagnostic') ||
+          (raw.includes('returned an error result') && raw.includes('stop_reason=tool_use'));
+        if (resumeCorrupted && !resumeDropped && this.loadSdkSession(sessionId)) {
+          resumeDropped = true;
+          this.forgetSdkSession(sessionId);
+          this.diag(
+            'recovery',
+            'warning',
+            'Resumed transcript was corrupted — starting a fresh SDK session',
+            redact(raw),
+            sessionId,
+          );
+          continue; // retry — buildOptions no longer finds a resume id
+        }
+
         const cls = classifyAgentError(redact(raw));
         this.diag('recovery', cls.recoverable ? 'warning' : 'error', `Run error (${cls.outcome})`, redact(raw), sessionId);
 
@@ -2321,6 +2344,16 @@ export class AgentManager {
         'INSERT OR REPLACE INTO agent_session_meta (session_id, sdk_session_id, updated_at) VALUES (?, ?, ?)',
       )
       .run(sessionId, sdkSessionId, Date.now());
+  }
+
+  /**
+   * Drop the stored SDK session id so the next run starts a fresh SDK session
+   * instead of resuming. Used when the resumed transcript is corrupted (e.g. it
+   * ends in a tool_use with no tool_result after a mid-tool kill) — resuming it
+   * would fail identically on every turn.
+   */
+  private forgetSdkSession(sessionId: string): void {
+    getDb().prepare('DELETE FROM agent_session_meta WHERE session_id = ?').run(sessionId);
   }
 
   /* ---------------------------------------------------------------- */

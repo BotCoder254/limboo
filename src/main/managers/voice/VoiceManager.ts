@@ -51,6 +51,8 @@ export class VoiceManager {
   private worker: UtilityProcess | null = null;
   private workerReady = false;
   private workerRestarts = 0;
+  /** Set when WE asked the worker to shut down, so its exit is not a crash. */
+  private expectedExit = false;
   private readonly loadedKinds = new Set<VoiceWorkerModelKind>();
   private readonly loading = new Map<VoiceWorkerModelKind, Promise<void>>();
   /** Signature of the VAD tuning the worker was loaded with. */
@@ -423,12 +425,16 @@ export class VoiceManager {
     });
     this.worker = proc;
     this.workerReady = false;
+    this.expectedExit = false;
     this.loadedKinds.clear();
     this.loading.clear();
 
     proc.on('message', (msg: VoiceWorkerResponse) => this.onWorkerMessage(msg));
     proc.on('exit', (code) => {
-      logger.warn(`voice: worker exited with code ${code}`);
+      const expected = this.expectedExit && code === 0;
+      this.expectedExit = false;
+      if (expected) logger.info('voice: worker exited cleanly');
+      else logger.warn(`voice: worker exited with code ${code}`);
       const wasReady = this.workerReady;
       this.worker = null;
       this.workerReady = false;
@@ -638,6 +644,7 @@ export class VoiceManager {
         this.captureSessionId !== null || this.currentJob !== null || this.ttsQueue.length > 0;
       if (!busy && this.worker) {
         logger.info('voice: shutting down idle speech worker');
+        this.expectedExit = true;
         this.post({ t: 'shutdown' });
       }
     }, WORKER_IDLE_MS);
@@ -666,6 +673,7 @@ export class VoiceManager {
     this.unsubscribeAgent?.();
     this.ttsQueue.length = 0;
     if (this.worker) {
+      this.expectedExit = true;
       this.post({ t: 'shutdown' });
       this.worker = null;
     }
