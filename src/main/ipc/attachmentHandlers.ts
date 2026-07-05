@@ -53,6 +53,9 @@ export function registerAttachmentHandlers(attachments: AttachmentManager): void
         if (typeof p !== 'string' || p.length === 0 || p.length > ATTACHMENT_LIMITS.pathMax) {
           throw new Error('Invalid path');
         }
+        if (p.includes('\0')) {
+          throw new Error('Invalid path');
+        }
       }
       return attachments.addFromPaths(id, paths, 'drop');
     },
