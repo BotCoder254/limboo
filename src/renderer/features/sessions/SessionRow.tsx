@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CircleDot, GitBranch, Pin, Archive, MoreHorizontal } from 'lucide-react';
 import type { Session, SessionStatus } from '@shared/types';
-import { Badge, DiffStat, IconButton, Spinner } from '@/renderer/components/ui';
+import { Badge, DiffStat, IconButton, SessionSpinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { relativeTime } from '@/renderer/lib/format';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
@@ -96,7 +96,7 @@ export function SessionRow({
             <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
           </span>
         ) : running ? (
-          <Spinner size={13} />
+          <SessionSpinner size={13} />
         ) : (
           <CircleDot size={13} className={STATUS_COLOR[session.status]} />
         )}

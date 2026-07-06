@@ -13,7 +13,7 @@
  */
 import { useEffect, useState } from 'react';
 import { AlertTriangle, CircleDot, GitBranch, Plus, TerminalSquare } from 'lucide-react';
-import { DiffStat, IconButton, Spinner } from '@/renderer/components/ui';
+import { DiffStat, IconButton, SessionSpinner, Spinner } from '@/renderer/components/ui';
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
 import { WorktreeTabs } from '@/renderer/features/sessions/WorktreeTabs';
 import { ServicesStrip } from '@/renderer/features/sessions/ServicesStrip';
@@ -200,7 +200,7 @@ function SessionHeader({
   const revalidating = useResumeStore((s) => s.bySession[sessionId]?.phase === 'checking');
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4">
-      {running ? <Spinner size={12} /> : <CircleDot size={12} className="text-success" />}
+      {running ? <SessionSpinner size={12} /> : <CircleDot size={12} className="text-success" />}
       <span className="text-[13px] font-medium">{title}</span>
       <span className="text-[11px] text-faint">{branch}</span>
       <DiffStat adds={adds} dels={dels} className="ml-2" />

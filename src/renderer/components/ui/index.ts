@@ -5,6 +5,7 @@ export { EmptyState } from './EmptyState';
 export { Badge } from './Badge';
 export { Kbd } from './Kbd';
 export { Spinner } from './Spinner';
+export { SessionSpinner } from './SessionSpinner';
 export { SuccessCheck } from './SuccessCheck';
 export { CircularProgress } from './CircularProgress';
 export { Waveform } from './Waveform';
