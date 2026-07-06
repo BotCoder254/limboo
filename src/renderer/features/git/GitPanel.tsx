@@ -432,64 +432,61 @@ function ChangesView() {
           }}
           className="w-full resize-y rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-fg placeholder:text-faint focus:border-line-strong focus:outline-none"
         />
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-stretch gap-1.5">
           <button
             type="button"
             disabled={staged.length === 0 || !message.trim() || committing || generating}
             onClick={() => void doCommit()}
             title={`Commit ${staged.length} staged file${staged.length === 1 ? '' : 's'}`}
-            className="flex shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-base transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             <Check size={13} />
             {committing ? 'Committing…' : `Commit ${staged.length}`}
           </button>
-          <button
-            type="button"
-            disabled={unstaged.length === 0}
-            onClick={() => void stageAll()}
-            title="Stage all changes"
-            className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-muted transition-colors hover:text-fg disabled:opacity-40"
-          >
-            <Plus size={12} />
-            Stage all
-          </button>
-          <button
-            type="button"
-            disabled={staged.length === 0}
-            onClick={() => void unstageAll()}
-            title="Unstage all changes"
-            className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-muted transition-colors hover:text-fg disabled:opacity-40"
-          >
-            <Minus size={12} />
-            Unstage all
-          </button>
-          <div className="flex-1" />
-          {generating ? (
-            <button
-              type="button"
-              onClick={cancelGenerate}
-              title="Cancel generation"
-              className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-muted transition-colors hover:text-fg"
+          <div className="flex shrink-0 items-stretch overflow-hidden rounded-md border border-line">
+            <IconButton
+              label="Stage all changes"
+              size="sm"
+              disabled={unstaged.length === 0}
+              onClick={() => void stageAll()}
+              className="h-auto w-7 shrink-0 rounded-none border-0 border-r border-line bg-surface-2"
             >
-              <X size={12} />
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={staged.length === 0 || !agentReady || committing}
-              onClick={() => void generateMessage()}
-              title={
-                agentReady
-                  ? 'Generate a commit message with the agent'
-                  : 'Claude Code is not available — sign in to generate commit messages'
-              }
-              className="flex items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12px] text-accent transition-colors hover:border-line-strong disabled:opacity-40"
+              <Plus size={13} />
+            </IconButton>
+            <IconButton
+              label="Unstage all changes"
+              size="sm"
+              disabled={staged.length === 0}
+              onClick={() => void unstageAll()}
+              className="h-auto w-7 shrink-0 rounded-none border-0 border-r border-line bg-surface-2"
             >
-              <Sparkles size={12} />
-              Generate
-            </button>
-          )}
+              <Minus size={13} />
+            </IconButton>
+            {generating ? (
+              <IconButton
+                label="Cancel generation"
+                size="sm"
+                onClick={cancelGenerate}
+                className="h-auto w-7 shrink-0 rounded-none border-0 bg-surface-2"
+              >
+                <X size={13} />
+              </IconButton>
+            ) : (
+              <IconButton
+                label={
+                  agentReady
+                    ? 'Generate a commit message with the agent'
+                    : 'Claude Code is not available — sign in to generate commit messages'
+                }
+                size="sm"
+                disabled={staged.length === 0 || !agentReady || committing}
+                onClick={() => void generateMessage()}
+                className="h-auto w-7 shrink-0 rounded-none border-0 bg-surface-2 text-accent hover:border-line-strong"
+              >
+                <Sparkles size={13} />
+              </IconButton>
+            )}
+          </div>
         </div>
       </div>
     </div>
