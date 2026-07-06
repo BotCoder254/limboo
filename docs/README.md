@@ -73,6 +73,7 @@ architecture vision).
   [File System Layer](architecture/subsystems/file-system-layer.md),
   [Agent Manager](architecture/subsystems/agent-manager.md),
   [Memory System](architecture/subsystems/memory-system.md),
+  [Resume Pipeline](architecture/subsystems/resume-pipeline.md),
   [Database](architecture/subsystems/database.md),
   [Settings](architecture/subsystems/settings.md).
 

@@ -27,6 +27,7 @@ import { ServiceManager } from './managers/services/ServiceManager';
 import { ProxyServer } from './managers/services/ProxyServer';
 import { MemoryManager } from './managers/memory/MemoryManager';
 import { SearchManager } from './managers/search/SearchManager';
+import { ResumeManager } from './managers/resume/ResumeManager';
 import { AutoUpdateManager } from './managers/AutoUpdateManager';
 import { VoiceManager } from './managers/voice/VoiceManager';
 import { VoiceModelManager } from './managers/voice/VoiceModelManager';
@@ -87,6 +88,7 @@ function bootstrap(): void {
   let memory: MemoryManager;
   let attachments: AttachmentManager;
   let search: SearchManager;
+  let resume: ResumeManager;
   let updates: AutoUpdateManager;
   let voiceModels: VoiceModelManager;
   let voice: VoiceManager;
@@ -143,6 +145,11 @@ function bootstrap(): void {
     // file/symbol index and federates every other subsystem behind one query
     // interface; also the primary context provider for the coding agent.
     search = new SearchManager(settings, workspace);
+    // The Resume Pipeline — repository revalidation when a session is activated.
+    // Anchors each session's repo state (snapshot), detects divergence on
+    // activation, and hands the agent a one-shot repository delta. A platform
+    // service like Memory/Search; never blocks session switching.
+    resume = new ResumeManager(workspace, sessions, settings);
     // In-app updater (electron-updater + GitHub releases). No-op in dev / non-AppImage.
     updates = new AutoUpdateManager(settings, notifications);
     // The agent mirrors its shell commands into the integrated terminal.
@@ -164,6 +171,16 @@ function bootstrap(): void {
     search.setGitManager(git);
     search.setSessionManager(sessions);
     agent.setSearchManager(search);
+    // The agent consumes the pending repository delta (one-shot per divergence)
+    // and re-anchors the snapshot at the end of every run; checkpoints re-anchor
+    // too. Revalidation results land in the session timeline via recordStatus.
+    agent.setResumeManager(resume);
+    git.setResumeManager(resume);
+    resume.setSearchManager(search);
+    resume.setMemoryManager(memory);
+    resume.setStatusRecorder((sessionId, label, detail) =>
+      agent.recordStatus(sessionId, label, detail),
+    );
     // The File System Layer pushes live git status (branch + diff) into sessions
     // and notifies the Git workspace whenever the working tree changes.
     fileSystem.setSessionManager(sessions);
@@ -175,6 +192,7 @@ function bootstrap(): void {
     // search scope). The resolvers are cheap, synchronous DB lookups.
     agent.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
     terminal.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
+    resume.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
     git.setActiveRootResolver((workspaceId) => worktrees.resolveActiveRoot(workspaceId));
     search.setActiveRootResolver((workspaceId) => worktrees.resolveActiveRoot(workspaceId));
     // The Voice subsystem — local speech (sherpa-onnx) as another input/output
@@ -200,6 +218,7 @@ function bootstrap(): void {
       memory,
       attachments,
       search,
+      resume,
       updates,
       voice,
       voiceModels,
@@ -248,6 +267,10 @@ function bootstrap(): void {
     // session) retarget the same way — the SessionManager only emits when the
     // active session's execution root could actually differ.
     sessions.onActiveChanged(() => retargetEffectiveRoot());
+    // Resume Pipeline: a SEPARATE, additive listener — anchor the session being
+    // left, revalidate the one being entered. Fire-and-forget; the retarget
+    // path above is untouched and never waits on git.
+    sessions.onActiveChanged((active) => resume.onActiveSessionChanged(active));
     // Before a worktree directory is removed, fully release the watcher handles
     // inside it (Windows EBUSY) — the post-removal broadcast retargets afresh.
     worktrees.setReleaseRootHook(async () => {
@@ -261,7 +284,13 @@ function bootstrap(): void {
     void worktrees
       .recover()
       .catch((err) => logger.warn('worktree recovery failed', err))
-      .finally(() => retargetEffectiveRoot());
+      .finally(() => {
+        retargetEffectiveRoot();
+        // Boot-time revalidation of the session that comes back active — only
+        // after worktree recovery settled so a repaired/missing worktree never
+        // produces a bogus delta. Async, best-effort, never awaited.
+        resume.onBoot();
+      });
     if (initialWs) memory.seedDefaults(initialWs.id);
 
     // Low-frequency memory maintenance (decay/flag stale entries). Off the hot

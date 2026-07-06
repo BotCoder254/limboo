@@ -276,7 +276,7 @@ window.limboo.system.{notify,openExternal,clipboardWrite,clipboardRead}
 window.limboo.app.getInfo()                             // version/electron/…
 window.limboo.events.onCommand(cb)                      // native menu/tray → command
 // …plus one namespace per platform service: workspace, session, agent, fs,
-// terminal, git, worktree, services, memory, search, updates, voice
+// terminal, git, worktree, services, memory, search, resume, updates, voice
 // (full surface: docs/reference/window-limboo-api.md)
 ```
 
@@ -606,11 +606,59 @@ ones at query time (memory, git, sessions, commands).
   filters, recent + saved searches. Backed by `useSearchStore`. Settings live in the
   **Memory & Search** category (`settings.search`).
 
+### Resume Pipeline
+
+A provider-independent **platform service owned by the app** — "continue exactly
+where you left off." SDK sessions persist the *conversation* (`options.resume`),
+not repository state; this service reconciles the two. Owned entirely by the main
+process (`managers/resume/ResumeManager.ts` + `resume/delta.ts`), wired in the
+composition root like Memory/Search (setter injection + a *separate additive*
+`sessions.onActiveChanged` listener, so the existing retarget path is untouched;
+boot revalidation chains after `worktrees.recover().finally(retarget)`).
+
+- **Snapshots** (`session_snapshots`, schema v10) — one repository anchor per
+  session (HEAD + branch + a `dirty_hash` = sha256 over sorted
+  `status\0path\0size\0mtimeMs`, computed via `fs.lstat`, never reading file
+  contents), upserted at run-end (`AgentManager.send` finally →
+  `onRunFinished`), checkpoint creation (`GitManager.createCheckpoint` →
+  `onCheckpointCreated`), and session deactivation.
+- **Revalidation** — on every activation + boot, async/best-effort, `Promise.race`
+  against `RESUME_LIMITS.revalidateTimeoutMs`; failures degrade to "no delta" and
+  **never block session switching**. Cheap short-circuit when HEAD + branch +
+  dirty-hash all match the snapshot (the common case).
+- **Repository delta** (`resume/delta.ts`, argv-only via `runGit`; snap HEAD
+  regex-validated) — `cat-file -e`/`merge-base --is-ancestor` (rebase/gc →
+  `historyRewritten`), `rev-list --count` both ways, capped `git log`, `git diff
+  --name-status -z` (reuses `parseNameStatus`) merged with the dirty set,
+  categorized (manifest/lockfiles/**limboo.json**/migrations flagged). Persisted
+  in `resume_deltas` so the one-shot injection survives a restart.
+- **Code-intelligence enrichment** — reuses the Search index: `search_files.content_hash`
+  (schema v11) skips unchanged files in incremental indexing; per-file symbol
+  adds/removes are diffed across a reindex; the new `search_refs` regex import-edge
+  table (`search/refs.ts`, parser-agnostic for a future tree-sitter upgrade) powers
+  "N files import X". No tree-sitter, no embeddings.
+- **Memory revalidation** — `create`/`acceptProposal` now write `memory_links`
+  (`kind='file'`/`'symbol'`); on revalidation, memories whose linked files vanished
+  have confidence downgraded (×0.6, floor 0.1; `preDowngradeConfidence` stashed in
+  `meta`) and restored when the file returns. Retrieval already weights confidence.
+- **Injection** — `AgentManager.resumeContextFor` is the third context producer
+  beside memory/search: renders a `<repository-delta>` block (budgeted like the
+  others), one-shot per delta (marks the row `injected`), cached on the run record
+  so recovery retries re-inject the same block.
+- **UI** — `ResumeBanner` (MissingWorktreeBanner idiom) + a "Revalidating…" header
+  chip + `ResumeDeltaDialog` (HooksConfirmDialog idiom), backed by `useResumeStore`;
+  results also land in the timeline via `AgentManager.recordStatus`. IPC:
+  `resume:getState/getDelta/dismiss/revalidate` (string session ids only; revalidate
+  gated to the active session) + `resume:state-changed`. Settings under the **Memory
+  & Search** category (`settings.resume`, bounds in `RESUME_LIMITS`).
+
 **Still open / future** — Repository clone/track UI, a dedicated Permission System
 beyond the agent's `canUseTool`, merge-conflict resolution UI, remote management, and
 stash. Local vector embeddings on top of BM25 (both Memory and Search rankings are
 already fusion-ready) and recording File Writer mutations into the session activity
 timeline (today they land in the in-memory File History ring) are natural follow-ups.
+A **tree-sitter upgrade** of the `search_symbols` / `search_refs` extractors (both
+tables are parser-agnostic) would sharpen the resume symbol delta.
 
 ---
 

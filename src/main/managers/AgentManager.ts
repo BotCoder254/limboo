@@ -74,6 +74,7 @@ import type { TerminalManager } from './TerminalManager';
 import type { SessionManager } from './SessionManager';
 import type { GitManager } from './GitManager';
 import type { MemoryManager } from './memory/MemoryManager';
+import type { ResumeManager } from './resume/ResumeManager';
 import { createMemoryMcpServer } from './memory/memoryTools';
 import type { AttachmentManager } from './attachments/AttachmentManager';
 import type { SearchManager } from './search/SearchManager';
@@ -349,6 +350,12 @@ interface ActiveRun {
   planCaptured?: boolean;
   /** Attachments riding this turn (manifest + vision blocks; reused on retry). */
   attachmentIds?: string[];
+  /**
+   * The `<repository-delta>` block consumed for this run. Cached here because
+   * consuming marks the persisted row 'injected' (one-shot) while recovery
+   * retries recompose the context — the retry must re-inject the SAME block.
+   */
+  resumeContext?: string;
 }
 
 export class AgentManager {
@@ -474,6 +481,18 @@ export class AgentManager {
     this.memory = memory;
   }
 
+  /** Resume Pipeline, wired after construction (repository-delta injection). */
+  private resume: ResumeManager | null = null;
+
+  /**
+   * Inject the Resume Manager. Resume is a platform service owned by the app —
+   * the agent only *consumes* it: the one-shot `<repository-delta>` block on
+   * the first prompt after a divergence, plus the run-end snapshot signal.
+   */
+  setResumeManager(resume: ResumeManager): void {
+    this.resume = resume;
+  }
+
   /** Attachment Manager, wired after construction (session-owned staged files). */
   private attachments: AttachmentManager | null = null;
 
@@ -567,6 +586,33 @@ export class AgentManager {
       return block || undefined;
     } catch (err) {
       logger.warn('search: context build failed', err);
+      return undefined;
+    }
+  }
+
+  /**
+   * Build the system-prompt addition that injects the pending repository delta
+   * (repo changes since this session's last snapshot). One-shot per delta: the
+   * first consumption marks the persisted row 'injected'; the rendered block is
+   * cached on the in-flight run so recovery retries re-inject the same block.
+   * Fully local and best-effort: a failure never blocks the run.
+   */
+  private resumeContextFor(sessionId: string): string | undefined {
+    if (!this.resume) return undefined;
+    const cfg = this.settings.getAll().resume;
+    if (!cfg.enabled || !cfg.injectDelta) return undefined;
+    try {
+      const run = this.runs.get(sessionId);
+      if (run?.resumeContext) return run.resumeContext;
+      const block = this.resume.consumePendingDelta(sessionId);
+      if (block) {
+        if (run) run.resumeContext = block;
+        this.diag('request', 'debug', 'Injected repository delta', undefined, sessionId);
+        this.pushActivity(sessionId, 'status', 'Injected repository delta', undefined, 'info');
+      }
+      return block;
+    } catch (err) {
+      logger.warn('resume: context build failed', err);
       return undefined;
     }
   }
@@ -1197,6 +1243,9 @@ export class AgentManager {
     } finally {
       const captured = this.runs.get(sessionId)?.planCaptured;
       this.runs.delete(sessionId);
+      // Re-anchor the session's repository snapshot — the agent may have
+      // changed the repo. Fire-and-forget; never delays run teardown.
+      this.resume?.onRunFinished(sessionId);
       // A plan run that ended without presenting a plan (error/cancel) must not
       // leave the panel stuck "analyzing" — settle it back to a rejected state.
       if (isPlan && !captured) {
@@ -1405,11 +1454,14 @@ export class AgentManager {
       const sdk = await loadSdk();
       const { query } = sdk;
       // Compose the injected context: durable Memory knowledge + the Search
-      // Engine's ranked retrieval for this prompt. Both are appended to the Claude
-      // Code preset via a single systemPrompt.append (blank-line separated).
+      // Engine's ranked retrieval + the one-shot repository delta for this
+      // prompt. All are appended to the Claude Code preset via a single
+      // systemPrompt.append (blank-line separated).
       const memoryContext = this.memoryContextFor(sessionId, prompt);
       const searchContext = this.searchContextFor(sessionId, prompt);
-      const injectedContext = [memoryContext, searchContext].filter(Boolean).join('\n\n') || undefined;
+      const resumeContext = this.resumeContextFor(sessionId);
+      const injectedContext =
+        [memoryContext, searchContext, resumeContext].filter(Boolean).join('\n\n') || undefined;
       const options = this.buildOptions(sessionId, cwd, abort, agent, permMode, injectedContext);
       // Expose a live, read-only view of the Local Memory System so the agent can
       // actually list/search the developer's memories on demand (the injected
@@ -2336,6 +2388,22 @@ export class AgentManager {
       )
       .run(item.id, sessionId, type, JSON.stringify(item), item.at);
     this.pushEvent({ kind: 'activity', sessionId, item });
+  }
+
+  /**
+   * Public timeline recorder for platform services without their own activity
+   * feed (e.g. the Resume Pipeline logging a revalidation result). Delegates to
+   * the same `pushActivity` path so the entry lands in `agent_activity` and,
+   * therefore, in the session timeline automatically.
+   */
+  recordStatus(sessionId: string, label: string, detail?: string): void {
+    this.pushActivity(
+      sessionId,
+      'status',
+      label.slice(0, ACTIVITY_LIMITS.labelMax),
+      detail?.slice(0, ACTIVITY_LIMITS.detailMax),
+      'info',
+    );
   }
 
   private rememberSdkSession(sessionId: string, sdkSessionId: string): void {

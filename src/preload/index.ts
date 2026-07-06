@@ -51,6 +51,8 @@ import type {
   MemoryTier,
   MemoryUpdateInput,
   RepoConfigState,
+  RepoDelta,
+  ResumeState,
   SavedSearch,
   SearchFilter,
   ServiceInfo,
@@ -569,6 +571,23 @@ const searchApi = {
     subscribe<SearchIndexProgress>(IpcEvents.searchIndexProgress, cb),
 };
 
+const resumeApi = {
+  /** The session's live revalidation state (for hydration on mount). */
+  getState: (sessionId: string): Promise<ResumeState> =>
+    ipcRenderer.invoke(IpcChannels.resumeGetState, sessionId),
+  /** The persisted repository delta (pending or already injected). */
+  getDelta: (sessionId: string): Promise<RepoDelta | null> =>
+    ipcRenderer.invoke(IpcChannels.resumeGetDelta, sessionId),
+  /** Dismiss the pending delta — it will not be injected into a prompt. */
+  dismiss: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.resumeDismiss, sessionId),
+  /** Re-run revalidation for the ACTIVE session (main enforces the gate). */
+  revalidate: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.resumeRevalidate, sessionId),
+  onStateChanged: (cb: (state: ResumeState) => void): (() => void) =>
+    subscribe<ResumeState>(IpcEvents.resumeStateChanged, cb),
+};
+
 const updatesApi = {
   /** The current updater status (for hydration on mount). */
   getState: (): Promise<UpdateStatus> => ipcRenderer.invoke(IpcChannels.updateGetState),
@@ -645,6 +664,7 @@ const limbooApi = {
   services: servicesApi,
   memory: memoryApi,
   search: searchApi,
+  resume: resumeApi,
   updates: updatesApi,
   voice: voiceApi,
   attachment: attachmentApi,

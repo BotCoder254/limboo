@@ -259,8 +259,12 @@ export const SETTINGS_CATALOG: SettingsCategory[] = [
     id: 'memory',
     label: 'Memory & Search',
     icon: Brain,
-    keywords: ['memory', 'knowledge', 'context', 'recall', 'retention', 'notes', 'decisions', 'conventions', 'inject', 'capture', 'search', 'index', 'indexing', 'files', 'symbols', 'find', 'global search', 'retrieval'],
+    keywords: ['memory', 'knowledge', 'context', 'recall', 'retention', 'notes', 'decisions', 'conventions', 'inject', 'capture', 'search', 'index', 'indexing', 'files', 'symbols', 'find', 'global search', 'retrieval', 'resume', 'revalidation', 'repository delta', 'continue'],
     fields: [
+      { id: 'resumeEnabled', label: 'Repository revalidation on resume', keywords: ['resume', 'revalidate', 'continue', 'delta', 'repository'] },
+      { id: 'resumeInjectDelta', label: 'Inject repository delta into prompts', keywords: ['resume', 'delta', 'prompt', 'agent', 'context'] },
+      { id: 'resumeMaxCommits', label: 'Max commits in delta', keywords: ['resume', 'commits', 'delta', 'limit'] },
+      { id: 'resumeStaleDays', label: 'Skip revalidation newer than', keywords: ['resume', 'stale', 'days', 'threshold'] },
       { id: 'memoryEnabled', label: 'Enable memory', keywords: ['on', 'off', 'toggle'] },
       { id: 'memoryInject', label: 'Inject into agent prompts', keywords: ['context', 'prompt', 'agent'] },
       { id: 'memoryMaxInjected', label: 'Max memories per prompt', keywords: ['budget', 'limit', 'count'] },

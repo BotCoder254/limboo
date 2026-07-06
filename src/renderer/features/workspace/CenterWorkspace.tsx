@@ -27,6 +27,8 @@ import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
 import { useAttachmentStore } from '@/renderer/stores/useAttachmentStore';
+import { useResumeStore } from '@/renderer/stores/useResumeStore';
+import { ResumeBanner } from '@/renderer/features/resume/ResumeBanner';
 
 export function CenterWorkspace() {
   const session = useSessionStore((s) =>
@@ -48,6 +50,8 @@ export function CenterWorkspace() {
       void loadSession(session.id);
       // Restore the session's attachment set (composer drafts + sent chips).
       void useAttachmentStore.getState().loadSession(session.id);
+      // Hydrate the session's revalidation state (banner + header chip).
+      void useResumeStore.getState().loadSession(session.id);
     }
   }, [session?.id, loadSession]);
 
@@ -60,6 +64,8 @@ export function CenterWorkspace() {
       {session && <ServicesStrip sessionId={session.id} />}
       {/* Recovery affordance when the session's worktree directory vanished. */}
       {session?.worktreeStatus === 'missing' && <MissingWorktreeBanner sessionId={session.id} />}
+      {/* Repository drift since this session's last snapshot (resume pipeline). */}
+      {session && <ResumeBanner sessionId={session.id} />}
 
       {/* Scroll region — the single scroller. Messages live entirely above the
           docked composer below, so they are never overlapped or clipped. */}
@@ -184,6 +190,8 @@ function SessionHeader({
   const toggleGit = useLayoutStore((s) => s.toggleTab);
   // Dirty indicator on the git toggle so a glance shows uncommitted work.
   const gitDirty = useGitStore((s) => !!s.status && !s.status.clean);
+  // Non-blocking revalidation indicator while the resume pipeline checks git.
+  const revalidating = useResumeStore((s) => s.bySession[sessionId]?.phase === 'checking');
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4">
       {running ? <Spinner size={12} /> : <CircleDot size={12} className="text-success" />}
@@ -191,6 +199,12 @@ function SessionHeader({
       <span className="text-[11px] text-faint">{branch}</span>
       <DiffStat adds={adds} dels={dels} className="ml-2" />
       {running && <span className="text-[11px] text-accent">Working…</span>}
+      {!running && revalidating && (
+        <span className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+          <Spinner size={10} />
+          Revalidating…
+        </span>
+      )}
       {!running && planStatus === 'ready' && (
         <span className="rounded-full border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
           Plan ready

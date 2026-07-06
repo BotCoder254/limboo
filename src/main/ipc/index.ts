@@ -14,6 +14,7 @@ import type { ServiceManager } from '../managers/services/ServiceManager';
 import type { MemoryManager } from '../managers/memory/MemoryManager';
 import type { AttachmentManager } from '../managers/attachments/AttachmentManager';
 import type { SearchManager } from '../managers/search/SearchManager';
+import type { ResumeManager } from '../managers/resume/ResumeManager';
 import type { AutoUpdateManager } from '../managers/AutoUpdateManager';
 import type { VoiceManager } from '../managers/voice/VoiceManager';
 import type { VoiceModelManager } from '../managers/voice/VoiceModelManager';
@@ -31,6 +32,7 @@ import { registerServiceHandlers } from './serviceHandlers';
 import { registerMemoryHandlers } from './memoryHandlers';
 import { registerAttachmentHandlers } from './attachmentHandlers';
 import { registerSearchHandlers } from './searchHandlers';
+import { registerResumeHandlers } from './resumeHandlers';
 import { registerUpdateHandlers } from './updateHandlers';
 import { registerVoiceHandlers } from './voiceHandlers';
 
@@ -48,6 +50,7 @@ export interface IpcDeps {
   memory: MemoryManager;
   attachments: AttachmentManager;
   search: SearchManager;
+  resume: ResumeManager;
   updates: AutoUpdateManager;
   voice: VoiceManager;
   voiceModels: VoiceModelManager;
@@ -68,6 +71,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerMemoryHandlers(deps.memory);
   registerAttachmentHandlers(deps.attachments);
   registerSearchHandlers(deps.search);
+  registerResumeHandlers(deps.resume, deps.session);
   registerUpdateHandlers(deps.updates);
   registerVoiceHandlers(deps.voice, deps.voiceModels, deps.settings);
 }
