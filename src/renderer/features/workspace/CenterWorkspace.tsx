@@ -12,8 +12,8 @@
  * hack that raced the real height and overlapped tall replies.
  */
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CircleDot, GitBranch, Plus, Sparkles, TerminalSquare } from 'lucide-react';
-import { DiffStat, EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
+import { AlertTriangle, CircleDot, GitBranch, Plus, TerminalSquare } from 'lucide-react';
+import { DiffStat, IconButton, Spinner } from '@/renderer/components/ui';
 import { useIsSessionRunning } from '@/renderer/features/sessions/useSessionRunning';
 import { WorktreeTabs } from '@/renderer/features/sessions/WorktreeTabs';
 import { ServicesStrip } from '@/renderer/features/sessions/ServicesStrip';
@@ -75,12 +75,18 @@ export function CenterWorkspace() {
             messageCount > 0 ? (
               <ConversationView sessionId={session.id} />
             ) : (
-              <EmptyState
-                className="m-auto"
-                icon={Sparkles}
-                title="Start the conversation"
-                description="Describe what you want to build. Limboo coordinates the repository, files, terminal, and tasks while Claude Code does the work."
-              />
+              <div className="m-auto flex max-w-md flex-col items-center gap-5 py-16 text-center">
+                <Logo size={60} />
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[16px] font-semibold tracking-tight text-fg">
+                    Start the conversation
+                  </span>
+                  <span className="text-[13px] leading-relaxed text-muted">
+                    Describe what you want to build. Limboo coordinates the repository,
+                    files, terminal, and tasks while Claude Code does the work.
+                  </span>
+                </div>
+              </div>
             )
           ) : (
             <div className="m-auto flex flex-col items-center gap-4 text-center">

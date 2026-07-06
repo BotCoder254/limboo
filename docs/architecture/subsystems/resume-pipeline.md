@@ -268,6 +268,12 @@ Exposed on the preload bridge as the `window.limboo.resume` namespace; see the
 
 Matching the existing shell idioms exactly (pure-black tokens, no new patterns):
 
+<img src="../../../assets/screenshots/resumeupdate.PNG" alt="Resume banner under the session header, the Revalidating chip in the header, and the repository-delta dialog" width="920" />
+
+The three surfaces work together: the **`ResumeBanner`** announces drift under the
+session header, the **Revalidating chip** shows the non-blocking check in flight, and
+**`ResumeDeltaDialog`** presents the full structured delta on demand.
+
 - **`ResumeBanner`** — a row under the session header cloning the missing-worktree
   banner (`h-9`, `border-b border-line bg-surface`): an info tone for ordinary
   drift, a warning tone for a rewrite or root change. "Review" opens the detail

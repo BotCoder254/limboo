@@ -26,6 +26,7 @@ import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
 import { useAttachmentStore, draftAttachments } from '@/renderer/stores/useAttachmentStore';
 import { useFileDragActive } from '@/renderer/hooks/usePreventFileDrop';
+import { useTypewriter } from '@/renderer/hooks/useTypewriter';
 import { lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
 import { RUNNING_PHASES } from '@/renderer/features/sessions/useSessionRunning';
 import { ComposerControls } from './ComposerControls';
@@ -39,6 +40,25 @@ const VOICE_CAPTURE_PHASES = new Set(['starting', 'listening', 'recording', 'tra
 
 /** Max grow height before the editor scrolls internally (~40vh). */
 const MAX_HEIGHT = 320;
+
+/** Rotating placeholder prompts (build mode) — a typewriter hint, like the
+ *  Global Search input, that idles through example asks until the user types. */
+const COMPOSER_PLACEHOLDERS = [
+  'Ask Claude Code to build something…',
+  'Describe a feature to implement…',
+  'Paste an error and ask for a fix…',
+  'Refactor a file, add a test, wire an API…',
+  'Explain how this codebase works…',
+  'Draft a migration, then run it…',
+];
+
+/** Plan-mode variants — the run stays read-only and produces a plan first. */
+const PLAN_PLACEHOLDERS = [
+  'Describe what to build — Claude Code plans it first (read-only)…',
+  'Outline a refactor to review before it runs…',
+  'Scope a feature — get a step-by-step plan…',
+  'Ask for a plan before any files change…',
+];
 
 export function Composer({ disabled = false }: { disabled?: boolean }) {
   const [value, setValue] = useState('');
@@ -82,6 +102,17 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   const busy = !!phase && RUNNING_PHASES.has(phase);
   const restricted = lifecycle === 'rate-limited' || lifecycle === 'auth-required';
   const blocked = disabled || !installed || busy || restricted;
+
+  // Rotating typewriter placeholder — only in the normal "ready to type" state;
+  // the special-state hints (not installed / restricted / disabled) stay static.
+  // Pauses the moment the user starts typing (like the Global Search input).
+  const normalPlaceholderState = installed && !disabled && !restricted;
+  const typedPlaceholder = useTypewriter(mode === 'plan' ? PLAN_PLACEHOLDERS : COMPOSER_PLACEHOLDERS, {
+    paused: !normalPlaceholderState || value.length > 0,
+  });
+  const placeholder = normalPlaceholderState
+    ? typedPlaceholder
+    : composerPlaceholder(disabled, installed, restricted, mode);
 
   // Attachments — ChatGPT-style file chips above the input. Drafts belong to
   // the SESSION (main-process Attachment Manager), so they survive reloads and
@@ -249,7 +280,7 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                   }}
                   onKeyDown={onKeyDown}
                   onPaste={onPaste}
-                  placeholder={composerPlaceholder(disabled, installed, restricted, mode)}
+                  placeholder={placeholder}
                   className="flex-1 resize-none bg-transparent py-1 text-[13px] leading-relaxed text-fg placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
                   style={{ maxHeight: MAX_HEIGHT }}
                 />

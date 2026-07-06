@@ -195,6 +195,31 @@ html[data-reduced-motion="true"] *::after {
   animation: limboo-caret-blink 1.1s step-end infinite;
 }
 
+/* Self-drawing success checkmark (SuccessCheck): the ring draws first, then the
+   tick, via stroke-dashoffset. Fill-mode forwards keeps the drawn state; the
+   global reduced-motion rule collapses the duration so it renders instantly. */
+@keyframes limboo-check-circle {
+  from { stroke-dashoffset: 151; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes limboo-check-tick {
+  from { stroke-dashoffset: 40; }
+  to { stroke-dashoffset: 0; }
+}
+
+.success-check-circle {
+  stroke-dasharray: 151;
+  stroke-dashoffset: 151;
+  animation: limboo-check-circle 480ms ease-out forwards;
+}
+
+.success-check-tick {
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  animation: limboo-check-tick 300ms ease-out 380ms forwards;
+}
+
 /* ------------------------------------------------------------------ */
 /* Markdown rendering (assistant messages)                            */
 /* ------------------------------------------------------------------ */

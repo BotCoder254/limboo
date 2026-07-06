@@ -47,7 +47,7 @@ import type {
   SessionPlan,
   TaskItem,
 } from '@shared/types';
-import { EmptyState, IconButton, Spinner } from '@/renderer/components/ui';
+import { EmptyState, IconButton, Spinner, SuccessCheck } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import {
   applyRuntime,
@@ -322,6 +322,22 @@ function PlanView({
           onRegenerate={() => sessionId && regeneratePlan(sessionId)}
           onReject={() => sessionId && rejectPlan(sessionId)}
         />
+      )}
+
+      {/* Prominent completion banner — a large self-drawing checkmark when the
+          whole plan run has finished, so "execution is done" is impossible to miss. */}
+      {plan.status === 'completed' && (
+        <div className="flex items-center gap-3 rounded-md border border-success/40 bg-success/10 px-3 py-3">
+          <SuccessCheck size={44} className="shrink-0" />
+          <div className="flex min-w-0 flex-col">
+            <span className="text-[13px] font-semibold text-success">Execution complete</span>
+            <span className="text-[11px] text-muted">
+              {hasProgress
+                ? `All ${progress.total} task${progress.total === 1 ? '' : 's'} finished.`
+                : 'The agent finished this plan.'}
+            </span>
+          </div>
+        </div>
       )}
 
       {/* Task outline (or the flat checklist fallback) */}
