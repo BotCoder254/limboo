@@ -138,12 +138,40 @@ export class MemoryManager {
       expires_at: null,
       session_id: input.sessionId ?? null,
       commit_hash: null,
-      file_path: null,
+      file_path: normalizeRefPath(input.filePath),
       meta: '{}',
     };
     this.insert(row);
+    this.writeLinks(row.id, row.file_path, input.symbolRefs);
     this.notifyChanged();
     return rowToMemory(row);
+  }
+
+  /**
+   * Record the source references a memory is about, so the Resume Pipeline can
+   * downgrade its confidence when the referents disappear (and restore it when
+   * they return). `filePath` writes a 'file' link; each `symbolRefs` entry is a
+   * `path#name` 'symbol' link. All values are bound; paths are validated by the
+   * caller (IPC boundary) and re-normalized here.
+   */
+  private writeLinks(memoryId: string, filePath: string | null, symbolRefs?: string[]): void {
+    const insert = this.db.prepare(
+      'INSERT INTO memory_links (memory_id, kind, ref) VALUES (?, ?, ?)',
+    );
+    const tx = this.db.transaction(() => {
+      if (filePath) insert.run(memoryId, 'file', filePath);
+      if (Array.isArray(symbolRefs)) {
+        const seen = new Set<string>();
+        for (const raw of symbolRefs.slice(0, 50)) {
+          const ref = normalizeSymbolRef(raw);
+          if (ref && !seen.has(ref)) {
+            seen.add(ref);
+            insert.run(memoryId, 'symbol', ref);
+          }
+        }
+      }
+    });
+    tx();
   }
 
   update(id: string, patch: MemoryUpdateInput): Memory | null {
@@ -191,6 +219,102 @@ export class MemoryManager {
   get(id: string): Memory | null {
     const row = this.row(id);
     return row ? rowToMemory(row) : null;
+  }
+
+  /* ------------------------------------------------ resume revalidation */
+
+  /**
+   * Downgrade active memories whose linked files vanished from the repository
+   * (called by the Resume Pipeline during revalidation). Confidence is scaled
+   * ×0.6 and floored at 0.1; the pre-downgrade value is stashed in `meta` so it
+   * can be restored when the referent reappears. Idempotent — an already-flagged
+   * memory is not downgraded again. Returns the affected {id,title} for the
+   * delta summary. Best-effort: never throws.
+   */
+  downgradeForMissingFiles(
+    workspaceId: string | null,
+    paths: string[],
+  ): { id: string; title: string }[] {
+    const affected: { id: string; title: string }[] = [];
+    try {
+      const select = this.db.prepare(
+        `SELECT DISTINCT m.* FROM memory_links ml
+           JOIN memories m ON m.id = ml.memory_id
+          WHERE ml.kind = 'file' AND ml.ref = ?
+            AND m.status = 'active'
+            AND (m.workspace_id IS ? OR m.workspace_id = ?)`,
+      );
+      const now = Date.now();
+      const tx = this.db.transaction(() => {
+        for (const p of paths) {
+          const ref = normalizeRefPath(p);
+          if (!ref) continue;
+          const rows = select.all(ref, workspaceId, workspaceId) as MemoryRow[];
+          for (const row of rows) {
+            const meta = safeParseMeta(row.meta);
+            if (meta.referentMissing) continue; // already downgraded
+            const before = row.confidence;
+            const next = Math.max(0.1, before * 0.6);
+            meta.referentMissing = true;
+            meta.referentMissingAt = now;
+            meta.preDowngradeConfidence = before;
+            this.db
+              .prepare('UPDATE memories SET confidence = ?, meta = ?, updated_at = ? WHERE id = ?')
+              .run(next, JSON.stringify(meta), now, row.id);
+            affected.push({ id: row.id, title: row.title });
+          }
+        }
+      });
+      tx();
+      if (affected.length > 0) this.notifyChanged();
+    } catch (err) {
+      logger.warn('memory: downgrade for missing files failed', err);
+    }
+    return affected;
+  }
+
+  /**
+   * Restore memories previously downgraded for a now-present file (referent
+   * reappeared). Reinstates `preDowngradeConfidence` and clears the flag.
+   * Best-effort: never throws.
+   */
+  restoreForPresentFiles(workspaceId: string | null, paths: string[]): void {
+    try {
+      const select = this.db.prepare(
+        `SELECT DISTINCT m.* FROM memory_links ml
+           JOIN memories m ON m.id = ml.memory_id
+          WHERE ml.kind = 'file' AND ml.ref = ?
+            AND (m.workspace_id IS ? OR m.workspace_id = ?)`,
+      );
+      const now = Date.now();
+      let changed = false;
+      const tx = this.db.transaction(() => {
+        for (const p of paths) {
+          const ref = normalizeRefPath(p);
+          if (!ref) continue;
+          const rows = select.all(ref, workspaceId, workspaceId) as MemoryRow[];
+          for (const row of rows) {
+            const meta = safeParseMeta(row.meta);
+            if (!meta.referentMissing) continue;
+            const restored =
+              typeof meta.preDowngradeConfidence === 'number'
+                ? clamp01(meta.preDowngradeConfidence)
+                : row.confidence;
+            delete meta.referentMissing;
+            delete meta.referentMissingAt;
+            delete meta.preDowngradeConfidence;
+            this.db
+              .prepare('UPDATE memories SET confidence = ?, meta = ?, updated_at = ? WHERE id = ?')
+              .run(restored, JSON.stringify(meta), now, row.id);
+            changed = true;
+          }
+        }
+      });
+      tx();
+      if (changed) this.notifyChanged();
+    } catch (err) {
+      logger.warn('memory: restore for present files failed', err);
+    }
   }
 
   list(filter: MemoryListFilter): Memory[] {
@@ -678,6 +802,43 @@ function stripInternal(c: MemoryHit & { _relevance: number }): MemoryHit {
   const { _relevance, ...rest } = c;
   void _relevance;
   return rest;
+}
+
+/** Parse a memory's meta JSON blob defensively (never throws, no prototype keys). */
+function safeParseMeta(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(parsed)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+      out[key] = (parsed as Record<string, unknown>)[key];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Normalize a workspace-relative ref path (POSIX, bounded, no traversal). */
+function normalizeRefPath(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096) return null;
+  if (value.includes('\0')) return null;
+  const posix = value.split('\\').join('/').replace(/^\.\//, '');
+  if (posix.startsWith('/') || /^[A-Za-z]:/.test(posix)) return null;
+  if (posix.split('/').some((seg) => seg === '..')) return null;
+  return posix;
+}
+
+/** Normalize a `path#name` symbol ref; null when malformed. */
+function normalizeSymbolRef(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096) return null;
+  const hash = value.indexOf('#');
+  if (hash <= 0 || hash === value.length - 1) return null;
+  const p = normalizeRefPath(value.slice(0, hash));
+  const name = value.slice(hash + 1);
+  if (!p || !/^[\w$.-]{1,200}$/.test(name)) return null;
+  return `${p}#${name}`;
 }
 
 function clip(value: unknown, max: number): string {

@@ -17,6 +17,7 @@ import {
   GIT_LIMITS,
   LAYOUT_LIMITS,
   MEMORY_LIMITS,
+  RESUME_LIMITS,
   SEARCH_LIMITS,
   SETTINGS_VERSION,
   VOICE_LIMITS,
@@ -204,6 +205,26 @@ export class SettingsManager {
       plan.defaultMode = plan.defaultMode === ('implement' as unknown) ? 'default' : 'plan';
     }
     plan.historyLimit = Math.round(clamp(plan.historyLimit, 1, 100));
+
+    // Resume Pipeline — clamp the numeric knobs and coerce the toggles
+    // (renderer-supplied values bound git work on every session activation).
+    const resume = merged.resume;
+    resume.enabled = !!resume.enabled;
+    resume.injectDelta = !!resume.injectDelta;
+    resume.maxCommitsInDelta = Math.round(
+      clamp(
+        resume.maxCommitsInDelta,
+        RESUME_LIMITS.maxCommitsInDelta.min,
+        RESUME_LIMITS.maxCommitsInDelta.max,
+      ),
+    );
+    resume.staleThresholdDays = Math.round(
+      clamp(
+        resume.staleThresholdDays,
+        RESUME_LIMITS.staleThresholdDays.min,
+        RESUME_LIMITS.staleThresholdDays.max,
+      ),
+    );
 
     // Attachments — clamp the numeric caps, coerce the toggles, and whitelist
     // the elevated-risk policy (renderer-supplied values gate real file I/O).

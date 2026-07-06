@@ -102,6 +102,15 @@ export function registerMemoryHandlers(memory: MemoryManager): void {
     if (typeof input?.body !== 'string' || input.body.length > MEMORY_LIMITS.bodyMax) {
       throw new Error('memory: invalid body');
     }
+    // Source references (Resume Pipeline back-links) are re-validated in the
+    // manager; here we only length/shape-gate what the renderer may pass.
+    const filePath =
+      typeof input.filePath === 'string' && input.filePath.length <= 4096
+        ? input.filePath
+        : null;
+    const symbolRefs = Array.isArray(input.symbolRefs)
+      ? input.symbolRefs.filter((s): s is string => typeof s === 'string' && s.length <= 4096).slice(0, 50)
+      : undefined;
     return memory.create({
       workspaceId: input.workspaceId ?? null,
       tier: input.tier,
@@ -109,6 +118,8 @@ export function registerMemoryHandlers(memory: MemoryManager): void {
       body: input.body,
       pinned: !!input.pinned,
       sessionId: typeof input.sessionId === 'string' ? input.sessionId : null,
+      filePath,
+      symbolRefs,
     });
   });
 

@@ -12,6 +12,7 @@ import { GlobalSearch } from '@/renderer/features/search/GlobalSearch';
 import { SettingsModal } from '@/renderer/features/settings/SettingsModal';
 import { SessionDeleteDialog } from '@/renderer/features/sessions/SessionDeleteDialog';
 import { HooksConfirmDialog } from '@/renderer/features/sessions/HooksConfirmDialog';
+import { ResumeDeltaDialog } from '@/renderer/features/resume/ResumeDeltaDialog';
 import { useServiceStore } from '@/renderer/stores/useServiceStore';
 import { UpdateBanner } from '@/renderer/features/updates/UpdateBanner';
 import { Toaster } from '@/renderer/components/feedback/Toaster';
@@ -29,6 +30,7 @@ import { useSearchStore } from '@/renderer/stores/useSearchStore';
 import { useUpdateStore } from '@/renderer/stores/useUpdateStore';
 import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
 import { useAttachmentStore } from '@/renderer/stores/useAttachmentStore';
+import { useResumeStore } from '@/renderer/stores/useResumeStore';
 
 export function App() {
   useKeyboardShortcuts();
@@ -73,6 +75,8 @@ export function App() {
     useServiceStore.getState().hydrate();
     // Subscribe to attachment set + staging-progress pushes (composer chips).
     useAttachmentStore.getState().hydrate();
+    // Subscribe to resume revalidation pushes (banner + header chip + dialog).
+    useResumeStore.getState().hydrate();
   }, []);
 
   return (
@@ -89,6 +93,7 @@ export function App() {
       <SettingsModal />
       <SessionDeleteGate />
       <HooksConfirmDialog />
+      <ResumeDeltaDialog />
       <UpdateBanner />
       <Toaster />
     </>

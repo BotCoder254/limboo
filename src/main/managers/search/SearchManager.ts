@@ -48,6 +48,7 @@ import { readWorkspaceFile } from '../fs/reader';
 import { buildIgnoreMatcher } from '../fs/ignore';
 import { isInsideRoot } from '../workspace/validate';
 import { extractSymbols } from './symbols';
+import { extractRefs, resolveRelativeRef } from './refs';
 import { isDocPath, langForPath, toFtsQuery, toLikePattern, toPrefixPattern, toTrigramQuery } from './query';
 
 /** Directories always skipped even when `includeIgnored` is on (safety floor). */
@@ -234,36 +235,53 @@ export class SearchManager {
     }
     if (paths.length === 0) return;
 
+    const selectHash = this.db.prepare(
+      'SELECT content_hash FROM search_files WHERE workspace_id = ? AND path = ?',
+    );
     const deleteFile = this.db.prepare(
       'DELETE FROM search_files WHERE workspace_id = ? AND path = ?',
     );
     const deleteSymbols = this.db.prepare(
       'DELETE FROM search_symbols WHERE workspace_id = ? AND path = ?',
     );
+    const deleteRefs = this.db.prepare(
+      'DELETE FROM search_refs WHERE workspace_id = ? AND src_path = ?',
+    );
     const insertFile = this.db.prepare(
-      `INSERT INTO search_files (id, workspace_id, path, lang, size, content, updated_at)
-         VALUES (@id, @workspace_id, @path, @lang, @size, @content, @updated_at)`,
+      `INSERT INTO search_files (id, workspace_id, path, lang, size, content, content_hash, updated_at)
+         VALUES (@id, @workspace_id, @path, @lang, @size, @content, @content_hash, @updated_at)`,
     );
     const insertSymbol = this.db.prepare(
       `INSERT INTO search_symbols (id, workspace_id, path, name, kind, lang, line, signature, updated_at)
          VALUES (@id, @workspace_id, @path, @name, @kind, @lang, @line, @signature, @updated_at)`,
     );
+    const insertRef = this.db.prepare(
+      `INSERT INTO search_refs (id, workspace_id, src_path, ref, ref_path, kind, updated_at)
+         VALUES (@id, @workspace_id, @src_path, @ref, @ref_path, @kind, @updated_at)`,
+    );
+
+    // The current path set, for resolving relative import specifiers to files
+    // (pure path math — no filesystem I/O). Bounded by the index itself.
+    const indexed = new Set(
+      (
+        this.db
+          .prepare('SELECT path FROM search_files WHERE workspace_id = ?')
+          .all(workspaceId) as { path: string }[]
+      ).map((r) => r.path),
+    );
 
     const tx = this.db.transaction(() => {
       for (const rel of paths) {
-        // Delete-then-insert: a deleted/unreadable file simply stays deleted.
-        deleteFile.run(workspaceId, rel);
-        deleteSymbols.run(workspaceId, rel);
-
-        let res: ReturnType<typeof readWorkspaceFile>;
+        let res: ReturnType<typeof readWorkspaceFile> | null = null;
         try {
           res = readWorkspaceFile(root, rel);
         } catch {
-          continue; // gone or unreadable — rows stay removed
+          res = null; // gone or unreadable
         }
         const lang = langForPath(rel) ?? null;
         let content = '';
         if (
+          res &&
           cfg.indexContents &&
           res.content &&
           !res.isBinary &&
@@ -272,6 +290,23 @@ export class SearchManager {
         ) {
           content = res.content.slice(0, SEARCH_LIMITS.contentIndexChars);
         }
+        const contentHash = res ? this.hashContent(content, res.size) : '';
+
+        // Skip an unchanged file entirely — no delete/reinsert, no FTS churn.
+        if (res) {
+          const prev = selectHash.get(workspaceId, rel) as { content_hash?: string } | undefined;
+          if (prev && prev.content_hash && prev.content_hash === contentHash) continue;
+        }
+
+        // Delete-then-insert: a deleted/unreadable file simply stays deleted.
+        deleteFile.run(workspaceId, rel);
+        deleteSymbols.run(workspaceId, rel);
+        deleteRefs.run(workspaceId, rel);
+        if (!res) {
+          indexed.delete(rel);
+          continue;
+        }
+
         insertFile.run({
           id: crypto.randomUUID(),
           workspace_id: workspaceId,
@@ -279,8 +314,10 @@ export class SearchManager {
           lang,
           size: res.size,
           content,
+          content_hash: contentHash,
           updated_at: now,
         });
+        indexed.add(rel);
         if (content) {
           for (const sym of extractSymbols(content, lang ?? undefined)) {
             insertSymbol.run({
@@ -292,6 +329,17 @@ export class SearchManager {
               lang,
               line: sym.line,
               signature: sym.signature,
+              updated_at: now,
+            });
+          }
+          for (const ref of extractRefs(content, lang ?? undefined)) {
+            insertRef.run({
+              id: crypto.randomUUID(),
+              workspace_id: workspaceId,
+              src_path: rel,
+              ref: ref.ref,
+              ref_path: resolveRelativeRef(rel, ref.ref, indexed),
+              kind: ref.kind,
               updated_at: now,
             });
           }
@@ -327,13 +375,19 @@ export class SearchManager {
 
     const now = Date.now();
     const insertFile = this.db.prepare(
-      `INSERT INTO search_files (id, workspace_id, path, lang, size, content, updated_at)
-         VALUES (@id, @workspace_id, @path, @lang, @size, @content, @updated_at)`,
+      `INSERT INTO search_files (id, workspace_id, path, lang, size, content, content_hash, updated_at)
+         VALUES (@id, @workspace_id, @path, @lang, @size, @content, @content_hash, @updated_at)`,
     );
     const insertSymbol = this.db.prepare(
       `INSERT INTO search_symbols (id, workspace_id, path, name, kind, lang, line, signature, updated_at)
          VALUES (@id, @workspace_id, @path, @name, @kind, @lang, @line, @signature, @updated_at)`,
     );
+    const insertRef = this.db.prepare(
+      `INSERT INTO search_refs (id, workspace_id, src_path, ref, ref_path, kind, updated_at)
+         VALUES (@id, @workspace_id, @src_path, @ref, @ref_path, @kind, @updated_at)`,
+    );
+    // Full known path set (for resolving relative import specifiers to files).
+    const indexed = new Set(files);
 
     // Replace the workspace's rows atomically once, then stream inserts in batches
     // that periodically yield to the event loop (progress + UI stay live).
@@ -367,6 +421,7 @@ export class SearchManager {
             lang,
             size,
             content,
+            content_hash: this.hashContent(content, size),
             updated_at: now,
           });
           if (content) {
@@ -380,6 +435,17 @@ export class SearchManager {
                 lang,
                 line: sym.line,
                 signature: sym.signature,
+                updated_at: now,
+              });
+            }
+            for (const ref of extractRefs(content, lang ?? undefined)) {
+              insertRef.run({
+                id: crypto.randomUUID(),
+                workspace_id: workspaceId,
+                src_path: rel,
+                ref: ref.ref,
+                ref_path: resolveRelativeRef(rel, ref.ref, indexed),
+                kind: ref.kind,
                 updated_at: now,
               });
             }
@@ -442,6 +508,40 @@ export class SearchManager {
   private clearWorkspace(workspaceId: string): void {
     this.db.prepare('DELETE FROM search_files WHERE workspace_id = ?').run(workspaceId);
     this.db.prepare('DELETE FROM search_symbols WHERE workspace_id = ?').run(workspaceId);
+    this.db.prepare('DELETE FROM search_refs WHERE workspace_id = ?').run(workspaceId);
+  }
+
+  /**
+   * Content identity for the incremental skip + the resume delta engine. Text
+   * files hash their (already size-capped) content; path-only rows (binary /
+   * oversize / unread) fall back to a cheap size surrogate so a size change is
+   * still detected without reading bytes.
+   */
+  private hashContent(content: string, size: number): string {
+    if (content) return crypto.createHash('sha256').update(content).digest('hex');
+    return `b:${size}`;
+  }
+
+  /**
+   * The set of symbol identities (`kind:name`) currently indexed for a path.
+   * Used by the Resume Pipeline to compute per-file symbol adds/removes across
+   * a reindex. Bounded by the per-file symbol cap. All values bound.
+   */
+  symbolIdentitiesForPath(workspaceId: string, relPath: string): Set<string> {
+    const rows = this.db
+      .prepare('SELECT name, kind FROM search_symbols WHERE workspace_id = ? AND path = ?')
+      .all(workspaceId, relPath) as { name: string; kind: string }[];
+    return new Set(rows.map((r) => `${r.kind}:${r.name}`));
+  }
+
+  /** How many indexed files import the given workspace-relative path. */
+  importerCount(workspaceId: string, refPath: string): number {
+    const row = this.db
+      .prepare(
+        'SELECT COUNT(DISTINCT src_path) AS n FROM search_refs WHERE workspace_id = ? AND ref_path = ?',
+      )
+      .get(workspaceId, refPath) as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 
   /** Drop a workspace's entire index (called when a workspace is removed). */

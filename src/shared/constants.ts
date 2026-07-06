@@ -174,6 +174,8 @@ export const SEARCH_LIMITS = {
   contentIndexChars: 200_000,
   /** Cap on symbols extracted per file (avoids pathological generated files). */
   maxSymbolsPerFile: 400,
+  /** Cap on import/reference edges extracted per file (dependency layer). */
+  maxRefsPerFile: 200,
   /** Recent-search history ring length (hard ceiling). */
   historyMax: 50,
   /** User-configurable recent-search ring length (clamped to historyMax). */
@@ -182,6 +184,30 @@ export const SEARCH_LIMITS = {
   savedMax: 200,
   /** TTL (ms) for the cached git federation snapshot (log/branches/tags). */
   gitCacheTtlMs: 15_000,
+} as const;
+
+/**
+ * Bounds + caps for the Resume Pipeline (main + renderer both clamp).
+ * Repository revalidation on session activation + the one-shot
+ * `<repository-delta>` prompt block — all git work is argv-only and bounded.
+ */
+export const RESUME_LIMITS = {
+  /** Commit subjects listed in a delta (rev-list counts stay exact). */
+  maxCommitsInDelta: { min: 1, max: 100, default: 25 },
+  /** Changed files carried in a delta (true total kept separately). */
+  maxFilesInDelta: 400,
+  /** Dirty-status entries folded into the snapshot dirty hash. */
+  maxDirtyEntries: 500,
+  /** Dirty-file summaries stored per snapshot row (paths only). */
+  maxDirtyFilesStored: 100,
+  /** Approx character budget for the injected `<repository-delta>` block. */
+  injectCharBudget: 4_000,
+  /** Whole-revalidation deadline; a miss degrades to "no delta". */
+  revalidateTimeoutMs: 10_000,
+  /** Days before an untouched session skips revalidation (0 = always run). */
+  staleThresholdDays: { min: 0, max: 365, default: 0 },
+  /** Commit-subject length cap inside a delta. */
+  subjectMax: 120,
 } as const;
 
 /** Bounds + caps for the Voice subsystem (main + renderer both clamp). */
@@ -424,6 +450,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fuzzy: true,
     openOnClick: true,
   },
+  resume: {
+    enabled: true,
+    injectDelta: true,
+    maxCommitsInDelta: RESUME_LIMITS.maxCommitsInDelta.default,
+    staleThresholdDays: RESUME_LIMITS.staleThresholdDays.default,
+  },
   attachments: {
     enabled: true,
     maxFileSizeMB: ATTACHMENT_LIMITS.maxFileSizeMB.default,
@@ -494,7 +526,7 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 9;
+export const WORKSPACE_SCHEMA_VERSION = 11;
 
 /** Input caps the main process enforces on renderer-supplied session values. */
 export const SESSION_LIMITS = {

@@ -89,6 +89,14 @@ export class GitManager {
     this.memory = memory;
   }
 
+  /** Optional Resume Pipeline — checkpoints re-anchor the session snapshot. */
+  private resume?: { onCheckpointCreated(sessionId: string): void };
+
+  /** Wire the Resume Manager so checkpoints refresh the session's repo anchor. */
+  setResumeManager(resume: { onCheckpointCreated(sessionId: string): void }): void {
+    this.resume = resume;
+  }
+
   /** Inject the active-root resolver (worktree-backed sessions). */
   setActiveRootResolver(resolve: (workspaceId: string) => string | null): void {
     this.activeRootResolver = resolve;
@@ -656,6 +664,9 @@ export class GitManager {
 
       this.pruneCheckpoints(root, sessionId);
       this.notifyCheckpoints(sessionId);
+      // The checkpointed tree is a state worth anchoring for resume
+      // revalidation. Fire-and-forget; snapshots never create checkpoints.
+      this.resume?.onCheckpointCreated(sessionId);
       return checkpoint;
     } catch (err) {
       logger.warn('createCheckpoint failed', err);

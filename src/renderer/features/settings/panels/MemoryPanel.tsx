@@ -4,7 +4,7 @@
  * and usage. These knobs shape what is captured and how much is injected into the
  * agent prompt; the memory database itself lives under the app's user-data dir.
  */
-import { MEMORY_LIMITS, SEARCH_LIMITS, clamp } from '@shared/constants';
+import { MEMORY_LIMITS, RESUME_LIMITS, SEARCH_LIMITS, clamp } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { Field, Section, SegmentedControl, Select, StackedField, Toggle } from '../controls';
@@ -23,10 +23,71 @@ const SOURCE_CHIPS: { id: 'files' | 'symbols' | 'docs' | 'memory' | 'commits' | 
 export function MemoryPanel() {
   const memory = useSettingsStore((s) => s.settings.memory);
   const search = useSettingsStore((s) => s.settings.search);
+  const resume = useSettingsStore((s) => s.settings.resume);
   const update = useSettingsStore((s) => s.update);
 
   return (
     <div className="flex flex-col gap-5">
+      <Section
+        title="Resume"
+        hint="When you reopen a session, Limboo revalidates the repository against the state it last saw and surfaces what changed — commits, files, symbols, and dependency manifests — so the agent continues against current reality, not remembered assumptions. Fully local, bounded git; never blocks switching."
+      >
+        <Field
+          id="resumeEnabled"
+          label="Repository revalidation on resume"
+          hint="Compare the repo to the session's last snapshot on activation and show a delta when it diverged."
+        >
+          <Toggle checked={resume.enabled} onChange={(v) => void update({ resume: { enabled: v } })} />
+        </Field>
+        {resume.enabled && (
+          <>
+            <Field
+              id="resumeInjectDelta"
+              label="Inject repository delta into prompts"
+              hint="Give the agent a one-shot summary of what changed before its next prompt."
+            >
+              <Toggle
+                checked={resume.injectDelta}
+                onChange={(v) => void update({ resume: { injectDelta: v } })}
+              />
+            </Field>
+            <Field
+              id="resumeMaxCommits"
+              label="Max commits in delta"
+              hint="How many commit subjects the delta lists (counts stay exact regardless)."
+            >
+              <Select<number>
+                value={clamp(
+                  resume.maxCommitsInDelta,
+                  RESUME_LIMITS.maxCommitsInDelta.min,
+                  RESUME_LIMITS.maxCommitsInDelta.max,
+                )}
+                options={[10, 25, 50, 100].map((n) => ({ value: n, label: String(n) }))}
+                onChange={(v) => void update({ resume: { maxCommitsInDelta: v } })}
+              />
+            </Field>
+            <Field
+              id="resumeStaleDays"
+              label="Skip revalidation newer than"
+              hint="Skip the check for sessions touched within this window (0 = always revalidate)."
+            >
+              <Select<number>
+                value={clamp(
+                  resume.staleThresholdDays,
+                  RESUME_LIMITS.staleThresholdDays.min,
+                  RESUME_LIMITS.staleThresholdDays.max,
+                )}
+                options={[0, 1, 7, 30].map((n) => ({
+                  value: n,
+                  label: n === 0 ? 'Always' : `${n} day${n === 1 ? '' : 's'}`,
+                }))}
+                onChange={(v) => void update({ resume: { staleThresholdDays: v } })}
+              />
+            </Field>
+          </>
+        )}
+      </Section>
+
       <Section
         title="Memory"
         hint="A provider-independent knowledge base of your decisions, conventions, preferences, and reusable solutions — stored on-device and surfaced to the agent automatically."

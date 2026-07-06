@@ -178,6 +178,12 @@ export const IpcChannels = {
   searchSavedCreate: 'search:savedCreate',
   searchSavedDelete: 'search:savedDelete',
 
+  // Resume Pipeline — repository revalidation + delta on session activation.
+  resumeGetState: 'resume:getState',
+  resumeGetDelta: 'resume:getDelta',
+  resumeDismiss: 'resume:dismiss',
+  resumeRevalidate: 'resume:revalidate',
+
   // Attachment Manager — session-owned files staged for the agent's tool loop.
   attachmentList: 'attachment:list',
   attachmentPickFiles: 'attachment:pickFiles',
@@ -271,6 +277,8 @@ export const IpcEvents = {
   searchChanged: 'search:changed',
   /** Progress of an in-flight search index pass. */
   searchIndexProgress: 'search:index-progress',
+  /** A session's revalidation state advanced (checking / clean / delta). */
+  resumeStateChanged: 'resume:state-changed',
   /** A session's attachment set changed (staged / sent / read / removed). */
   attachmentsChanged: 'attachment:changed',
   /** Staging progress for one attachment (hash + copy percent). */

@@ -344,6 +344,23 @@ export interface AppSettings {
     openOnClick: boolean;
   };
   /**
+   * Resume Pipeline — repository revalidation when a session is activated.
+   * Compares the current repo state against the session's last snapshot and,
+   * when they diverge, surfaces a structured delta (banner + dialog) and
+   * injects a one-shot `<repository-delta>` block into the next agent prompt.
+   * Fully local: bounded, argv-only git — never blocks session switching.
+   */
+  resume: {
+    /** Master switch for snapshots + revalidation + the delta UI. */
+    enabled: boolean;
+    /** Inject the pending repository delta into the next agent prompt. */
+    injectDelta: boolean;
+    /** Max commit subjects listed in a delta (counts stay exact). */
+    maxCommitsInDelta: number;
+    /** Days before an untouched session skips revalidation (0 = always run). */
+    staleThresholdDays: number;
+  };
+  /**
    * Attachment Manager — user-supplied files attached in the composer become
    * session-owned staged copies under `userData/attachments/<sessionId>/`. The
    * agent reads them on demand through its tool loop (never inlined wholesale);
@@ -803,6 +820,89 @@ export interface GitCheckpoint {
   createdAt: number;
 }
 
+/* ------------------------------------------------------------------ */
+/* Resume Pipeline                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Revalidation phase of a session's resume pipeline. `checking` while the
+ * bounded git comparison runs, `clean` when the repo matches the snapshot,
+ * `delta` when it diverged (banner + pending prompt injection), `idle` when
+ * revalidation hasn't run / failed (failures degrade to "no delta").
+ */
+export type ResumePhase = 'idle' | 'checking' | 'clean' | 'delta';
+
+/** One commit in a repository delta (subject capped, newest first). */
+export interface RepoDeltaCommit {
+  hash: string;
+  subject: string;
+  author: string;
+  at: number;
+}
+
+/** Coarse category a changed path is bucketed into for the delta summary. */
+export type RepoDeltaFileCategory =
+  | 'manifest'
+  | 'config'
+  | 'migration'
+  | 'source'
+  | 'doc'
+  | 'other';
+
+/** One changed file in a repository delta ('dirty' = uncommitted). */
+export interface RepoDeltaFile {
+  path: string;
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'dirty';
+  category: RepoDeltaFileCategory;
+}
+
+/**
+ * Structured repository delta between a session's last snapshot and the repo's
+ * current state — computed entirely in the main process from bounded, argv-only
+ * git. Persisted per session so the one-shot prompt injection survives an app
+ * restart between detection and the next prompt.
+ */
+export interface RepoDelta {
+  sessionId: string;
+  /** When the snapshot this delta was computed against was taken. */
+  snapshotAt: number;
+  branchChanged: boolean;
+  fromBranch: string | null;
+  toBranch: string | null;
+  headMoved: boolean;
+  fromHead: string | null;
+  toHead: string | null;
+  /** Exact rev-list counts (the commit list below is capped). */
+  commitsAhead: number;
+  commitsBehind: number;
+  commits: RepoDeltaCommit[];
+  /** Snapshot HEAD unreachable / not an ancestor (rebase, amend, gc). */
+  historyRewritten: boolean;
+  /** The effective execution root changed (worktree recreated/detached). */
+  rootChanged: boolean;
+  /** Committed-range + dirty files merged (capped; true total below). */
+  files: RepoDeltaFile[];
+  filesTotal: number;
+  /** Dependency manifests / migrations that changed (flagged specially). */
+  manifestChanges: string[];
+  /** Symbol-level adds/removes per changed file (Phase B enrichment). */
+  symbols?: { path: string; added: string[]; removed: string[] }[];
+  /** Importer counts for changed files (Phase B reference layer). */
+  refImpacts?: { path: string; importers: number }[];
+  /** Memories downgraded because their referents vanished (Phase C). */
+  downgradedMemories?: { id: string; title: string }[];
+}
+
+/** Live revalidation state pushed to the renderer per session. */
+export interface ResumeState {
+  sessionId: string;
+  phase: ResumePhase;
+  /** One-line human summary ("12 commits, 34 files changed"). */
+  summary?: string;
+  /** When the pending delta was detected (phase 'delta' only). */
+  deltaAt?: number;
+}
+
 /** Result of a guarded branch checkout — surfaces dirty-tree pre-flight info. */
 export interface GitCheckoutResult {
   ok: boolean;
@@ -966,6 +1066,10 @@ export interface MemoryCreateInput {
   confidence?: number;
   pinned?: boolean;
   sessionId?: string | null;
+  /** Workspace-relative file this memory is about (drives a 'file' back-link). */
+  filePath?: string | null;
+  /** Symbols this memory references, each `path#name` (drives 'symbol' links). */
+  symbolRefs?: string[];
 }
 
 /** Renderer-supplied patch when editing a memory (all optional). */

@@ -196,6 +196,37 @@ function migrate(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session
       ON git_checkpoints (session_id, created_at DESC);
 
+    -- Resume Pipeline (schema v10) — one repository anchor per session,
+    -- upserted at meaningful moments (run end, checkpoint, deactivation).
+    -- head/branch are NULL when the effective root is not a git repo (or the
+    -- branch is detached). dirty_files is a capped JSON array of {path,status};
+    -- dirty_hash is a sha256 over the sorted dirty entries
+    -- (status|path|size|mtimeMs) so content drift in an already-dirty tree is
+    -- detected without ever reading file contents. All values bound.
+    CREATE TABLE IF NOT EXISTS session_snapshots (
+      session_id   TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      root         TEXT NOT NULL,
+      head         TEXT,
+      branch       TEXT,
+      dirty_hash   TEXT NOT NULL DEFAULT '',
+      dirty_files  TEXT NOT NULL DEFAULT '[]',
+      reason       TEXT NOT NULL,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+
+    -- The last computed repository delta per session, persisted so the
+    -- one-shot prompt injection survives an app restart between detection and
+    -- the next prompt. status: 'pending' | 'injected' | 'dismissed'.
+    -- delta is a JSON RepoDelta built entirely in the main process.
+    CREATE TABLE IF NOT EXISTS resume_deltas (
+      session_id TEXT PRIMARY KEY,
+      status     TEXT NOT NULL,
+      delta      TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
     -- Local Memory System — durable, provider-independent project knowledge.
     -- workspace_id is NULL for global/user-scope memories (e.g. preferences).
     -- Only rows with status='active' are ever injected into an agent prompt;
@@ -382,6 +413,27 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_saved_searches_scope
       ON saved_searches (workspace_id, created_at DESC);
+
+    -- Lightweight dependency / reference layer (schema v11) — one row per
+    -- import/require/use edge, extracted by regex during the same indexing pass
+    -- that owns search_symbols. Parser-agnostic: a future tree-sitter extractor
+    -- can repopulate the same columns without a schema change. The ref column is
+    -- the raw module specifier; ref_path is the workspace-relative resolution
+    -- when the specifier is relative (NULL for bare/package specifiers). Bounded
+    -- per file by SEARCH_LIMITS. All values bound, never string-interpolated.
+    CREATE TABLE IF NOT EXISTS search_refs (
+      id           TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      src_path     TEXT NOT NULL,
+      ref          TEXT NOT NULL,
+      ref_path     TEXT,
+      kind         TEXT NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_refs_src
+      ON search_refs (workspace_id, src_path);
+    CREATE INDEX IF NOT EXISTS idx_search_refs_target
+      ON search_refs (workspace_id, ref_path);
   `);
 
   // Idempotent column additions for databases created before a column existed.
@@ -398,6 +450,11 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'sessions', 'base_ref', 'TEXT');
   addColumnIfMissing(database, 'sessions', 'folder', 'TEXT');
   addColumnIfMissing(database, 'sessions', 'tags', "TEXT NOT NULL DEFAULT '[]'");
+  // Code Intelligence (schema v11) — a content hash per indexed file so the
+  // incremental pass can skip files whose bytes are unchanged (no FTS churn)
+  // and the resume delta engine can detect real content change. Path-only rows
+  // (binary/oversize) store a cheap "size:mtimeMs" surrogate instead.
+  addColumnIfMissing(database, 'search_files', 'content_hash', "TEXT NOT NULL DEFAULT ''");
 
   const current = database
     .prepare('SELECT value FROM meta WHERE key = ?')

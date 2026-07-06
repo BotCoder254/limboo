@@ -65,10 +65,52 @@ project, its history, and its memory belong to the developer.
   git status into the session list.
 - **Local Memory System** — durable, provider-independent project knowledge with
   fully offline FTS5 / BM25 retrieval, injected into the agent prompt.
+- **Resume Pipeline** — reopening a session revalidates the repository against the
+  state it last saw and hands the agent a structured **repository delta** (commits,
+  files, symbols, dependency manifests) so it continues against current reality, not
+  a stale transcript. Fully local, bounded git, never blocks switching.
 - **Unified streaming timeline** — one continuous, turn-grouped event stream of the
   conversation, tool calls, and status.
 - **Pure-black, dark-only UI** — a minimal three-pane shell tuned for a true
   `#000000` background.
+
+## What makes Limboo different
+
+Most agent tools stop at "resume the conversation." That restores what the agent
+*said*, but not the world it said it in. Limboo treats the environment as a
+first-class, continuously-maintained system that cooperates with the agent instead
+of leaving it to rediscover reality on every turn.
+
+- **The agent resumes against verified repository reality, not a transcript.** The
+  **Resume Pipeline** is the flagship of this idea. When you reopen a session — after
+  an hour or after three weeks of other people's commits, rebases, and dependency
+  bumps — Limboo revalidates the git worktree against the exact state the session
+  last saw and computes a structured *repository delta*: commits landed, files
+  changed (with dependency manifests and migrations flagged), symbols added or
+  removed, and which files import what changed. That delta is injected once, before
+  your next prompt, so the agent reconciles its assumptions up front instead of
+  burning turns re-reading the tree. It is fully local, uses only bounded argv-only
+  git, and never blocks you from switching sessions. See
+  [the Resume Pipeline](docs/architecture/subsystems/resume-pipeline.md).
+
+- **Isolation by default.** Every session can own its own git worktree — a real
+  isolated checkout and branch — so parallel work never collides, and "continue where
+  I left off" means a specific filesystem, not a shared one.
+
+- **The app owns the knowledge, not the model.** Durable project memory, the search
+  index, and now a symbol/dependency graph are platform services the app maintains
+  and injects — provider-independent and offline. Memory even references repository
+  symbols, so guidance whose code was deleted is automatically demoted until it
+  reappears.
+
+- **A hard security boundary you can trust.** The renderer performs nothing: all
+  filesystem, git, shell, and database access lives in the main process behind a
+  single typed IPC bridge with sender validation, deny-by-default permissions, and
+  parameterized SQL throughout. Git never runs through a shell; paths are guarded
+  against traversal; secrets are never stored.
+
+The result: continuation feels genuinely intelligent, because the agent begins each
+resumed task with an accurate, up-to-date understanding of a living codebase.
 
 ## Screenshots
 
@@ -169,6 +211,9 @@ The documentation is organized as a subsystem, not a single file. Start at the
   [memory system](docs/guides/memory-system.md),
   [terminal](docs/guides/terminal.md),
   [keyboard shortcuts](docs/guides/keyboard-shortcuts.md).
+- **Deep dives** — [the Resume Pipeline](docs/architecture/subsystems/resume-pipeline.md)
+  ("continue exactly where you left off") and the other
+  [subsystem docs](docs/architecture/subsystems/agent-manager.md).
 - **Reference** — [`window.limboo` API](docs/reference/window-limboo-api.md),
   [IPC channels](docs/reference/ipc-channels.md),
   [settings](docs/reference/settings.md),
@@ -186,11 +231,13 @@ for contributors: [`CLAUDE.md`](CLAUDE.md) (the code-level working contract) and
 ## Project status
 
 Limboo is at `1.0.0`. The desktop foundation and platform services are built:
-workspaces, sessions, the git engine, the integrated terminal, the File System
-Layer, agent orchestration, the Local Memory System, and a hardened IPC layer over
-a 14-table SQLite database. Planned work (repository clone/track UI, a standalone
-permission system, a dedicated search engine, merge-conflict resolution, remote
-management, and stash) is tracked in [ROADMAP.md](ROADMAP.md).
+workspaces, sessions with per-session git worktrees, the git engine, the integrated
+terminal, the File System Layer, agent orchestration, the Local Memory System, the
+Search Engine, the Resume Pipeline ("continue exactly where you left off"), and a
+hardened IPC layer over a local SQLite database. Planned work (repository clone/track
+UI, a standalone permission system, merge-conflict resolution, remote management,
+stash, and a tree-sitter / vector-embeddings upgrade of the code-intelligence layer)
+is tracked in [ROADMAP.md](ROADMAP.md).
 
 ## Contributing
 
