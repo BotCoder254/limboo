@@ -12,7 +12,7 @@
  */
 import { AlertTriangle, GitBranch, X } from 'lucide-react';
 import type { Session } from '@shared/types';
-import { Badge, Spinner } from '@/renderer/components/ui';
+import { Badge, SessionSpinner } from '@/renderer/components/ui';
 import { cn } from '@/renderer/lib/cn';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
 import { useIsSessionRunning } from './useSessionRunning';
@@ -93,7 +93,7 @@ function WorktreeTab({
       )}
     >
       {running ? (
-        <Spinner size={11} />
+        <SessionSpinner size={11} />
       ) : missing ? (
         <AlertTriangle size={11} className="shrink-0 text-warning" />
       ) : (
