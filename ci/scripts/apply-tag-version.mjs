@@ -17,6 +17,7 @@
  *   1. process.argv[2]   — explicit (e.g. GitHub Actions `inputs.ref`)
  *   2. CI_COMMIT_TAG     — GitLab
  *   3. GITHUB_REF_NAME   — GitHub Actions, when GITHUB_REF_TYPE=tag
+ *   4. BITBUCKET_TAG     — Bitbucket Pipelines
  *
  * Usage: node ci/scripts/apply-tag-version.mjs [tag]
  */
@@ -32,6 +33,7 @@ function resolveTag() {
   if (process.env.CI_COMMIT_TAG?.trim()) return process.env.CI_COMMIT_TAG.trim();
   if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME?.trim())
     return process.env.GITHUB_REF_NAME.trim();
+  if (process.env.BITBUCKET_TAG?.trim()) return process.env.BITBUCKET_TAG.trim();
   return '';
 }
 

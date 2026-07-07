@@ -25,6 +25,7 @@ function resolveTag() {
   if (process.env.CI_COMMIT_TAG?.trim()) return process.env.CI_COMMIT_TAG.trim();
   if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME?.trim())
     return process.env.GITHUB_REF_NAME.trim();
+  if (process.env.BITBUCKET_TAG?.trim()) return process.env.BITBUCKET_TAG.trim();
   return '';
 }
 
@@ -56,7 +57,7 @@ function main() {
   // dereference the tag (or HEAD) to its underlying commit.
   let sha;
   try {
-    const ref = process.env.CI_COMMIT_SHA?.trim() || tag;
+    const ref = process.env.CI_COMMIT_SHA?.trim() || process.env.BITBUCKET_COMMIT?.trim() || tag;
     sha = git(['rev-parse', `${ref}^{commit}`]);
   } catch {
     sha = git(['rev-parse', 'HEAD^{commit}']);
