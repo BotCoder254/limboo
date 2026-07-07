@@ -1,0 +1,288 @@
+# Limboo — Bitbucket Pipelines
+#
+# A deep mirror of the primary GitLab pipeline (.gitlab-ci.yml): the SAME logical
+# pipeline (see ci/pipeline.yml) implemented with the SAME provider-neutral
+# ci/scripts/*.mjs, in the SAME order:
+#
+#   validate -> build -> test -> package(linux) -> secure -> release
+#
+# Role: co-equal Linux pipeline + GitHub Release CO-PUBLISHER. GitLab remains the
+# single source of truth and the sole GitLab-Release publisher; on every `v*` tag
+# BOTH pipelines run — GitLab packages all 3 OSes, Bitbucket packages Linux and
+# publishes the GitHub Release with the same idempotent create-or-clobber logic as
+# GitLab's release:github job. Identical asset names mean the last finisher's
+# upload wins (by design; GitLab's multi-OS pipeline normally finishes last).
+# Bitbucket cloud runners are Linux-only, so Windows/macOS packaging stays on the
+# GitLab SaaS runners.
+#
+# Versioning is TAG-DRIVEN: every job that reads the version first runs
+# ci/scripts/apply-tag-version.mjs (which also understands BITBUCKET_TAG), so all
+# artifacts match the tag. Never hand-bump package.json before tagging.
+#
+# Secrets MUST be provided as SECURED repository variables (Repository settings ->
+# Repository variables), never in this file:
+#   GITHUB_TOKEN            (required) GitHub PAT, repo scope on BotCoder254/limboo —
+#                           used by the release-github step and the manual
+#                           sync-github custom pipeline.
+#   BITBUCKET_ACCESS_TOKEN  (optional) repository access token; when present the
+#                           release also uploads installers to Bitbucket Downloads,
+#                           otherwise that step skips cleanly.
+# See docs/ci/bitbucket-pipelines.md and docs/ci/release-process.md.
+
+image: node:22-bookworm   # Electron 42 requires Node >= 22.12 (ERR_REQUIRE_ESM otherwise)
+
+clone:
+  depth: full   # full history + tags: release-note diffs and check-tag-unique need them
+
+definitions:
+  caches:
+    npm: .npm   # same lockfile-driven npm cache location as .gitlab-ci.yml
+
+  steps:
+    # ----------------------------------------------------------------- validate
+    - step: &lint
+        name: "validate: lint"
+        caches: [npm]
+        script:
+          - apt-get update && apt-get install -y build-essential python3
+          - npm ci --cache .npm --prefer-offline
+          - npm run lint
+
+    - step: &compliance
+        name: "validate: compliance"
+        caches: [npm]
+        script:
+          - apt-get update && apt-get install -y build-essential python3
+          - npm ci --cache .npm --prefer-offline
+          # Tag-driven versioning: on a v* tag pipeline, stamp package.json (+ lockfile)
+          # with the tag version BEFORE check-manifest (mirrors the GitLab compliance
+          # job). No-op off a tag. BITBUCKET_TAG is read by the scripts themselves.
+          - node ci/scripts/apply-tag-version.mjs
+          # Fail fast if this v* tag re-tags an already-tagged commit.
+          - node ci/scripts/check-tag-unique.mjs
+          - node ci/scripts/check-licenses.mjs
+          - node ci/scripts/check-electron-security.mjs
+          - node ci/scripts/check-manifest.mjs
+
+    - step: &audit
+        name: "validate: audit (non-blocking)"
+        caches: [npm]
+        script:
+          - apt-get update && apt-get install -y build-essential python3
+          - npm ci --cache .npm --prefer-offline
+          # Advisories warn; they do not block ordinary commits (same as GitLab).
+          - npm audit --audit-level=high || echo "audit advisories reported (non-blocking)"
+
+    - step: &secret-scan
+        name: "validate: secret-scan"
+        image: zricethezav/gitleaks:latest
+        script:
+          - gitleaks detect --source . --redact --verbose
+
+    # -------------------------------------------------------------------- build
+    - step: &build
+        name: "build"
+        caches: [npm]
+        script:
+          - apt-get update && apt-get install -y build-essential python3
+          - npm ci --cache .npm --prefer-offline
+          - node ci/scripts/apply-tag-version.mjs
+          - npx vite build --config vite.renderer.config.mts
+          - npm run package
+
+    # --------------------------------------------------------------------- test
+    - step: &test
+        name: "test: linux smoke"
+        caches: [npm]
+        script:
+          # Electron needs the full GTK/ATK/CUPS/ALSA stack to launch (the smoke test
+          # boots a real Electron process), not just nss/gbm. The t64 fallback keeps
+          # this working if the base image moves to an Ubuntu 24.04-style t64 set.
+          - apt-get update
+          - apt-get install -y build-essential python3 xvfb libnss3 libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libpango-1.0-0 libcairo2
+          - apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libgtk-3-0 libasound2 || apt-get install -y libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libgtk-3-0t64 libasound2t64
+          - npm ci --cache .npm --prefer-offline
+          - xvfb-run -a node ci/scripts/smoke-test.mjs
+
+    # ------------------------------------------------------------------ package
+    # Mirror of GitLab's package:linux — the hybrid build (`npm run dist` = Forge
+    # package + electron-builder --prepackaged), then stage ONLY release-relevant
+    # files into artifacts/linux/ (per-OS dir mirrors the GitLab layout the secure
+    # step flattens).
+    - step: &package-linux
+        name: "package: linux"
+        size: 2x   # Electron packaging needs the larger memory allowance
+        caches: [npm]
+        script:
+          - apt-get update && apt-get install -y build-essential python3 rpm fakeroot dpkg
+          - npm ci --cache .npm --prefer-offline
+          # Stamp the tag version into package.json before building the installers.
+          - node ci/scripts/apply-tag-version.mjs
+          - npm run dist -- --publish never
+          # Pure-npm SBOM from the lockfile — the dependency set is identical on all
+          # OSes, so this one SBOM covers the release (same as GitLab's linux job).
+          - npx --yes @cyclonedx/cyclonedx-npm --omit dev --output-file dist/limboo-sbom.cdx.json
+          - node ci/scripts/verify-signing.mjs dist
+          - |
+            mkdir -p artifacts/linux
+            cp dist/*.AppImage dist/*.deb dist/*.rpm dist/latest-linux.yml artifacts/linux/
+            cp dist/limboo-sbom.cdx.json artifacts/linux/
+            # *.blockmap is optional (electron-updater delta metadata) — copy if present,
+            # but never mask a real error on the required files above.
+            if ls dist/*.blockmap >/dev/null 2>&1; then cp dist/*.blockmap artifacts/linux/; else echo "[stage] no *.blockmap (delta updates disabled?)"; fi
+            # Fail fast if any essential installer / update metadata is missing.
+            for pat in "artifacts/linux/*.AppImage" "artifacts/linux/*.deb" "artifacts/linux/*.rpm" "artifacts/linux/latest-linux.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
+        artifacts:
+          - artifacts/**
+
+    # ------------------------------------------------------------------- secure
+    # Consolidate the staged artifacts into a single dist/, then compute the
+    # release-wide SHA256SUMS (mirror of GitLab's secure job).
+    - step: &secure
+        name: "secure: checksums + signing"
+        script:
+          - |
+            mkdir -p dist
+            cp -r artifacts/*/* dist/ 2>/dev/null || true
+            ls -la dist
+          - node ci/scripts/make-checksums.mjs dist dist/SHA256SUMS
+          - node ci/scripts/verify-signing.mjs dist
+        artifacts:
+          - dist/**
+
+    # ------------------------------------------------------------------ release
+    - step: &release-notes
+        name: "release: notes"
+        script:
+          - node ci/scripts/generate-release-notes.mjs "$BITBUCKET_TAG" RELEASE_NOTES.md
+        artifacts:
+          - RELEASE_NOTES.md
+          - dist/**
+
+    # Publish the GitHub Release — an exact port of GitLab's release:github job
+    # (pinned gh CLI, idempotent create/upload, --prerelease on hyphen tags). The
+    # latest*.yml + *.blockmap files MUST be attached — electron-updater reads them
+    # from the GitHub Release to detect and verify updates. CO-PUBLISHER: GitLab's
+    # release:github runs on the same tag; both use create-or-clobber, so the last
+    # finisher's identically-named assets win (GitLab's all-OS build normally lands
+    # last and stays authoritative).
+    - step: &release-github
+        name: "release: github (co-publish)"
+        image: debian:bookworm-slim
+        script:
+          - |
+            set -eu
+            GH_CLI_VERSION="2.95.0"
+            apt-get update && apt-get install -y curl ca-certificates tar git
+            curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.tar.gz" | tar xz
+            install "gh_${GH_CLI_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+            gh --version
+          - |
+            set -eu
+            : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set as a SECURED repository variable}"
+            export GH_TOKEN="$GITHUB_TOKEN"
+            export GH_REPO=BotCoder254/limboo
+            PRERELEASE=""
+            case "$BITBUCKET_TAG" in *-*) PRERELEASE="--prerelease" ;; esac
+            if gh release view "$BITBUCKET_TAG" >/dev/null 2>&1; then
+              echo "Release $BITBUCKET_TAG already exists — uploading assets with --clobber"
+              gh release upload "$BITBUCKET_TAG" dist/* --clobber
+            else
+              gh release create "$BITBUCKET_TAG" \
+                --title "Limboo $BITBUCKET_TAG" \
+                --notes-file RELEASE_NOTES.md \
+                --verify-tag $PRERELEASE \
+                dist/*
+            fi
+
+    # Upload the installers to Bitbucket Downloads so this host also serves the
+    # binaries. GUARDED: Bitbucket has no CI_JOB_TOKEN equivalent for the Downloads
+    # API, so this runs only when a BITBUCKET_ACCESS_TOKEN secured variable exists —
+    # otherwise it skips cleanly (same idiom as verify-signing on unsigned builds).
+    - step: &release-bitbucket-downloads
+        name: "release: bitbucket downloads (optional)"
+        image: curlimages/curl:latest
+        script:
+          - |
+            set -eu
+            if [ -z "${BITBUCKET_ACCESS_TOKEN:-}" ]; then
+              echo "[downloads] BITBUCKET_ACCESS_TOKEN not set — skipping Bitbucket Downloads upload."
+              exit 0
+            fi
+            for f in dist/*; do
+              [ -f "$f" ] || continue
+              echo "Uploading $(basename "$f") -> Bitbucket Downloads"
+              curl --fail --silent --show-error \
+                --header "Authorization: Bearer ${BITBUCKET_ACCESS_TOKEN}" \
+                -X POST "https://api.bitbucket.org/2.0/repositories/${BITBUCKET_REPO_FULL_NAME}/downloads" \
+                -F files=@"$f"
+            done
+
+pipelines:
+  # CI layer — every branch push: validate -> build -> test (mirror of the GitLab
+  # push pipeline; never produces shippable artifacts).
+  default:
+    - parallel:
+        - step: *lint
+        - step: *compliance
+        - step: *audit
+        - step: *secret-scan
+    - step: *build
+    - step: *test
+
+  # Same CI layer for pull requests.
+  pull-requests:
+    "**":
+      - parallel:
+          - step: *lint
+          - step: *compliance
+          - step: *audit
+          - step: *secret-scan
+      - step: *build
+      - step: *test
+
+  # Release layer — every v* tag runs the full pipeline through release (mirror of
+  # the GitLab tag pipeline, Linux packaging only on Bitbucket cloud runners).
+  tags:
+    "v*":
+      - parallel:
+          - step: *lint
+          - step: *compliance
+          - step: *audit
+          - step: *secret-scan
+      - step: *build
+      - step: *test
+      - step: *package-linux
+      - step: *secure
+      - step: *release-notes
+      - step: *release-github
+      - step: *release-bitbucket-downloads
+
+  custom:
+    # Manual dry-run from the Pipelines UI: package + secure without publishing
+    # (mirror of GitLab's CI_PIPELINE_SOURCE == "web" dry-run).
+    dry-run:
+      - step: *package-linux
+      - step: *secure
+
+    # Manual repository sync Bitbucket -> GitHub using the GITHUB_TOKEN secured
+    # variable. Manual-only so it can never fight GitLab's push mirroring. Uses a
+    # per-invocation http.extraheader (the token is never written to .git/config)
+    # and --force-with-lease against freshly fetched remote-tracking refs — never a
+    # bare --force (project security invariant).
+    sync-github:
+      - step:
+          name: "sync: bitbucket -> github (manual)"
+          script:
+            - |
+              set -eu
+              : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set as a SECURED repository variable}"
+              AUTH="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+              git remote add github https://github.com/BotCoder254/limboo.git
+              git -c http.extraheader="$AUTH" fetch github
+              BRANCH="${BITBUCKET_BRANCH:-main}"
+              echo "Pushing HEAD -> github/$BRANCH (--force-with-lease) + tags"
+              git -c http.extraheader="$AUTH" push --force-with-lease github "HEAD:refs/heads/$BRANCH"
+              git -c http.extraheader="$AUTH" push github --tags

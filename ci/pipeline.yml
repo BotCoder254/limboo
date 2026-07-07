@@ -1,10 +1,11 @@
 # Limboo — canonical pipeline specification
 #
 # This file is the SINGLE SOURCE OF TRUTH for the logical CI/CD pipeline. It is
-# provider-agnostic by design: GitLab CI (.gitlab-ci.yml) and GitHub Actions
-# (.github/workflows) both implement the `validate -> build -> test` (ci) layer
-# identically, in this exact order, via the same ci/scripts/*.mjs, so any provider
-# can be adopted for ordinary commit validation.
+# provider-agnostic by design: GitLab CI (.gitlab-ci.yml), GitHub Actions
+# (.github/workflows), and Bitbucket Pipelines (bitbucket-pipelines.yml) all
+# implement the `validate -> build -> test` (ci) layer identically, in this exact
+# order, via the same ci/scripts/*.mjs, so any provider can be adopted for
+# ordinary commit validation.
 #
 # The `package`/`secure`/`release` (cd + release) layers are wired up in GitLab, the
 # PRIMARY release publisher and the single source of truth for this repo: its
@@ -15,7 +16,12 @@
 # kept in sync by GitLab push mirroring. GitHub Actions keeps an equivalent, manually
 # dispatched fallback (release.yml + _package.yml — the only path that mints
 # build-provenance/SBOM attestations; GitLab generates its SBOM via
-# @cyclonedx/cyclonedx-npm instead). When you change the pipeline, change THIS file
+# @cyclonedx/cyclonedx-npm instead). Bitbucket Pipelines mirrors the GitLab pipeline
+# on the Bitbucket repo: full CI on every push/PR, and on v* tags a Linux
+# package/secure/release pass that CO-PUBLISHES the GitHub Release with the same
+# idempotent create-or-clobber gh logic (Bitbucket cloud runners are Linux-only, so
+# Windows/macOS packaging stays on GitLab SaaS runners — see
+# docs/ci/bitbucket-pipelines.md). When you change the pipeline, change THIS file
 # first, then update the GitLab implementation (and any other provider you've wired
 # up release credentials for) to match.
 #
@@ -108,6 +114,9 @@ stages:
         from conventional commits + merged-PR labels between the previous tag and HEAD.
       - Publish a GitLab Release (assets via the Generic Package Registry) AND an
         identical GitHub Release with installers + SHA256SUMS + auto-update metadata.
+      - Bitbucket Pipelines co-publishes the GitHub Release from its own Linux build
+        (create-or-clobber, identical job logic); GitLab's all-OS build normally
+        finishes last and stays authoritative.
 
 # Security is a first-class, every-commit concern — never a post-release afterthought.
 security_invariants:

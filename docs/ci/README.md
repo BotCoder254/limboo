@@ -2,10 +2,11 @@
 
 Limboo ships a **provider-agnostic** CI/CD platform. One logical pipeline is defined
 once in [`ci/pipeline.yml`](../../ci/pipeline.yml) and implemented identically for
-three providers, so an organization can adopt whichever CI it already runs without
-changing Limboo's development workflow. All three execute the same stages in the same
-order and produce the same artifacts, because the actual logic lives in
-provider-neutral scripts under [`ci/scripts/`](../../ci/scripts) rather than in YAML.
+three providers — GitLab CI, GitHub Actions, and Bitbucket Pipelines — so an
+organization can adopt whichever CI it already runs without changing Limboo's
+development workflow. All three execute the same stages in the same order and
+produce the same artifacts, because the actual logic lives in provider-neutral
+scripts under [`ci/scripts/`](../../ci/scripts) rather than in YAML.
 
 ## Layered responsibilities
 
@@ -23,7 +24,11 @@ Release and a GitHub Release (credentialed via the masked+protected `GH_TOKEN`
 variable — see [gitlab-ci.md](gitlab-ci.md)). The GitHub repository is kept in sync
 by GitLab push mirroring, and GitHub Releases still host the electron-updater feed.
 **GitHub Actions** retains the CI/Security/CodeQL layers plus a **manual-dispatch
-release fallback** ([github-actions.md](github-actions.md)).
+release fallback** ([github-actions.md](github-actions.md)). **Bitbucket
+Pipelines** runs the same pipeline on the Bitbucket mirror — CI on every push/PR,
+and on `v*` tags a Linux packaging pass that **co-publishes the GitHub Release**
+with the same idempotent create-or-clobber logic
+([bitbucket-pipelines.md](bitbucket-pipelines.md)).
 
 ## Stage order (every provider, fail-fast)
 
@@ -38,6 +43,7 @@ standards.
 
 - [gitlab-ci.md](gitlab-ci.md) — **primary** pipeline and release publisher
 - [github-actions.md](github-actions.md) — CI/Security/CodeQL + manual release fallback
+- [bitbucket-pipelines.md](bitbucket-pipelines.md) — Linux pipeline + GitHub Release co-publisher
 
 ## Process guides
 

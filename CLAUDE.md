@@ -340,9 +340,13 @@ Releases: **GitLab is the single source of truth and primary publisher.** Pushin
 `v*` tag triggers the GitLab `release` stage (`.gitlab-ci.yml`), which packages all-OS
 installers and publishes the same build to **both** a GitLab Release and a GitHub
 Release. The GitHub repo is kept in sync by GitLab push mirroring, and `git push
-origin` is configured to fan out to both `github.com` and
-`gitlab.com/BotCoder254/limboo`. GitHub Actions' `release.yml` is a manual fallback
-only. See `docs/ci/release-process.md` and `docs/ci/gitlab-ci.md`.
+origin` is configured to fan out to `github.com`, `gitlab.com/BotCoder254/limboo`,
+and `bitbucket.org/limboo_/limboo`. GitHub Actions' `release.yml` is a manual fallback
+only. **Bitbucket Pipelines** (`bitbucket-pipelines.yml`) mirrors the GitLab pipeline
+on the Bitbucket repo via the same `ci/scripts/*.mjs`: CI on every push/PR, and on
+`v*` tags a Linux packaging pass that co-publishes the GitHub Release (see
+`docs/ci/bitbucket-pipelines.md`). See `docs/ci/release-process.md` and
+`docs/ci/gitlab-ci.md`.
 
 **Versioning is TAG-DRIVEN — never hand-bump `package.json` before tagging.** Every CI
 job that reads the version first runs `ci/scripts/apply-tag-version.mjs`, which stamps the

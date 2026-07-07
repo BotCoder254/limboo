@@ -54,11 +54,13 @@ async function main() {
   // in the job and stamps the tag version into package.json, so this check is now a
   // post-apply safety net — it verifies the stamp landed rather than demanding a
   // manual pre-bump. Only enforced when a release tag is present, so ordinary commit
-  // pipelines are unaffected. Reads either CI's tag env (GitLab: CI_COMMIT_TAG;
-  // GitHub Actions: GITHUB_REF_NAME when GITHUB_REF_TYPE=tag).
+  // pipelines are unaffected. Reads the CI tag env (GitLab: CI_COMMIT_TAG;
+  // GitHub Actions: GITHUB_REF_NAME when GITHUB_REF_TYPE=tag; Bitbucket
+  // Pipelines: BITBUCKET_TAG).
   const releaseTag =
     process.env.CI_COMMIT_TAG ||
     (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : '') ||
+    process.env.BITBUCKET_TAG ||
     '';
   if (releaseTag) {
     const tagVersion = releaseTag.replace(/^v/, '');
@@ -99,7 +101,7 @@ async function main() {
   // Docs integrity: index should link the guides that exist.
   if (await exists('docs/ci/README.md')) {
     const idx = await readFile('docs/ci/README.md', 'utf8');
-    for (const g of ['github-actions', 'gitlab-ci', 'release-process', 'security']) {
+    for (const g of ['github-actions', 'gitlab-ci', 'bitbucket-pipelines', 'release-process', 'security']) {
       if (await exists(`docs/ci/${g}.md`)) {
         if (idx.includes(`${g}.md`)) ok(`docs index links ${g}.md`);
         else fail(`docs/ci/README.md does not link ${g}.md`);
