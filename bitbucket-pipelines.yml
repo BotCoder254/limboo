@@ -268,10 +268,13 @@ pipelines:
       - step: *secure
 
     # Manual repository sync Bitbucket -> GitHub using the GITHUB_TOKEN secured
-    # variable. Manual-only so it can never fight GitLab's push mirroring. Uses a
-    # per-invocation http.extraheader (the token is never written to .git/config)
-    # and --force-with-lease against freshly fetched remote-tracking refs — never a
-    # bare --force (project security invariant).
+    # variable. Manual-only so it can never fight GitLab's push mirroring. Auth
+    # goes through an inline git credential helper that reads the token from the
+    # ENVIRONMENT inside the helper process (shell builtin echo): the token never
+    # appears in any command argv / process listing / shell history, is never
+    # base64-materialized in the step script, and is never written to .git/config.
+    # Pushes use --force-with-lease against freshly fetched remote-tracking refs —
+    # never a bare --force (project security invariant).
     sync-github:
       - step:
           name: "sync: bitbucket -> github (manual)"
@@ -279,10 +282,13 @@ pipelines:
             - |
               set -eu
               : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set as a SECURED repository variable}"
-              AUTH="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+              export GITHUB_TOKEN
+              # Single-quoted: $GITHUB_TOKEN is expanded by the helper subshell at
+              # credential-fill time, not here — the token stays out of argv.
+              CRED_HELPER='!f() { echo username=x-access-token; echo password="${GITHUB_TOKEN}"; }; f'
               git remote add github https://github.com/BotCoder254/limboo.git
-              git -c http.extraheader="$AUTH" fetch github
+              git -c credential.helper= -c credential.helper="$CRED_HELPER" fetch github
               BRANCH="${BITBUCKET_BRANCH:-main}"
               echo "Pushing HEAD -> github/$BRANCH (--force-with-lease) + tags"
-              git -c http.extraheader="$AUTH" push --force-with-lease github "HEAD:refs/heads/$BRANCH"
-              git -c http.extraheader="$AUTH" push github --tags
+              git -c credential.helper= -c credential.helper="$CRED_HELPER" push --force-with-lease github "HEAD:refs/heads/$BRANCH"
+              git -c credential.helper= -c credential.helper="$CRED_HELPER" push github --tags

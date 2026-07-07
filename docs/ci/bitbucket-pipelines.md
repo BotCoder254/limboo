@@ -54,9 +54,11 @@ Set under **Repository settings -> Pipelines -> Repository variables**, always
   - `dry-run` — package + secure without publishing (mirror of GitLab's web
     dry-run).
   - `sync-github` — pushes the current branch + tags to GitHub with
-    `--force-with-lease` (never bare `--force`) using a per-invocation
-    `http.extraheader`; the token is never written to `.git/config`. Manual-only
-    so it can never fight GitLab's push mirroring.
+    `--force-with-lease` (never bare `--force`). Auth uses an inline git
+    credential helper that reads `GITHUB_TOKEN` from the environment inside the
+    helper process, so the token never appears in command argv / process
+    listings and is never written to `.git/config`. Manual-only so it can never
+    fight GitLab's push mirroring.
 
 ## Tag detection in the shared scripts
 
