@@ -31,9 +31,9 @@ so a duplicate tag can no longer silently ship an empty release.
 
 ## 1. Pre-flight
 
-- The GitLab project is set up: `GH_TOKEN` is a masked+protected CI/CD variable, the
-  `v*` tag is protected, and (optionally) SaaS macOS/Windows runners are enabled.
-  See [gitlab-ci.md](gitlab-ci.md#first-time-setup).
+- The GitLab project is set up: `GH_TOKEN` is a masked+protected CI/CD variable and
+  the `v*` tag is protected. Windows builds on GitLab's hosted runner on all tiers;
+  macOS needs Premium/Ultimate. See [gitlab-ci.md](gitlab-ci.md#first-time-setup).
 - GitHub push mirroring is configured so the repo stays in sync.
 - `main` is green (GitLab `validate` -> `build` -> `test` passing).
 - **Do NOT hand-edit `package.json` version.** Versioning is tag-driven: CI stamps the
@@ -58,8 +58,9 @@ every artifact (`app.getVersion()`, installers, `latest*.yml`) is `1.2.0` with n
 1. `package:linux` / `package:windows` / `package:macos` each run `npm run dist`
    (Forge package + electron-builder branded installers + `latest*.yml` auto-update
    metadata) on their own OS and stage into `artifacts/<os>/`; Linux additionally
-   generates the SBOM (CycloneDX). Windows/macOS run on GitLab SaaS runners and are
-   optional — a Linux-only release still proceeds. See
+   generates the SBOM (CycloneDX). Windows/macOS run on GitLab's official hosted
+   runners (Windows: all tiers; macOS: Premium/Ultimate) and are optional — a
+   release without them still proceeds. See
    [installer and updates](../operations/installer-and-updates.md).
 2. `secure` flattens every platform's artifacts into `dist/`, consolidates a
    top-level `SHA256SUMS`, and verifies signatures.

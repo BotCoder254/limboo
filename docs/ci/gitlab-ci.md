@@ -29,21 +29,30 @@ manual-dispatch fallback publisher only.
   into the Generic Package Registry) -> `release:gitlab` (GitLab Release + linked
   assets) **and** `release:github` (GitHub Release via the `gh` CLI).
 
-## Multi-OS packaging (GitLab SaaS runners)
+## Multi-OS packaging (GitLab-hosted runners — no self-hosted anywhere)
 
 GitLab's shared runners are Linux-only, so `package:linux` always runs there.
-`package:windows` and `package:macos` target **GitLab SaaS hosted runners** by tag:
+`package:windows` and `package:macos` target **GitLab's official hosted (SaaS)
+runners** by tag:
 
 | Job | Runner tag | Notes |
 | --- | ---------- | ----- |
-| `package:linux` | shared (Linux) | always available |
-| `package:windows` | `saas-windows-medium-amd64` | paid plan; PowerShell shell |
-| `package:macos` | `saas-macos-medium-m1` | paid plan; Apple silicon -> arm64 |
+| `package:linux` | shared (Linux) | always available, all tiers |
+| `package:windows` | `saas-windows-medium-amd64` | **beta, all tiers (Free included)**; PowerShell shell |
+| `package:macos` | `saas-macos-medium-m1` | **Premium/Ultimate only**; Apple silicon -> arm64 |
 
-Both SaaS jobs are `allow_failure: true` and the `secure` job needs them
-`optional: true`, so **a Linux-only release still succeeds** if those runners or the
-plan aren't available. To harden Windows/macOS, enable the SaaS runners (paid plan)
-or register your own runners with matching `tags:`.
+Two hosted-runner gotchas the jobs encode (don't undo them):
+
+- Both jobs set `inherit: default: false` — the pipeline default
+  `image: node:22-bookworm` must never reach them. Hosted **Windows** VMs are not
+  Docker executors (an `image:` keyword is invalid there); on hosted **macOS**,
+  `image:` selects the VM environment, pinned to `macos-15-xcode-16`.
+- Both bootstrap Node 22 first (chocolatey on Windows, Homebrew on macOS) in case
+  the VM image lacks it.
+
+Both jobs are `allow_failure: true` and the `secure` job needs them
+`optional: true`, so **a Linux(+Windows)-only release still succeeds** when the
+macOS runner isn't available on the current plan.
 
 ## CI/CD variables (secrets)
 
@@ -53,7 +62,7 @@ Set under **Settings -> CI/CD -> Variables**, always **Masked** and **Protected*
 
 | Variable | Use |
 | -------- | --- |
-| `GH_TOKEN` | **Required** for the GitHub Release. Fine-grained GitHub PAT, **Contents: read+write** on `BotCoder254/limboo`. |
+| `GH_TOKEN` | **Required** for the GitHub Release. Fine-grained GitHub PAT, **Contents: read+write** on `BotCoder254/limboo`. `release:github` pre-flights it: unset -> exact setup instructions (a Protected variable is invisible on unprotected tags — protect `v*` too); set -> a `gh api repos/…` validity probe fails fast on an expired/underscoped token. |
 | `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | macOS signing / notarization (optional) |
 | `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | Windows signing (optional) |
 
@@ -122,16 +131,17 @@ Add `GH_TOKEN` (the PAT) under **Settings -> CI/CD -> Variables**, **Masked** +
 **Settings -> Repository -> Protected tags** -> add `v*`, so protected variables are
 available to the release jobs.
 
-### 6. (Optional) SaaS macOS/Windows runners
+### 6. Hosted macOS/Windows runners
 
-On a paid plan, enable the hosted **macOS** and **Windows** runners so
-`package:macos` / `package:windows` run. Without them, only Linux installers ship
-(the jobs are optional).
+`package:windows` runs on GitLab's hosted Windows runner (beta) on **every tier —
+nothing to enable**. `package:macos` needs a **Premium/Ultimate** namespace; on Free
+tier it is skipped (`allow_failure`) and Linux + Windows installers still ship.
 
 ## Cutting a release
 
 ```bash
-# bump the version in package.json, commit with Conventional Commit subjects, then:
+# commit with Conventional Commit subjects (NEVER hand-bump package.json — the
+# tag drives the version via apply-tag-version.mjs), then:
 git tag v1.2.0
 git push origin v1.2.0   # -> GitLab (source of truth) + GitHub (mirror)
 ```

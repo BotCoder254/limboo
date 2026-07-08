@@ -132,9 +132,14 @@ test:linux:
 # collide — the `secure` job flattens artifacts/*/* -> dist/ afterwards.
 #
 # Linux runs on GitLab's shared runners (always available). Windows + macOS use
-# GitLab SaaS hosted runners and are `allow_failure: true`, so the absence of a
-# paid plan / registered runner never blocks the Linux release. Register your own
-# tagged runners to harden these.
+# GitLab's OFFICIAL hosted (SaaS) runners — no self-hosted runners anywhere:
+#   * Windows: `saas-windows-medium-amd64` — beta, available on ALL tiers (Free
+#     included). The VM is not a Docker executor, so the job must NOT carry an
+#     `image:` keyword — `inherit: default: false` blocks the pipeline default
+#     (node:22-bookworm) from leaking in (that leak is what broke these jobs).
+#   * macOS: `saas-macos-medium-m1` — requires Premium/Ultimate; on Free tier the
+#     job stays pending and times out, which `allow_failure: true` absorbs.
+# Both are `allow_failure: true` so a missing runner never blocks the Linux release.
 
 package:linux:
   stage: package
@@ -169,15 +174,20 @@ package:linux:
 
 package:windows:
   stage: package
-  tags: [saas-windows-medium-amd64]   # GitLab SaaS hosted Windows runner (paid plan)
-  allow_failure: true                 # no runner / plan -> skip, Linux still releases
+  tags: [saas-windows-medium-amd64]   # GitLab-hosted Windows runner (beta, all tiers)
+  allow_failure: true                 # runner unavailable -> skip, Linux still releases
+  # Hosted Windows VMs have no Docker executor: an `image:` keyword is invalid, so
+  # the pipeline default (node:22-bookworm) must not be inherited.
+  inherit:
+    default: false
   rules:
     - if: $CI_COMMIT_TAG
   cache: {}
   before_script: []
   script:
-    # SaaS Windows runners execute PowerShell by default. Node 22 is preinstalled via
-    # the runner toolset; fall back to a direct install if the image lacks it.
+    # Hosted Windows runners execute PowerShell. Bootstrap Node 22 via the
+    # preinstalled chocolatey if the beta VM toolset lacks it, then refresh PATH.
+    - if (-not (Get-Command node -ErrorAction SilentlyContinue)) { choco install -y nodejs-lts; $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User') }
     - node --version
     - npm ci
     - node ci/scripts/apply-tag-version.mjs
@@ -194,8 +204,13 @@ package:windows:
 
 package:macos:
   stage: package
-  tags: [saas-macos-medium-m1]   # GitLab SaaS hosted macOS (Apple silicon) runner
-  allow_failure: true
+  tags: [saas-macos-medium-m1]   # GitLab-hosted macOS (Apple silicon) runner — Premium/Ultimate
+  allow_failure: true            # Free tier has no hosted macOS runner -> job skipped
+  # On macOS hosted runners `image:` selects the VM environment, not a Docker
+  # image — block the node:22-bookworm default and pin the GA Xcode image.
+  inherit:
+    default: false
+  image: macos-15-xcode-16
   rules:
     - if: $CI_COMMIT_TAG
   cache: {}
@@ -205,6 +220,8 @@ package:macos:
     # keychain. When CSC_LINK / CSC_KEY_PASSWORD are added, drop this override.
     CSC_IDENTITY_AUTO_DISCOVERY: "false"
   script:
+    # Bootstrap Node 22 via the preinstalled Homebrew if the VM image lacks it.
+    - command -v node >/dev/null 2>&1 || (brew install node@22 && brew link --overwrite node@22)
     - node --version
     - npm ci
     - node ci/scripts/apply-tag-version.mjs
@@ -344,8 +361,27 @@ release:github:
       gh --version
     - |
       set -eu
-      : "${GH_TOKEN:?GH_TOKEN must be set as a masked+protected CI/CD variable}"
+      # Pre-flight: fail with ACTIONABLE diagnostics instead of a cryptic gh
+      # error (same fix as the Bitbucket release-github step after the v1.3.5
+      # run failed with the token silently absent from the job env).
+      if [ -z "${GH_TOKEN:-}" ]; then
+        echo "ERROR: GH_TOKEN is not visible to this job." >&2
+        echo "Fix: GitLab -> Settings -> CI/CD -> Variables -> add Key=GH_TOKEN," >&2
+        echo "     Value=<GitHub fine-grained PAT with Contents: read+write on" >&2
+        echo "     BotCoder254/limboo>, check [Masked] + [Protected]." >&2
+        echo "     A Protected variable is INVISIBLE to pipelines on unprotected" >&2
+        echo "     tags — also protect 'v*' under Settings -> Repository ->" >&2
+        echo "     Protected tags, then re-run this job." >&2
+        exit 1
+      fi
       export GH_REPO=BotCoder254/limboo
+      # Verify the token actually reaches the repo before publishing, so an
+      # expired/underscoped PAT produces a clear message instead of a gh stack.
+      gh api "repos/$GH_REPO" --jq .full_name >/dev/null 2>&1 || {
+        echo "ERROR: GH_TOKEN is set but cannot access $GH_REPO (expired, revoked," >&2
+        echo "       or missing repo scope / Contents: read+write). Replace the token." >&2
+        exit 1
+      }
       PRERELEASE=""
       case "$CI_COMMIT_TAG" in *-*) PRERELEASE="--prerelease" ;; esac
       if gh release view "$CI_COMMIT_TAG" >/dev/null 2>&1; then
