@@ -6,10 +6,13 @@
  */
 import { AlertTriangle, ClipboardCheck, KeyRound, Loader2, TimerReset } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { providerForModel } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { runCommand } from '@/renderer/lib/commands';
+import { agentDisplayName } from '@/renderer/features/agent/status';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
+import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 
 type Tone = 'warning' | 'danger' | 'accent';
 
@@ -43,6 +46,9 @@ export function ComposerBanner() {
   const planReady = useAgentStore(
     (s) => (sessionId ? s.bySession[sessionId]?.plan?.status : undefined) === 'ready',
   );
+  const model = useSettingsStore((s) => s.settings.agent.model);
+  const agentName = agentDisplayName(model);
+  const isCursor = providerForModel(model) === 'cursor';
 
   let tone: Tone | null = null;
   let Icon: LucideIcon = AlertTriangle;
@@ -53,30 +59,31 @@ export function ComposerBanner() {
   if (lifecycle === 'rate-limited') {
     tone = 'warning';
     Icon = TimerReset;
-    title = 'Anthropic usage limit reached';
+    title = isCursor ? 'Cursor usage limit reached' : 'Anthropic usage limit reached';
     const when = formatReset(rateLimit?.resetsAt, rateLimit?.timezone);
     body =
-      `Claude Code is still connected, but it can't run more prompts until your usage allocation resets` +
+      `${agentName} is still connected, but it can't run more prompts until your usage allocation resets` +
       (when ? ` around ${when}.` : '.') +
       ' You can keep drafting — sending resumes automatically once it clears.';
     action = { label: 'Try now', onClick: clearRateLimit };
   } else if (lifecycle === 'auth-required') {
     tone = 'danger';
     Icon = KeyRound;
-    title = 'Claude Code needs to be signed in again';
-    body =
-      'Your Claude Code authentication expired. Open a terminal, run `claude`, and sign in — Limboo reuses that login. Then retry.';
+    title = `${agentName} needs to be signed in again`;
+    body = isCursor
+      ? 'Your Cursor authentication expired. Sign in or update the API key under Settings › Agent › Providers. Then retry.'
+      : 'Your Claude Code authentication expired. Open a terminal, run `claude`, and sign in — Limboo reuses that login. Then retry.';
     action = { label: 'Re-check sign-in', onClick: retryAuth };
   } else if (lifecycle === 'reconnecting') {
     tone = 'warning';
     Icon = Loader2;
-    title = 'Reconnecting to Claude Code';
+    title = `Reconnecting to ${agentName}`;
     body = 'A transient issue interrupted the run. Limboo is restoring the connection and will resume automatically.';
   } else if (planReady) {
     tone = 'accent';
     Icon = ClipboardCheck;
     title = 'Plan ready for your review';
-    body = 'Claude Code proposed an implementation plan. Review it in the Tasks panel, then approve to begin — nothing changes until you do.';
+    body = `${agentName} proposed an implementation plan. Review it in the Tasks panel, then approve to begin — nothing changes until you do.`;
     action = { label: 'Review plan', onClick: () => runCommand('drawer.toggleTasks') };
   } else if (outcome === 'context-overflow') {
     tone = 'warning';

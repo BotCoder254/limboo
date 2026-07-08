@@ -4,10 +4,14 @@
  *
  * Each secret is one opaque file at `userData/secrets/<name>.bin.json` holding
  * `{ v, updatedAt, data }` where `data` is the base64 of
- * `safeStorage.encryptString(secret)`. Writes are atomic (tmp + rename, the
- * storage.ts idiom) but this module deliberately does NOT reuse storage.ts:
- * these files must never share code paths that could log payloads. SecretStore
- * logs secret *names* only — never values, never file contents.
+ * `safeStorage.encryptString(secret)`. Writes are atomic AND
+ * restrictive-from-birth: the tmp file is opened with `'wx'` + mode 0o600 so
+ * the permissions apply at open(2) — the bytes are never observable under
+ * looser permissions — then fsynced, closed, and renamed over the target
+ * (stale tmp files are removed first; O_TRUNC reuse would keep old modes).
+ * This module deliberately does NOT reuse storage.ts: these files must never
+ * share code paths that could log payloads. SecretStore logs secret *names*
+ * only — never values, never file contents.
  *
  * Decryption happens exclusively through {@link SecretStore.getDecrypted},
  * which callers may invoke only at child-process spawn / env-build time. The
@@ -62,8 +66,26 @@ export class SecretStore {
       data: safeStorage.encryptString(secret).toString('base64'),
     };
     const tmp = `${target}.tmp`;
-    fs.mkdirSync(this.dir(), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 });
+    fs.mkdirSync(this.dir(), { recursive: true, mode: 0o700 });
+    try {
+      // mkdir's mode is ignored when the dir already exists (and is subject
+      // to umask on creation) — re-assert 0o700. No-op on Windows ACLs.
+      fs.chmodSync(this.dir(), 0o700);
+    } catch {
+      // best-effort hardening; the write below still enforces 0o600 per file
+    }
+    // Never reuse a stale tmp from a crashed earlier write: reopening an
+    // existing file ignores `mode`, so its permissions would be whatever the
+    // crash left behind.
+    fs.rmSync(tmp, { force: true });
+    // 'wx' = exclusive create, so 0o600 applies atomically at open(2).
+    const fd = fs.openSync(tmp, 'wx', 0o600);
+    try {
+      fs.writeSync(fd, JSON.stringify(payload), null, 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, target);
     logger.info(`SecretStore: stored secret "${name}"`);
   }

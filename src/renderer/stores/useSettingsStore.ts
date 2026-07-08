@@ -8,7 +8,12 @@
  */
 import { create } from 'zustand';
 import type { AppSettings, DeepPartial } from '@shared/types';
-import { CHAT_FONTS, CHAT_FONT_FALLBACK, DEFAULT_SETTINGS } from '@shared/constants';
+import {
+  CHAT_FONTS,
+  CHAT_FONT_FALLBACK,
+  DEFAULT_SETTINGS,
+  registerCursorModels,
+} from '@shared/constants';
 import { useLayoutStore } from './useLayoutStore';
 
 interface SettingsState {
@@ -80,11 +85,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       useLayoutStore.getState().seed(settings.layout);
       layoutSeeded = true;
     }
+    // Persisted Cursor model ids feed this process's provider-routing registry
+    // before the first auth probe lands (boot-time pickers + providerForModel).
+    registerCursorModels(settings.agent.cursor.discoveredModels);
     set({ settings, hydrated: true });
 
     api.onChange((next) => {
       const merged = deepMergeLocal(DEFAULT_SETTINGS, next);
       applyAppearance(merged.appearance);
+      registerCursorModels(merged.agent.cursor.discoveredModels);
       set({ settings: merged });
     });
   },

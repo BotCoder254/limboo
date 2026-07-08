@@ -12,6 +12,12 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { AgentLifecycleStatus, CursorAuthStatus, RequestPhase } from '@shared/types';
+import { providerForModel } from '@shared/constants';
+
+/** The human name of the provider serving a model id (composer copy, banners). */
+export function agentDisplayName(model: string): string {
+  return providerForModel(model) === 'cursor' ? 'Cursor' : 'Claude Code';
+}
 
 export interface LifecycleMeta {
   /** Tailwind bg token for the status dot. */
@@ -97,6 +103,7 @@ export function phaseLabel(phase: RequestPhase, toolName?: string): string {
       case 'Write':
       case 'Edit':
       case 'MultiEdit':
+      case 'Delete':
         return 'Editing files…';
       default:
         return 'Using a tool…';

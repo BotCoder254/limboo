@@ -123,12 +123,30 @@ function migrate(database: Database.Database): void {
       ON agent_activity (session_id, created_at);
 
     -- Maps a Limboo session to its Claude Code SDK session id so multi-turn
-    -- conversations resume across prompts.
+    -- conversations resume across prompts. Superseded by
+    -- agent_provider_sessions (schema v12) — kept for backfill, no longer
+    -- written.
     CREATE TABLE IF NOT EXISTS agent_session_meta (
       session_id     TEXT PRIMARY KEY,
       sdk_session_id TEXT,
       updated_at     INTEGER NOT NULL
     );
+
+    -- Provider-keyed resume tokens (schema v12) — one row per (session,
+    -- provider) so a Limboo session can hold a Claude SDK session id and a
+    -- Cursor chat id side by side. The backfill below migrates legacy rows
+    -- once; INSERT OR IGNORE keeps it idempotent across boots.
+    CREATE TABLE IF NOT EXISTS agent_provider_sessions (
+      session_id          TEXT NOT NULL,
+      provider            TEXT NOT NULL,
+      provider_session_id TEXT,
+      updated_at          INTEGER NOT NULL,
+      PRIMARY KEY (session_id, provider)
+    );
+    INSERT OR IGNORE INTO agent_provider_sessions
+      (session_id, provider, provider_session_id, updated_at)
+      SELECT session_id, 'anthropic', sdk_session_id, updated_at
+        FROM agent_session_meta;
 
     -- Structured diagnostics console — the lifecycle / request / recovery /
     -- heartbeat timeline. session_id is nullable for capability-global events.

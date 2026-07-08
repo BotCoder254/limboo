@@ -6,10 +6,11 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { Brain, Check, ChevronDown, type LucideIcon } from 'lucide-react';
-import { AGENT_MODELS, providerForModel } from '@shared/constants';
+import { providerForModel } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { ProviderIcon } from '@/renderer/components/brand/ProviderIcon';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
+import { useAgentModels } from '@/renderer/features/agent/models';
 
 export interface Option<T extends string> {
   value: T;
@@ -111,6 +112,7 @@ export function MiniSelect<T extends string>({
 export function ComposerControls({ disabled = false }: { disabled?: boolean }) {
   const agent = useSettingsStore((s) => s.settings.agent);
   const update = useSettingsStore((s) => s.update);
+  const models = useAgentModels();
 
   return (
     <div className="flex min-w-0 items-center gap-0.5">
@@ -120,7 +122,7 @@ export function ComposerControls({ disabled = false }: { disabled?: boolean }) {
         triggerGlyph={
           <ProviderIcon provider={providerForModel(agent.model)} size={12} className="text-faint" />
         }
-        options={AGENT_MODELS.map((m) => ({
+        options={models.map((m) => ({
           value: m.value,
           label: m.label,
           glyph: <ProviderIcon provider={m.provider} size={13} className="text-muted" />,

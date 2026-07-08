@@ -65,7 +65,7 @@ export function AgentConsolePanel() {
           compact
           icon={TerminalSquare}
           title="No diagnostics yet"
-          description="Agent lifecycle, tool, recovery, and heartbeat events stream into this console as Claude Code works."
+          description="Agent lifecycle, tool, recovery, and heartbeat events stream into this console as the agent works."
         />
       ) : (
         <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">

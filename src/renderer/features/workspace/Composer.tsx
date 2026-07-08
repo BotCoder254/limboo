@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { ArrowUp, CircleStop, Mic, Paperclip, Sparkles, Volume2 } from 'lucide-react';
 import type { SessionPermissionMode } from '@shared/types';
+import { providerForModel } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { Spinner } from '@/renderer/components/ui';
 import { useSessionStore } from '@/renderer/stores/useSessionStore';
@@ -27,7 +28,7 @@ import { useUIStore } from '@/renderer/stores/useUIStore';
 import { useAttachmentStore, draftAttachments } from '@/renderer/stores/useAttachmentStore';
 import { useFileDragActive } from '@/renderer/hooks/usePreventFileDrop';
 import { useTypewriter } from '@/renderer/hooks/useTypewriter';
-import { lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
+import { agentDisplayName, lifecycleMeta, phaseLabel } from '@/renderer/features/agent/status';
 import { RUNNING_PHASES } from '@/renderer/features/sessions/useSessionRunning';
 import { ComposerControls } from './ComposerControls';
 import { ComposerModeSwitch } from './ComposerModeSwitch';
@@ -44,7 +45,7 @@ const MAX_HEIGHT = 320;
 /** Rotating placeholder prompts (build mode) — a typewriter hint, like the
  *  Global Search input, that idles through example asks until the user types. */
 const COMPOSER_PLACEHOLDERS = [
-  'Ask Claude Code to build something…',
+  'Ask the agent to build something…',
   'Describe a feature to implement…',
   'Paste an error and ask for a fix…',
   'Refactor a file, add a test, wire an API…',
@@ -54,7 +55,7 @@ const COMPOSER_PLACEHOLDERS = [
 
 /** Plan-mode variants — the run stays read-only and produces a plan first. */
 const PLAN_PLACEHOLDERS = [
-  'Describe what to build — Claude Code plans it first (read-only)…',
+  'Describe what to build — the agent plans it first (read-only)…',
   'Outline a refactor to review before it runs…',
   'Scope a feature — get a step-by-step plan…',
   'Ask for a plan before any files change…',
@@ -101,18 +102,25 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
 
   const busy = !!phase && RUNNING_PHASES.has(phase);
   const restricted = lifecycle === 'rate-limited' || lifecycle === 'auth-required';
-  const blocked = disabled || !installed || busy || restricted;
+  // Provider-aware connectivity: `install` is the Claude credential probe; a
+  // Cursor-model session gates on the lifecycle instead (main reconciles it
+  // from the Cursor auth classification — not-installed / auth-required).
+  const model = useSettingsStore((s) => s.settings.agent.model);
+  const agentName = agentDisplayName(model);
+  const connected =
+    providerForModel(model) === 'cursor' ? lifecycle !== 'not-installed' : installed;
+  const blocked = disabled || !connected || busy || restricted;
 
   // Rotating typewriter placeholder — only in the normal "ready to type" state;
   // the special-state hints (not installed / restricted / disabled) stay static.
   // Pauses the moment the user starts typing (like the Global Search input).
-  const normalPlaceholderState = installed && !disabled && !restricted;
+  const normalPlaceholderState = connected && !disabled && !restricted;
   const typedPlaceholder = useTypewriter(mode === 'plan' ? PLAN_PLACEHOLDERS : COMPOSER_PLACEHOLDERS, {
     paused: !normalPlaceholderState || value.length > 0,
   });
   const placeholder = normalPlaceholderState
     ? typedPlaceholder
-    : composerPlaceholder(disabled, installed, restricted, mode);
+    : composerPlaceholder(disabled, connected, restricted, mode, agentName);
 
   // Attachments — ChatGPT-style file chips above the input. Drafts belong to
   // the SESSION (main-process Attachment Manager), so they survive reloads and
@@ -362,8 +370,9 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
                 </button>
               )}
               <StatusHint
-                installed={installed}
+                installed={connected}
                 installError={installError}
+                agentName={agentName}
                 busy={busy}
                 lifecycle={lifecycle}
                 phase={phase}
@@ -379,20 +388,22 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
 
 function composerPlaceholder(
   disabled: boolean,
-  installed: boolean,
+  connected: boolean,
   restricted: boolean,
   mode: SessionPermissionMode,
+  agentName: string,
 ): string {
-  if (!installed) return 'Sign in to Claude Code to start…';
+  if (!connected) return `Sign in to ${agentName} to start…`;
   if (restricted) return 'Drafting is fine — sending resumes shortly…';
   if (disabled) return 'Select or create a session to begin…';
-  if (mode === 'plan') return 'Describe what to build — Claude Code will plan it first (read-only)…';
-  return 'Ask Claude Code to build something…';
+  if (mode === 'plan') return `Describe what to build — ${agentName} will plan it first (read-only)…`;
+  return `Ask ${agentName} to build something…`;
 }
 
 function StatusHint({
   installed,
   installError,
+  agentName,
   busy,
   lifecycle,
   phase,
@@ -400,6 +411,7 @@ function StatusHint({
 }: {
   installed: boolean;
   installError?: string;
+  agentName: string;
   busy: boolean;
   lifecycle: ReturnType<typeof useAgentStore.getState>['lifecycle'];
   /** This session's own phase (per-session — see the `phase` selector above). */
@@ -427,7 +439,7 @@ function StatusHint({
   if (lifecycle === 'ready') {
     return (
       <span className="flex items-center gap-1 text-faint">
-        <Sparkles size={11} /> Claude Code ready
+        <Sparkles size={11} /> {agentName} ready
       </span>
     );
   }

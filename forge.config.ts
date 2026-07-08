@@ -17,8 +17,13 @@ const config: ForgeConfig = {
     // sibling onnxruntime DLLs/dylibs/sos must be REAL files for the OS dynamic
     // loader — the voice utilityProcess also puts that directory on the library
     // search path (PATH / LD_LIBRARY_PATH / DYLD_LIBRARY_PATH) before forking.
+    //
+    // The Cursor bridge scripts (.vite/build/*.cjs — hook runner + stdio MCP
+    // bridge) are spawned by cursor-agent as separate processes, so they must
+    // also be real on-disk files, never asar-internal paths.
     asar: {
-      unpack: '{**/node_modules/@anthropic-ai/**,**/node_modules/sherpa-onnx-*/**}',
+      unpack:
+        '{**/node_modules/@anthropic-ai/**,**/node_modules/sherpa-onnx-*/**,**/.vite/build/*.cjs}',
     },
     name: 'Limboo',
     icon: 'assets/icon',

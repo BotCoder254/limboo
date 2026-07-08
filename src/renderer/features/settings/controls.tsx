@@ -280,6 +280,33 @@ export function TextInput({
 }
 
 /**
+ * Masked input for secrets (API keys). Controlled + explicit-commit: the value
+ * lives only in the caller's transient state and is saved by a sibling button,
+ * never on blur — pair with an {@link ActionButton}. Never autofills.
+ */
+export function SecretInput({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <input
+      type="password"
+      value={value}
+      placeholder={placeholder}
+      autoComplete="off"
+      spellCheck={false}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-64 rounded-md border border-line bg-surface-2 px-2 py-1 text-[12px] text-fg placeholder:text-faint focus:border-line-strong focus:outline-none"
+    />
+  );
+}
+
+/**
  * Raw-JSON editor for advanced settings. Renders the supplied object as formatted
  * JSON in a monospace textarea, validates on every keystroke (inline error), and
  * commits the parsed object via `onSave`. Saving always routes through the

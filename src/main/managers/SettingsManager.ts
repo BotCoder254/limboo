@@ -12,6 +12,8 @@ import {
   AGENT_LIMITS,
   ATTACHMENT_LIMITS,
   CHAT_FONTS,
+  CURSOR_LIMITS,
+  CURSOR_MODEL_ID_RE,
   DEFAULT_SETTINGS,
   FONT_SCALE_LIMITS,
   GIT_LIMITS,
@@ -129,13 +131,27 @@ export class SettingsManager {
     );
     c.idleTimeout = clamp(c.idleTimeout, L.idleTimeout.min, L.idleTimeout.max);
 
-    // Cursor provider (auth only) — whitelist the auth-path enum and coerce the
-    // manual-login toggle. No secrets here: the API key lives in the SecretStore.
+    // Cursor provider — whitelist the enums, coerce the toggle, cap the
+    // executable-path override, and re-validate the persisted discovered-model
+    // ids (a hand-edited settings.json must never smuggle junk into provider
+    // routing or argv). No secrets here: the API key lives in the SecretStore.
     const cursor = merged.agent.cursor;
     if (!['auto', 'api-key', 'cli-login'].includes(cursor.preferredAuth)) {
       cursor.preferredAuth = 'auto';
     }
     cursor.manualBrowserLogin = !!cursor.manualBrowserLogin;
+    if (!['auto', 'enabled', 'disabled'].includes(cursor.sandbox)) {
+      cursor.sandbox = 'auto';
+    }
+    if (!['auto', 'off'].includes(cursor.hooks)) {
+      cursor.hooks = 'auto';
+    }
+    cursor.executablePath = String(cursor.executablePath ?? '')
+      .trim()
+      .slice(0, CURSOR_LIMITS.execPathMax);
+    cursor.discoveredModels = (Array.isArray(cursor.discoveredModels) ? cursor.discoveredModels : [])
+      .filter((id): id is string => typeof id === 'string' && CURSOR_MODEL_ID_RE.test(id))
+      .slice(0, CURSOR_LIMITS.modelsMax);
 
     merged.git.maxCheckpoints = Math.round(
       clamp(merged.git.maxCheckpoints, GIT_LIMITS.maxCheckpoints.min, GIT_LIMITS.maxCheckpoints.max),

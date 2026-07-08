@@ -206,6 +206,29 @@ export interface AppSettings {
       preferredAuth: 'auto' | 'api-key' | 'cli-login';
       /** Print the login URL instead of auto-opening a browser (NO_OPEN_BROWSER). */
       manualBrowserLogin: boolean;
+      /**
+       * Explicit `cursor-agent` executable path. When set it is the ONLY
+       * candidate (fail-closed — no PATH fallback); blank = probe PATH +
+       * default install dirs. Validated in the main process (absolute,
+       * exists, is a file).
+       */
+      executablePath: string;
+      /** `--sandbox` flag for runs: auto = omit (CLI default). */
+      sandbox: 'auto' | 'enabled' | 'disabled';
+      /**
+       * Session hooks bridge (interactive per-tool prompts). `auto` writes a
+       * session-scoped hooks.json per run (capability-gated — only ever
+       * tightens); `off` skips it. The deny-first cli.json posture applies
+       * either way.
+       */
+      hooks: 'auto' | 'off';
+      /**
+       * Model ids discovered via `cursor-agent models`, persisted so provider
+       * routing survives a restart before the first probe. Charset-validated
+       * and capped in the main process; never trusted for anything but
+       * routing/picker display.
+       */
+      discoveredModels: string[];
     };
   };
   /**
@@ -1699,6 +1722,12 @@ export interface AgentState {
   rateLimit?: RateLimitInfo;
   /** Last capability-level error (NOT a request-level failure). */
   error?: string;
+  /**
+   * Last Cursor run's bridge capability probe: did the session hooks / the
+   * limboo MCP servers actually connect over the per-run pipe? `null` =
+   * the layer wasn't registered for that run; absent = no Cursor run yet.
+   */
+  cursorBridge?: { hooksActive: boolean | null; mcpActive: boolean | null; at: number };
   /** Heartbeat bookkeeping for the UI ("last checked 3s ago"). */
   heartbeat: {
     lastOkAt: number | null;
@@ -1765,6 +1794,28 @@ export interface CursorAuthState {
   lastCheckedAt?: number;
   /** Human-readable diagnostic from the last probe (already redacted). */
   error?: string;
+  /**
+   * How the CLI was resolved (local paths only, no secrets) — feeds the
+   * Settings › Agent › Troubleshooting section. `node` = the native Windows
+   * layout spawned directly as node.exe + index.js.
+   */
+  exec?: {
+    path: string;
+    kind: 'exe' | 'cmd' | 'node';
+    source?: 'override' | 'path' | 'where' | 'install-dir';
+  };
+  /**
+   * Model ids from `cursor-agent models` (charset-validated, deduped,
+   * capped). Absent until the first authenticated probe fetches them.
+   */
+  models?: string[];
+}
+
+/** Outcome of a `cursor-agent update` self-update run. */
+export interface CursorUpdateResult {
+  ok: boolean;
+  /** Short redacted summary (version line or failure reason). */
+  message: string;
 }
 
 /** Severity for a diagnostics console line. */

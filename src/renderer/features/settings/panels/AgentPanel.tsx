@@ -5,21 +5,24 @@
  * that shape how the agent is driven: model, thinking, permissions, web search,
  * turn budget, and the connection-monitoring / reliability controls.
  */
-import { AGENT_CONNECTION_LIMITS, AGENT_LIMITS, AGENT_MODELS } from '@shared/constants';
+import { AGENT_CONNECTION_LIMITS, AGENT_LIMITS } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { ProviderIcon } from '@/renderer/components/brand/ProviderIcon';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { lifecycleMeta } from '@/renderer/features/agent/status';
+import { useAgentModels } from '@/renderer/features/agent/models';
 import { Field, Section, Select, SegmentedControl, StackedField, Toggle } from '../controls';
 import { ProviderStatusRow } from './ProviderCard';
 import { CursorProviderCard } from './CursorProviderCard';
+import { AgentTroubleshooting } from './AgentTroubleshooting';
 
 export function AgentPanel() {
   const agent = useSettingsStore((s) => s.settings.agent);
   const update = useSettingsStore((s) => s.update);
   const lifecycle = useAgentStore((s) => s.lifecycle);
   const install = useAgentStore((s) => s.install);
+  const models = useAgentModels();
 
   const meta = lifecycleMeta(lifecycle, install.installed);
   const set = <K extends keyof typeof agent>(key: K, value: (typeof agent)[K]) =>
@@ -49,9 +52,9 @@ export function AgentPanel() {
       </Section>
 
       <Section title="Model & thinking">
-        <StackedField id="model" label="Model" hint="Which Claude model the agent runs. Default Sonnet 4.6.">
+        <StackedField id="model" label="Model" hint="Which model the agent runs — the provider follows the model. Default Sonnet 4.6.">
           <div className="flex flex-wrap gap-1.5">
-            {AGENT_MODELS.map((m) => {
+            {models.map((m) => {
               const active = agent.model === m.value;
               return (
                 <button
@@ -269,6 +272,8 @@ export function AgentPanel() {
           />
         </Field>
       </Section>
+
+      <AgentTroubleshooting />
     </div>
   );
 }

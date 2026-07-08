@@ -664,25 +664,66 @@ boot revalidation chains after `worktrees.recover().finally(retarget)`).
 
 ### Agent Adapter Architecture (multi-agent: Claude + Cursor) — IN PROGRESS
 
-**Build-order item (1), Authentication, is BUILT; the rest is planned.** Limboo
-is evolving from "a Claude integration" into a
+**Build-order items (1) Authentication, (2) Runtime, (3) Permissions,
+(4) Context injection, (5) MCP reuse, and (6) Worktrees are ALL BUILT; Cloud
+Agents / ACP remain planned.** Limboo is evolving from "a Claude integration" into a
 multi-agent orchestration platform via an **Agent Adapter Architecture**: a thin
 translation layer per agent runtime, with **nothing above the adapters changing**.
 The UI never knows which agent is running — it only knows "the current session has
 an active coding agent". Full research/design doc:
 [`docs/agents/cursor-integration.txt`](docs/agents/cursor-integration.txt).
 
-- **The seam is already narrow.** Claude coupling is concentrated in
+- **The seam is narrow and now dual-use.** Claude coupling is concentrated in
   `AgentManager.ts`; the `AgentEvent`/`AgentState`/`PermissionRequest` types, all
   agent IPC channels, the preload namespace, `useAgentStore`, and the
   Composer/permission/plan/timeline UI are provider-neutral and stay frozen. The
-  planned `AgentAdapter` interface covers exactly: executable/auth detection
+  adapter seam covers exactly: executable/auth detection
   (`probeHealth`), run invocation (`run(spec) → AsyncIterable<AdapterEvent>`),
   per-provider options mapping (`buildOptions`), wire-format → `AgentEvent`
   translation (`handleMessage`), tool-identity/permission gating (`makeCanUseTool`
   tool-name sets, plan-capture style), resume-token get/set
-  (`agent_session_meta`), error classification (`classifyAgentError`), and
+  (`agent_provider_sessions`), error classification (`classifyAgentError`), and
   utility one-shots (`buildUtilityOptions`).
+- **BUILT — build-order item (2), Runtime (CLI print mode, safe posture).**
+  Cursor is a selectable running agent: picking a Composer model in the model
+  picker routes runs through the print-mode runtime (the provider follows the
+  model — `providerForModel()`).
+  - `src/main/managers/cursor/CursorRuntime.ts` — spawns `cursor-agent --print
+    --output-format stream-json --stream-partial-output --workspace <sessionRoot>`
+    (argv-only; prompt rides **stdin**, never argv; env composed at spawn time
+    from `getSpawnEnv()`); `--trust` only via the injected repo-trust resolver
+    (limboo.json absent or ack-hash acked); never Cursor's `-w`. Stop =
+    process-tree kill (win32 `taskkill /T /F`, posix TERM→KILL) off the same
+    AbortController; `dispose()` on quit. Runtime refuses `.cmd` shims
+    (`CursorShimError` in `exec.ts` — the ComSpec whitelist stays literal-only).
+  - `stream.ts` (bounded NDJSON reader, oversized lines dropped), `translate.ts`
+    (delta/buffered/final-flush disambiguation via `timestamp_ms`/`model_call_id`;
+    Cursor tool-union keys → Claude-shaped tool names/inputs so chips, risk,
+    auto-checkpoints, terminal mirroring, and `phaseLabel` work unmodified),
+    `errors.ts` (`classifyCursorError` + `isCursorResumeCorruption` self-heal),
+    `permissions.ts` (deny-first session `.cursor/cli.json`, snapshot+restore
+    in `finally`), `types.ts` (`ProviderRunBridge` — the third-provider seam).
+  - **Safe posture**: plan mode → `--mode plan`, plan captured from the terminal
+    result text (Cursor has no ExitPlanMode) into the existing plan pipeline;
+    `default`/`acceptEdits` runs are **propose-only** (no `--force`) — proposed
+    mutations surface as a plan artifact and **Approve** re-runs `--force
+    --resume <chatId>` behind the deny-first cli.json; `acceptEdits` +
+    `settings.agent.permissionMode === 'auto'` forces directly. Interactive
+    per-tool prompts are build item (3).
+  - Resume tokens are provider-keyed in `agent_provider_sessions` (schema v12,
+    backfilled from `agent_session_meta`); the chat id is **pre-bound** on a
+    session's first Cursor run via `cursor-agent create-chat`
+    (`CursorRuntime.createChat()`, best-effort — the id is minted and stored
+    BEFORE the prompt is sent, then passed as `--resume`; on failure the
+    `system/init` harvest keeps working unchanged), and replayed as `--resume`
+    on later runs. Memory/search/resume context +
+    the attachment manifest ride the prompt in a `<context>` block (rules-file
+    injection is build item 4); image vision blocks are Claude-only.
+  - Lifecycle: when the active model is a Cursor model, send-gating and
+    `probeHealth` reconcile from `CursorAuthManager.getCachedState()`/`onChange`
+    (not-installed / auth-required), while `AgentState.install` stays Claude's
+    truth for the Providers card. Composer copy is provider-aware via
+    `agentDisplayName()` (`features/agent/status.ts`).
 - **BUILT — build-order item (1), Authentication.** The Cursor auth layer is
   live (auth only — Cursor still cannot *run*; `AGENT_MODELS` deliberately has
   no Cursor entries, so it is structurally unselectable as the running agent):
@@ -702,7 +743,20 @@ an active coding agent". Full research/design doc:
     PATH probe + Windows `where.exe` fallback + `~/.local/bin/{cursor-agent,agent}`
     install-dir probe (plain `agent` is never PATH-searched — collision risk);
     `.cmd` shims run via `%ComSpec%` only with static-whitelisted literal args;
-    bounded output; `redactCursor()`.
+    bounded output; `redactCursor()`. **Native-Windows layout** (the official
+    installer ships NO exe — only `.cmd`/`.ps1` shims over
+    `versions\<YYYY.MM.DD[-HH-MM-SS]-<hash>>\{node.exe,index.js}` under
+    `%LOCALAPPDATA%\cursor-agent`, and edits only the REGISTRY user PATH, which
+    an already-running GUI process never sees): the resolver upgrades shim hits
+    and probes `%LOCALAPPDATA%\cursor-agent` directly, yielding executable
+    kind `node` — spawn `node.exe [index.js, ...args]`, argv-only, no ComSpec,
+    runtime-safe (`CursorShimError` fires only for genuine cmd-only
+    resolutions). Version dirs are regex-gated + realpath-contained under the
+    base. The `executablePath` override also accepts the install directory or
+    a shim (resolved to the node layout; still fail-closed). Resolution
+    diagnostics ride `CursorAuthState.exec` into the Settings › Agent
+    **Troubleshooting** section (`AgentTroubleshooting.tsx`: live detection
+    detail, refresh/copy-diagnostics actions, common fixes).
   - `src/main/secrets/SecretStore.ts` — the safeStorage secret store (§6).
   - IPC: 7 `agent:cursor*` channels (`src/main/ipc/cursorHandlers.ts`, all via
     `handle()`; key validated + never echoed), preload `agent.cursor.*`
@@ -718,29 +772,89 @@ an active coding agent". Full research/design doc:
     `SETTINGS_VERSION` 13, bounds in `CURSOR_LIMITS`. The
     **Connection & reliability** section (`agent.connection`) is provider-neutral
     and shared by every provider.
-- **Cursor adapter, remaining build order:** (1) ~~Authentication~~ (BUILT,
-  above). (2) **Runtime** —
-  `@cursor/sdk` local runtime preferred (typed errors, `run.stream()`/`onDelta`,
-  `Agent.resume`, store under `userData`; native `@cursor/sdk-<os>-<arch>`
-  binaries need the same asar-unpack treatment as the Claude SDK executable);
-  fallback: spawn `cursor-agent --print --output-format stream-json
-  --stream-partial-output` and translate the NDJSON events. (3) **Permissions** —
-  translate Limboo's posture into a session-scoped `.cursor/cli.json`
-  (deny-first) + hooks (`preToolUse`/`beforeShellExecution`/`beforeReadFile`,
-  `failClosed`) bridged over a named pipe into the existing `PermissionRequest`
-  flow; `--force` only for the `auto` posture; Cursor sandbox on by default.
-  (4) **Context injection** — memory/search/resume blocks land via a generated
-  session-scoped rules file (Cursor auto-loads `AGENTS.md`/`CLAUDE.md`; no
-  system-prompt preset-append exists). (5) **MCP reuse** — expose
-  `limboo_memory`/`limboo_search` to Cursor (stdio bridge or SDK `customTools`)
-  so both agents share the same platform services. (6) **Worktrees** — always
-  pass `--workspace <resolveSessionRoot(...)>`, never Cursor's `-w` (Limboo's
+- **BUILT — build-order items (3) Permissions, (4) Context injection, (5) MCP
+  reuse.** All three ride a shared **per-run bridge**: `bridge/pipeServer.ts`
+  opens one token-authenticated local pipe per run (`\\.\pipe\limboo-bridge-*`
+  win32 / 0700-dir unix socket; pipe+token ride the child ENV only, never
+  argv; bounded lines/connections/timeouts; closed in the run's `finally`),
+  and every generated session file (`cli.json`, `hooks.json`, `mcp.json`, the
+  context rule) goes through `sessionFile.ts` `withSessionFile` —
+  containment-checked, atomic, restored byte-for-byte (or removed, plus any
+  dirs we created) in `finally`, so `git status` is clean after every run.
+  - **(3) Permissions** — two layers. *Declarative (the enforced baseline)*:
+    the deny-first `.cursor/cli.json` now wraps **every** run (not just
+    `--force`), with `sessionAllowRules()` translating the standing posture
+    (`Read(**)` under autoApproveReads, `Mcp(limboo_*:*)`) and extra
+    self-denies for `hooks.json`/`mcp.json`. *Interactive (capability-gated)*:
+    a session `hooks.json` (`cursor/hooks.ts` — **replaces**, never merges, a
+    repo-authored one: repo hooks are arbitrary commands outside the
+    limboo.json ack gate) registers the bundled `bridge/hookRunner.cjs`
+    (self-contained CJS, fail-closed: deny + exit 2 on any bridge failure,
+    plus `failClosed: true`) for `preToolUse`/`beforeShellExecution`/
+    `beforeReadFile`/`afterFileEdit`; payloads map via
+    `translate.ts mapHookEvent` into `AgentManager.decideToolUse` — the
+    decision core **extracted from `makeCanUseTool`**, so Claude's callback
+    and Cursor's hooks share one implementation (risk sets, app-data +
+    workspace path guards, plan read-only, auto-approvals, remembered
+    choices, the same PermissionRequest dialog). Duplicate concurrent hook
+    events share one decision. **Hooks only ever tighten** — official docs
+    document hooks for IDE/cloud, not the CLI, so `--force` gating is
+    unchanged and whether hooks actually connected is recorded per run
+    (`AgentState.cursorBridge` → Settings › Agent › Troubleshooting).
+    Toggle: `agent.cursor.hooks` (`auto`/`off`).
+  - **(4) Context injection** — the memory/search/resume blocks move off the
+    prompt into a per-run generated rule
+    `.cursor/rules/limboo-context.mdc` (`cursor/rules.ts`, MDC frontmatter
+    `alwaysApply: true`; the CLI auto-loads `.cursor/rules` + `CLAUDE.md`),
+    deleted/restored after the run; prompt prepending stays as the automatic
+    fallback when the rule write fails pre-spawn. The attachment manifest
+    stays on the prompt (per-turn, not standing context).
+  - **(5) MCP reuse** — a session `.cursor/mcp.json` (`cursor/mcpConfig.ts`,
+    merged defensively — repo-authored servers preserved, never overwritten)
+    points `limboo_memory`/`limboo_search` at the bundled
+    `bridge/mcpBridge.cjs` (hand-rolled MCP stdio JSON-RPC; Electron-as-node
+    via `ELECTRON_RUN_AS_NODE`), which forwards `tools/list`/`tools/call`
+    over the pipe to `bridge/toolDispatch.ts`. The tool handlers were
+    factored into transport-neutral **plain tools**
+    (`searchPlainTools`/`memoryPlainTools` in `searchTools.ts`/
+    `memoryTools.ts`) consumed by BOTH the SDK in-process servers (Claude)
+    and the dispatcher (Cursor) — both agents query the same memory and the
+    same index; better-sqlite3 stays in one process. `--approve-mcps` is
+    passed only after a memoized `cursor-agent --help` probe confirms the
+    flag (`supportsApproveMcps()` in `exec.ts`).
+  - The two `.cjs` scripts are copied beside `main.js` by
+    `vite.main.config.ts` (`copy-cursor-bridge-scripts`) and asar-unpacked
+    (`forge.config.ts`), resolved at runtime by `bridge/bridgeAssets.ts`.
+    `SETTINGS_VERSION` 15; new bounds in `CURSOR_LIMITS` (`bridge*`,
+    `hookTimeoutSecs`).
+- **(6) ~~Worktrees~~** (BUILT — runs always pass
+  `--workspace <resolveSessionRoot(...)>`, never Cursor's `-w`; Limboo's
   WorktreeManager stays the single root resolver).
-- **Config surface (remaining):** `AgentProvider` is already widened and the
-  Cursor glyph exists; still to do when the runtime lands — add Cursor entries
-  to `AGENT_MODELS`/`providerForModel()` (the deliberate "unselectable" guard),
-  a provider selector for the running agent, and de-Claude the copy in
-  Composer/Plan strings.
+- **Config surface (BUILT):** `AGENT_MODELS` carries `composer-2`/`composer-2.5`
+  (`provider: 'cursor'`) — the model picker IS the provider selector; the
+  Composer/Plan/banner copy is provider-aware or neutral. On top of the static
+  catalog: **dynamic model discovery** (`cursor-agent models` on authenticated
+  probes — defensively parsed against `CURSOR_MODEL_ID_RE`, TTL-cached,
+  broadcast on `CursorAuthState.models`, persisted in
+  `agent.cursor.discoveredModels`, and registered into the shared
+  `registerCursorModels()` routing registry in both processes so
+  `providerForModel()` and both pickers — `useAgentModels()` in
+  `features/agent/models.ts` — survive a restart pre-probe; static ids always
+  win); an **`agent.cursor.executablePath` override** (fail-closed: when set
+  it is the ONLY candidate — absolute + exists + is-file validated in
+  `exec.ts`, `.cmd` shims still refused for runs, probe problems surfaced via
+  the auth state's error line; `configureCursorExec()` wired at boot + on
+  settings change in `index.ts`); an **`agent.cursor.sandbox` toggle**
+  (`auto`/`enabled`/`disabled` → a literal-whitelisted `--sandbox` argv flag);
+  and **CLI self-update** (`agent:cursorUpdateCli` → single-flight
+  `cursor-agent update`, refused while any run/login is live via
+  `AgentManager.hasActiveRuns()`, re-resolve + re-probe after). Argv
+  hardening: the model id (charset + membership in static ∪ discovered) and
+  the stored `--resume` chat id (`CURSOR_RESUME_ID_RE`; invalid rows dropped +
+  forgotten) are validated in `runCursorOnce` with backstop asserts in
+  `buildArgv`. Cursor URLs live in shared `CURSOR_URLS`; `SecretInput` in
+  `settings/controls.tsx` replaces the card's hand-rolled password inputs.
+  `SETTINGS_VERSION` 14; bounds in `CURSOR_LIMITS`.
 - **Later:** Cursor Cloud Agents (SSE-streamed remote runs; SSRF-allowlisted
   fetch per §6) and an **ACP adapter** (`agent acp`, JSON-RPC over stdio) as the
   universal route to any ACP-speaking agent.

@@ -85,8 +85,8 @@ export const IpcChannels = {
   agentClearRateLimit: 'agent:clearRateLimit',
   agentRetryAuth: 'agent:retryAuth',
 
-  // Cursor provider — authentication only (no run capability yet). The API
-  // key crosses exactly once (set) and is never returned by any channel.
+  // Cursor provider — auth + CLI maintenance. The API key crosses exactly
+  // once (set) and is never returned by any channel.
   agentCursorGetAuthState: 'agent:cursorGetAuthState',
   agentCursorRefreshAuth: 'agent:cursorRefreshAuth',
   agentCursorLoginStart: 'agent:cursorLoginStart',
@@ -94,6 +94,7 @@ export const IpcChannels = {
   agentCursorLogout: 'agent:cursorLogout',
   agentCursorSetApiKey: 'agent:cursorSetApiKey',
   agentCursorRemoveApiKey: 'agent:cursorRemoveApiKey',
+  agentCursorUpdateCli: 'agent:cursorUpdateCli',
 
   // Plan Mode — review-first workflow over the coding agent.
   agentGetPlan: 'agent:getPlan',

@@ -34,6 +34,9 @@ import { VoiceModelManager } from './managers/voice/VoiceModelManager';
 import { AttachmentManager } from './managers/attachments/AttachmentManager';
 import { SecretStore } from './secrets/SecretStore';
 import { CursorAuthManager } from './managers/cursor/CursorAuthManager';
+import { CursorRuntime } from './managers/cursor/CursorRuntime';
+import { configureCursorExec } from './managers/cursor/exec';
+import { registerCursorModels } from '@shared/constants';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -95,6 +98,7 @@ function bootstrap(): void {
   let voiceModels: VoiceModelManager;
   let voice: VoiceManager;
   let cursorAuth: CursorAuthManager;
+  let cursorRuntime: CursorRuntime;
   let memorySweepTimer: ReturnType<typeof setInterval> | undefined;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
@@ -117,10 +121,12 @@ function bootstrap(): void {
     workspace = new WorkspaceManager();
     sessions = new SessionManager();
     agent = new AgentManager(workspace, settings, notifications);
-    // Cursor provider — authentication only (Agent Adapter Architecture Phase 1).
-    // API keys live safeStorage-encrypted in the SecretStore; probing is lazy
-    // and classifies per the user's `agent.cursor.preferredAuth` setting.
+    // Cursor provider (Agent Adapter Architecture). Auth: API keys live
+    // safeStorage-encrypted in the SecretStore; probing is lazy and classifies
+    // per the user's `agent.cursor.preferredAuth` setting. Runtime: print-mode
+    // child processes whose env is composed at spawn time from the auth layer.
     cursorAuth = new CursorAuthManager(new SecretStore(), settings);
+    cursorRuntime = new CursorRuntime(cursorAuth);
     fileSystem = new FileSystemManager(workspace);
     terminal = new TerminalManager(workspace, settings);
     git = new GitManager(workspace, settings);
@@ -200,6 +206,26 @@ function bootstrap(): void {
     // checkout through the WorktreeManager (agent cwd, terminal cwd, git root,
     // search scope). The resolvers are cheap, synchronous DB lookups.
     agent.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
+    // Cursor runs: the runtime + auth gate, plus the repo-trust resolver that
+    // decides `--trust` — trusted when the repo has no limboo.json (nothing
+    // repo-authored to distrust) or the user acked its hash (the existing
+    // HooksConfirmDialog gate). Never passed blindly.
+    agent.setCursorRuntime(cursorRuntime);
+    agent.setCursorAuth(cursorAuth);
+    agent.setRepoTrustResolver((sessionId) => {
+      const state = worktrees.getRepoConfigState(sessionId);
+      return !state.config || state.acked;
+    });
+    // Cursor executable override + persisted model routing, applied before
+    // agent.start() so the first probe/send already sees them. The settings
+    // listener re-probes when the user changes the override path.
+    configureCursorExec({ executablePath: settings.getAll().agent.cursor.executablePath });
+    registerCursorModels(settings.getAll().agent.cursor.discoveredModels);
+    settings.onChange((next) => {
+      if (configureCursorExec({ executablePath: next.agent.cursor.executablePath })) {
+        void cursorAuth.probe(true);
+      }
+    });
     terminal.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
     resume.setSessionRootResolver((sessionId) => worktrees.resolveSessionRoot(sessionId));
     git.setActiveRootResolver((workspaceId) => worktrees.resolveActiveRoot(workspaceId));
@@ -331,6 +357,7 @@ function bootstrap(): void {
 
   app.on('before-quit', () => {
     agent?.cleanup();
+    cursorRuntime?.dispose();
     cursorAuth?.dispose();
     void fileSystem?.dispose();
     proxy?.stop();

@@ -24,6 +24,7 @@ import type {
   ClarificationRequest,
   CommandId,
   CursorAuthState,
+  CursorUpdateResult,
   DeepPartial,
   FileHistoryEntry,
   FileReadResult,
@@ -308,6 +309,9 @@ const agentApi = {
     setApiKey: (key: string): Promise<void> =>
       ipcRenderer.invoke(IpcChannels.agentCursorSetApiKey, key),
     removeApiKey: (): Promise<void> => ipcRenderer.invoke(IpcChannels.agentCursorRemoveApiKey),
+    /** `cursor-agent update` (refused while an agent run is active). */
+    updateCli: (): Promise<CursorUpdateResult> =>
+      ipcRenderer.invoke(IpcChannels.agentCursorUpdateCli),
     onAuthChanged: (cb: (state: CursorAuthState) => void): (() => void) =>
       subscribe<CursorAuthState>(IpcEvents.agentCursorAuthChanged, cb),
   },

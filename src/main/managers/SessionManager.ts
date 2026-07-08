@@ -340,6 +340,7 @@ export class SessionManager {
       this.db.prepare('DELETE FROM agent_messages WHERE session_id = ?').run(id);
       this.db.prepare('DELETE FROM agent_activity WHERE session_id = ?').run(id);
       this.db.prepare('DELETE FROM agent_session_meta WHERE session_id = ?').run(id);
+      this.db.prepare('DELETE FROM agent_provider_sessions WHERE session_id = ?').run(id);
       this.db.prepare('DELETE FROM agent_diagnostics WHERE session_id = ?').run(id);
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
     });

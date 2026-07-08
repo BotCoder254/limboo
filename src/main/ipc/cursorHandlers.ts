@@ -1,15 +1,15 @@
 /**
- * IPC handlers for the Cursor provider's authentication (Phase 1 — no run
- * capability). Reached from the renderer through `window.limboo.agent.cursor.*`.
+ * IPC handlers for the Cursor provider's authentication + CLI maintenance.
+ * Reached from the renderer through `window.limboo.agent.cursor.*`.
  *
  * The surface is capability-based (CLAUDE.md §6): the API key crosses exactly
  * once (set), is validated + length-capped here, and is NEVER returned,
  * echoed into an error, or logged. Every other channel exchanges only the
- * secret-free {@link CursorAuthState}.
+ * secret-free {@link CursorAuthState} / {@link CursorUpdateResult}.
  */
 import { IpcChannels } from '@shared/ipc-channels';
 import { CURSOR_LIMITS } from '@shared/constants';
-import type { CursorAuthState } from '@shared/types';
+import type { CursorAuthState, CursorUpdateResult } from '@shared/types';
 import type { CursorAuthManager } from '../managers/cursor/CursorAuthManager';
 import { handle } from './registry';
 
@@ -30,7 +30,10 @@ function assertApiKey(value: unknown): string {
   return key;
 }
 
-export function registerCursorHandlers(cursor: CursorAuthManager): void {
+export function registerCursorHandlers(
+  cursor: CursorAuthManager,
+  hasActiveRun: () => boolean,
+): void {
   handle<[], CursorAuthState>(IpcChannels.agentCursorGetAuthState, () => cursor.getAuthState());
 
   handle<[], CursorAuthState>(IpcChannels.agentCursorRefreshAuth, () => cursor.probe(true));
@@ -48,4 +51,13 @@ export function registerCursorHandlers(cursor: CursorAuthManager): void {
   );
 
   handle<[], void>(IpcChannels.agentCursorRemoveApiKey, () => cursor.removeApiKey());
+
+  // Self-update swaps the executable on disk — refuse while any agent run is
+  // live so it is never yanked out from under a spawned child.
+  handle<[], CursorUpdateResult>(IpcChannels.agentCursorUpdateCli, () => {
+    if (hasActiveRun()) {
+      return { ok: false, message: 'Stop the active agent run before updating the Cursor CLI.' };
+    }
+    return cursor.updateCli();
+  });
 }
