@@ -297,8 +297,12 @@ export const RESUME_LIMITS = {
   maxDirtyFilesStored: 100,
   /** Approx character budget for the injected `<repository-delta>` block. */
   injectCharBudget: 4_000,
-  /** Whole-revalidation deadline; a miss degrades to "no delta". */
-  revalidateTimeoutMs: 10_000,
+  /**
+   * Whole-revalidation deadline; a miss degrades to "no delta". Enrichment
+   * yields cooperatively before this fires; the hard stop covers cold-cache
+   * git spawns on large repos (Windows first runs regularly exceeded 10s).
+   */
+  revalidateTimeoutMs: 30_000,
   /** Days before an untouched session skips revalidation (0 = always run). */
   staleThresholdDays: { min: 0, max: 365, default: 0 },
   /** Commit-subject length cap inside a delta. */

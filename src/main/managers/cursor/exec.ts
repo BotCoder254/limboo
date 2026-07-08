@@ -301,9 +301,17 @@ function resolveNodeLayout(baseDir: string): { node: string; entry: string } | n
   }
 }
 
-/** `YYYY.MM.DD…` → numeric YYYYMMDD for newest-first ordering (0 on junk). */
+/**
+ * `YYYY.MM.DD…` → numeric YYYYMMDD for newest-first ordering (0 on junk).
+ * Callers filter through {@link VERSION_DIR_RE} first, but this must never
+ * assume it: a malformed name (fewer than 3 dot parts → undefined.padStart
+ * TypeError) would be swallowed by resolveNodeLayout's catch and silently
+ * abort the whole layout resolution. Junk sorts to 0 instead of throwing.
+ */
 function versionKey(name: string): number {
-  const [y, m, d] = name.split('-')[0].split('.');
+  const parts = name.split('-')[0]?.split('.') ?? [];
+  if (parts.length < 3) return 0;
+  const [y, m, d] = parts;
   const key = Number(`${y}${m.padStart(2, '0')}${d.padStart(2, '0')}`);
   return Number.isFinite(key) ? key : 0;
 }
