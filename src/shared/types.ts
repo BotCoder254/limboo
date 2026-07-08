@@ -854,6 +854,8 @@ export interface RepoDeltaFile {
   path: string;
   status: 'added' | 'modified' | 'deleted' | 'renamed' | 'dirty';
   category: RepoDeltaFileCategory;
+  /** Pre-rename path for 'renamed' entries (the path at the snapshot HEAD). */
+  oldPath?: string;
 }
 
 /**
@@ -885,8 +887,8 @@ export interface RepoDelta {
   filesTotal: number;
   /** Dependency manifests / migrations that changed (flagged specially). */
   manifestChanges: string[];
-  /** Symbol-level adds/removes per changed file (Phase B enrichment). */
-  symbols?: { path: string; added: string[]; removed: string[] }[];
+  /** Symbol-level adds/removes/signature-changes per changed file (Phase B). */
+  symbols?: { path: string; added: string[]; removed: string[]; changed?: string[] }[];
   /** Importer counts for changed files (Phase B reference layer). */
   refImpacts?: { path: string; importers: number }[];
   /** Memories downgraded because their referents vanished (Phase C). */

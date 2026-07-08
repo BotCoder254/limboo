@@ -523,15 +523,17 @@ export class SearchManager {
   }
 
   /**
-   * The set of symbol identities (`kind:name`) currently indexed for a path.
-   * Used by the Resume Pipeline to compute per-file symbol adds/removes across
-   * a reindex. Bounded by the per-file symbol cap. All values bound.
+   * Whether a named symbol is currently indexed for a path. Used by the Resume
+   * Pipeline to revalidate symbol-linked memories right after a fresh reindex.
+   * All values bound.
    */
-  symbolIdentitiesForPath(workspaceId: string, relPath: string): Set<string> {
-    const rows = this.db
-      .prepare('SELECT name, kind FROM search_symbols WHERE workspace_id = ? AND path = ?')
-      .all(workspaceId, relPath) as { name: string; kind: string }[];
-    return new Set(rows.map((r) => `${r.kind}:${r.name}`));
+  symbolExists(workspaceId: string, relPath: string, name: string): boolean {
+    const row = this.db
+      .prepare(
+        'SELECT 1 AS one FROM search_symbols WHERE workspace_id = ? AND path = ? AND name = ? LIMIT 1',
+      )
+      .get(workspaceId, relPath, name) as { one: number } | undefined;
+    return row !== undefined;
   }
 
   /** How many indexed files import the given workspace-relative path. */

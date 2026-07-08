@@ -200,6 +200,8 @@ export async function computeRepoDelta(
             path: change.path,
             status: toDeltaStatus(change.status),
             category: categorizePath(change.path),
+            // Pre-rename path so enrichment can read the blob at the snapshot.
+            oldPath: change.oldPath,
           });
         }
       }
@@ -243,12 +245,18 @@ export function summarizeDelta(delta: RepoDelta): string {
   return parts.length > 0 ? parts.join(', ') : 'Repository changed';
 }
 
+/** Unfinished plan/task items appended to the injected block (one-shot, capped). */
+export interface PlanItemsContext {
+  title: string;
+  items: string[];
+}
+
 /**
  * Render the `<repository-delta>` system-prompt block within the char budget
  * (same trim-loop pattern as the memory/search context blocks). Advisory: the
  * agent's own Read/Grep/Glob remain authoritative.
  */
-export function renderDeltaBlock(delta: RepoDelta): string {
+export function renderDeltaBlock(delta: RepoDelta, planItems?: PlanItemsContext | null): string {
   const budget = RESUME_LIMITS.injectCharBudget;
   const lines: string[] = [
     '<repository-delta>',
@@ -306,11 +314,12 @@ export function renderDeltaBlock(delta: RepoDelta): string {
     );
   }
   if (delta.symbols && delta.symbols.length > 0) {
-    push('Symbol changes:');
+    push('Symbol changes (~ = signature changed):');
     for (const s of delta.symbols) {
       const added = s.added.length > 0 ? ` +${s.added.join(', +')}` : '';
       const removed = s.removed.length > 0 ? ` -${s.removed.join(', -')}` : '';
-      if (!push(`- ${s.path}:${added}${removed}`)) break;
+      const changed = s.changed && s.changed.length > 0 ? ` ~${s.changed.join(', ~')}` : '';
+      if (!push(`- ${s.path}:${added}${removed}${changed}`)) break;
     }
   }
   if (delta.refImpacts && delta.refImpacts.length > 0) {
@@ -328,6 +337,13 @@ export function renderDeltaBlock(delta: RepoDelta): string {
   }
   const dirtyCount = delta.files.filter((f) => f.status === 'dirty').length;
   if (dirtyCount > 0) push(`(uncommitted changes present: ${dirtyCount} files)`);
+
+  if (planItems && planItems.items.length > 0) {
+    push(`Unfinished plan items from "${planItems.title.slice(0, 80)}":`);
+    for (const item of planItems.items.slice(0, RESUME_LIMITS.maxPlanItemsInjected)) {
+      if (!push(`- [ ] ${item.slice(0, RESUME_LIMITS.planItemCharMax)}`)) break;
+    }
+  }
 
   out.push('</repository-delta>');
   return out.join('\n');

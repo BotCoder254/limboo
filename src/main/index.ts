@@ -181,6 +181,8 @@ function bootstrap(): void {
     resume.setStatusRecorder((sessionId, label, detail) =>
       agent.recordStatus(sessionId, label, detail),
     );
+    // The injected delta block carries the session's outstanding plan items.
+    resume.setPlanItemsProvider((sessionId) => agent.unfinishedPlanItems(sessionId));
     // The File System Layer pushes live git status (branch + diff) into sessions
     // and notifies the Git workspace whenever the working tree changes.
     fileSystem.setSessionManager(sessions);

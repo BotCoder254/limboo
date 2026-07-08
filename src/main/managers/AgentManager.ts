@@ -63,7 +63,7 @@ import type {
   TerminalCommandRecord,
   ToolRisk,
 } from '@shared/types';
-import { ACTIVITY_LIMITS, AGENT_LIMITS, GIT_LIMITS } from '@shared/constants';
+import { ACTIVITY_LIMITS, AGENT_LIMITS, GIT_LIMITS, RESUME_LIMITS } from '@shared/constants';
 import { IpcEvents } from '@shared/ipc-channels';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
@@ -1809,6 +1809,33 @@ export class AgentManager {
   /** Public accessor (IPC): the current plan artifact for a session, if any. */
   getPlan(sessionId: string): SessionPlan | null {
     return this.loadPlan(sessionId);
+  }
+
+  /**
+   * Unfinished work for the Resume Pipeline's context reconstruction: the live
+   * TodoWrite checklist when it has incomplete items, else the unchecked
+   * checkboxes of a persisted, not-yet-completed plan. Read-only and bounded;
+   * null when there is nothing outstanding.
+   */
+  unfinishedPlanItems(sessionId: string): { title: string; items: string[] } | null {
+    const cap = RESUME_LIMITS.maxPlanItemsInjected;
+    const plan = this.loadPlan(sessionId);
+    const live = (this.runtimes.get(sessionId)?.tasks ?? []).filter((t) => !t.done);
+    if (live.length > 0) {
+      return {
+        title: plan?.title ?? 'current task list',
+        items: live.slice(0, cap).map((t) => t.label),
+      };
+    }
+    if (!plan || (plan.status !== 'ready' && plan.status !== 'implementing')) return null;
+    const items: string[] = [];
+    for (const line of plan.markdown.split(/\r?\n/)) {
+      const m = /^\s*(?:[-*]|\d+\.)\s*\[ \]\s+(.+)$/.exec(line);
+      if (!m) continue;
+      items.push(m[1].trim());
+      if (items.length >= cap) break;
+    }
+    return items.length > 0 ? { title: plan.title, items } : null;
   }
 
   /** Open a fresh planning artifact when a plan run starts. */

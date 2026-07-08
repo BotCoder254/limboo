@@ -23,7 +23,7 @@ import { BrowserWindow } from 'electron';
 import type Database from 'better-sqlite3';
 import { IpcEvents } from '@shared/ipc-channels';
 import { FS_LIMITS, RESUME_LIMITS } from '@shared/constants';
-import type { RepoDelta, ResumeState, Session } from '@shared/types';
+import type { RepoDelta, RepoDeltaFile, ResumeState, Session } from '@shared/types';
 import { getDb } from '../../db/database';
 import { logger } from '../../logger';
 import type { SettingsManager } from '../SettingsManager';
@@ -31,12 +31,17 @@ import type { SessionManager } from '../SessionManager';
 import type { WorkspaceManager } from '../WorkspaceManager';
 import { gitText, runGit } from '../git/exec';
 import { isInsideRoot } from '../workspace/validate';
+import { readWorkspaceFile } from '../fs/reader';
+import { extractSymbols, type ExtractedSymbol } from '../search/symbols';
+import { langForPath } from '../search/query';
 import {
   computeRepoDelta,
+  isValidHead,
   parsePorcelainZ,
   renderDeltaBlock,
   summarizeDelta,
   type DirtyEntry,
+  type PlanItemsContext,
   type RepoAnchor,
 } from './delta';
 
@@ -67,13 +72,13 @@ interface DeltaRow {
  */
 interface SearchIndex {
   indexFiles(workspaceId: string, relPaths: string[]): Promise<void>;
-  symbolIdentitiesForPath(workspaceId: string, relPath: string): Set<string>;
+  symbolExists(workspaceId: string, relPath: string, name: string): boolean;
   importerCount(workspaceId: string, refPath: string): number;
 }
 
 /**
  * The subset of the Memory System the resume delta uses: downgrade memories
- * whose linked files vanished, restore them when the files return.
+ * whose linked files/symbols vanished, restore them when the referents return.
  */
 interface MemoryRevalidation {
   downgradeForMissingFiles(
@@ -81,6 +86,12 @@ interface MemoryRevalidation {
     paths: string[],
   ): { id: string; title: string }[];
   restoreForPresentFiles(workspaceId: string | null, paths: string[]): void;
+  listSymbolRefs(workspaceId: string | null): { memoryId: string; ref: string }[];
+  downgradeForMissingSymbols(
+    workspaceId: string | null,
+    refs: string[],
+  ): { id: string; title: string }[];
+  restoreForPresentSymbols(workspaceId: string | null, refs: string[]): void;
 }
 
 /** Files whose symbols/imports we bother to diff (skip generated noise). */
@@ -90,6 +101,16 @@ const INDEXABLE = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|scala|cs|c|cc|cp
 function nameOf(identity: string): string {
   const colon = identity.indexOf(':');
   return colon >= 0 ? identity.slice(colon + 1) : identity;
+}
+
+/** Symbols → `kind:name` → whitespace-normalized signature (first wins). */
+function symbolMap(list: ExtractedSymbol[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const s of list) {
+    const key = `${s.kind}:${s.name}`;
+    if (!map.has(key)) map.set(key, s.signature.replace(/\s+/g, ' ').trim());
+  }
+  return map;
 }
 
 export class ResumeManager {
@@ -136,6 +157,16 @@ export class ResumeManager {
 
   setMemoryManager(memory: MemoryRevalidation): void {
     this.memory = memory;
+  }
+
+  /**
+   * Unfinished plan/task provider (AgentManager), injected at boot so the
+   * injected delta block can carry the session's outstanding checklist.
+   */
+  private planItemsFor: ((sessionId: string) => PlanItemsContext | null) | null = null;
+
+  setPlanItemsProvider(provide: (sessionId: string) => PlanItemsContext | null): void {
+    this.planItemsFor = provide;
   }
 
   /* ---------------------------------------------------------------- state */
@@ -423,7 +454,7 @@ export class ResumeManager {
       return;
     }
 
-    await this.enrichDelta(session.workspaceId, delta);
+    await this.enrichDelta(session.workspaceId, root, snap.head, delta);
     await this.publishDelta(sessionId, delta);
     // Refresh the anchor so the delta is one-shot: the next activation
     // short-circuits clean while the pending row waits for the first prompt.
@@ -436,7 +467,12 @@ export class ResumeManager {
    * disabled search index leaves the delta unenriched. Bounded by the same
    * incremental cap the indexer uses, and only when search is enabled.
    */
-  private async enrichDelta(workspaceId: string, delta: RepoDelta): Promise<void> {
+  private async enrichDelta(
+    workspaceId: string,
+    root: string,
+    snapHead: string | null,
+    delta: RepoDelta,
+  ): Promise<void> {
     if (!this.search || !this.settings.getAll().search.enabled) return;
     if (delta.rootChanged) return; // no meaningful per-file diff across roots
     try {
@@ -445,12 +481,19 @@ export class ResumeManager {
         .map((f) => f.path);
       const deleted = delta.files.filter((f) => f.status === 'deleted').map((f) => f.path);
 
+      // Reindex the changed set first (bounded like the watcher's incremental
+      // pass) so importer counts and symbol-link checks see the current tree.
+      const canReindex = changed.length > 0 && changed.length <= FS_LIMITS.incrementalIndexMax;
+      if (canReindex) await this.search.indexFiles(workspaceId, changed);
+
       // Memory revalidation: linked-file memories whose file vanished get their
       // confidence downgraded; a file that reappeared restores its memories.
+      const downgraded = new Map<string, { id: string; title: string }>();
       if (this.memory) {
         if (deleted.length > 0) {
-          const downgraded = this.memory.downgradeForMissingFiles(workspaceId, deleted);
-          if (downgraded.length > 0) delta.downgradedMemories = downgraded.slice(0, 20);
+          for (const m of this.memory.downgradeForMissingFiles(workspaceId, deleted)) {
+            downgraded.set(m.id, m);
+          }
         }
         const present = delta.files
           .filter((f) => f.status === 'added' || f.status === 'modified')
@@ -469,25 +512,140 @@ export class ResumeManager {
         delta.refImpacts = refImpacts.slice(0, 20);
       }
 
-      // Symbol delta: capture BEFORE from the index, reindex, capture AFTER.
-      // Only worthwhile when the changed set is small enough for the indexer.
-      if (changed.length === 0 || changed.length > FS_LIMITS.incrementalIndexMax) return;
-      const before = new Map<string, Set<string>>();
-      for (const p of changed) before.set(p, this.search.symbolIdentitiesForPath(workspaceId, p));
-      await this.search.indexFiles(workspaceId, changed);
-
+      // Symbol delta: OLD symbols come from the blob at the snapshot HEAD, NEW
+      // symbols from the working tree — deterministic regardless of index
+      // timing (the watcher usually reindexed long before revalidation runs).
       const symbols: NonNullable<RepoDelta['symbols']> = [];
-      for (const p of changed) {
-        const after = this.search.symbolIdentitiesForPath(workspaceId, p);
-        const prev = before.get(p) ?? new Set<string>();
-        const added = [...after].filter((s) => !prev.has(s)).map(nameOf).slice(0, 40);
-        const removed = [...prev].filter((s) => !after.has(s)).map(nameOf).slice(0, 40);
-        if (added.length > 0 || removed.length > 0) symbols.push({ path: p, added, removed });
+      const candidates = delta.files
+        .filter((f) => INDEXABLE.test(f.path))
+        .slice(0, RESUME_LIMITS.maxSymbolDeltaFiles);
+      for (const file of candidates) {
+        const diff = await this.symbolDiffForFile(root, snapHead, file);
+        if (diff) symbols.push(diff);
       }
       if (symbols.length > 0) delta.symbols = symbols;
+
+      // Symbol-linked memories: right after a fresh reindex, a linked symbol
+      // with no index row in its (still-present) file is genuinely gone. A
+      // stale index would false-downgrade, so skip when the reindex was.
+      if (this.memory && canReindex) {
+        const touched = new Set([...changed, ...deleted]);
+        const deletedSet = new Set(deleted);
+        const missing: string[] = [];
+        const present: string[] = [];
+        for (const link of this.memory.listSymbolRefs(workspaceId)) {
+          const hash = link.ref.lastIndexOf('#');
+          if (hash <= 0) continue;
+          const file = link.ref.slice(0, hash);
+          if (!touched.has(file)) continue;
+          const name = link.ref.slice(hash + 1);
+          const exists =
+            !deletedSet.has(file) && this.search.symbolExists(workspaceId, file, name);
+          (exists ? present : missing).push(link.ref);
+        }
+        if (missing.length > 0) {
+          for (const m of this.memory.downgradeForMissingSymbols(workspaceId, missing)) {
+            downgraded.set(m.id, m);
+          }
+        }
+        if (present.length > 0) this.memory.restoreForPresentSymbols(workspaceId, present);
+      }
+      if (downgraded.size > 0) {
+        delta.downgradedMemories = [...downgraded.values()].slice(0, 20);
+      }
     } catch (err) {
       logger.warn('resume: delta enrichment failed', err);
     }
+  }
+
+  /**
+   * Blob-vs-worktree symbol diff for one changed file. Best-effort: any
+   * unreadable side (gc'd snapshot commit, binary, oversize, vanished file)
+   * skips the file rather than emitting a noisy all-added/all-removed diff.
+   */
+  private async symbolDiffForFile(
+    root: string,
+    snapHead: string | null,
+    file: RepoDeltaFile,
+  ): Promise<{ path: string; added: string[]; removed: string[]; changed?: string[] } | null> {
+    const lang = langForPath(file.path);
+
+    // OLD side: the blob at the snapshot HEAD (a newly added file has none).
+    let oldContent = '';
+    if (file.status !== 'added') {
+      const blob = await this.oldBlobText(root, snapHead, file.oldPath ?? file.path);
+      if (blob === null) return null;
+      oldContent = blob;
+    }
+
+    // NEW side: the working tree via the guarded reader (empty when deleted).
+    let newContent = '';
+    if (file.status !== 'deleted') {
+      try {
+        const read = readWorkspaceFile(root, file.path);
+        if (read.isBinary || read.tooLarge || typeof read.content !== 'string') return null;
+        if (read.content.length > RESUME_LIMITS.maxSymbolFileBytes) return null;
+        newContent = read.content;
+      } catch {
+        return null; // vanished since the range diff — skip
+      }
+    }
+
+    const before = symbolMap(extractSymbols(oldContent, lang));
+    const after = symbolMap(extractSymbols(newContent, lang));
+    const cap = RESUME_LIMITS.maxSymbolsPerFile;
+    const added: string[] = [];
+    const removed: string[] = [];
+    const changed: string[] = [];
+    for (const [key, sig] of after) {
+      if (!before.has(key)) {
+        if (added.length < cap) added.push(nameOf(key));
+      } else if (before.get(key) !== sig && changed.length < cap) {
+        changed.push(nameOf(key));
+      }
+    }
+    for (const key of before.keys()) {
+      if (!after.has(key) && removed.length < cap) removed.push(nameOf(key));
+    }
+    if (added.length === 0 && removed.length === 0 && changed.length === 0) return null;
+    return {
+      path: file.path,
+      added,
+      removed,
+      changed: changed.length > 0 ? changed : undefined,
+    };
+  }
+
+  /**
+   * Read a file's content as it was at the snapshot HEAD (`git show hash:path`,
+   * argv-only). The hash is regex-validated and the path re-guarded (bounded,
+   * relative, no traversal, no leading `-`) before either enters the argv;
+   * `maxBuffer` doubles as the size cap. Returns null on any failure — a gc'd
+   * snapshot commit, a path absent at that commit, binary, or oversize.
+   */
+  private async oldBlobText(
+    root: string,
+    snapHead: string | null,
+    relPath: string,
+  ): Promise<string | null> {
+    if (!isValidHead(snapHead)) return null;
+    if (
+      typeof relPath !== 'string' ||
+      relPath.length === 0 ||
+      relPath.length > 4096 ||
+      relPath.startsWith('-') ||
+      relPath.includes('\0') ||
+      path.isAbsolute(relPath) ||
+      relPath.split('/').includes('..')
+    ) {
+      return null;
+    }
+    const r = await runGit(root, ['show', `${snapHead}:${relPath}`], {
+      maxBuffer: RESUME_LIMITS.maxSymbolFileBytes,
+    });
+    if (!r.ok) return null;
+    if (r.stdout.slice(0, 8000).includes('\0')) return null; // binary sniff
+    return r.stdout;
   }
 
   private async publishDelta(sessionId: string, delta: RepoDelta): Promise<void> {
@@ -528,7 +686,13 @@ export class ResumeManager {
         .get(sessionId) as DeltaRow | undefined;
       if (!row) return undefined;
       const delta = JSON.parse(row.delta) as RepoDelta;
-      const block = renderDeltaBlock(delta);
+      let planItems: PlanItemsContext | null = null;
+      try {
+        planItems = this.planItemsFor?.(sessionId) ?? null;
+      } catch {
+        /* plan context is decoration — never lose the delta over it */
+      }
+      const block = renderDeltaBlock(delta, planItems);
       this.db
         .prepare(`UPDATE resume_deltas SET status = 'injected' WHERE session_id = ?`)
         .run(sessionId);

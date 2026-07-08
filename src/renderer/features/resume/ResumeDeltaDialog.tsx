@@ -91,6 +91,9 @@ export function ResumeDeltaDialog() {
                       {c.hash.slice(0, 8)}
                     </code>
                     <span className="min-w-0 flex-1 break-words text-fg">{c.subject}</span>
+                    {c.author && (
+                      <span className="shrink-0 text-[10px] text-faint">{c.author}</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -152,10 +155,53 @@ export function ResumeDeltaDialog() {
                           -{n}
                         </span>
                       ))}
+                      {(s.changed ?? []).map((n) => (
+                        <span key={`c-${n}`} className="mr-2 text-warning" title="Signature changed">
+                          ~{n}
+                        </span>
+                      ))}
                     </span>
                   </div>
                 ))}
               </div>
+            </section>
+          )}
+
+          {delta.refImpacts && delta.refImpacts.length > 0 && (
+            <section className="flex flex-col gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-faint">
+                Import impact
+              </span>
+              <div className="flex flex-col gap-0.5 rounded-md border border-line bg-surface-2 px-3 py-2">
+                {delta.refImpacts.map((r) => (
+                  <div key={r.path} className="flex items-center gap-2 text-[12px]">
+                    <span className="w-14 shrink-0 text-[10px] text-faint">
+                      {r.importers} {r.importers === 1 ? 'file' : 'files'}
+                    </span>
+                    <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg">
+                      {r.path}
+                    </code>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {delta.downgradedMemories && delta.downgradedMemories.length > 0 && (
+            <section className="flex flex-col gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-warning">
+                Memories downgraded ({delta.downgradedMemories.length})
+              </span>
+              <div className="flex flex-col gap-0.5 rounded-md border border-line bg-surface-2 px-3 py-2">
+                {delta.downgradedMemories.map((m) => (
+                  <span key={m.id} className="truncate text-[12px] text-muted">
+                    {m.title}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[11px] leading-relaxed text-faint">
+                Their referenced files or symbols vanished; confidence restores if they return.
+              </p>
             </section>
           )}
         </div>

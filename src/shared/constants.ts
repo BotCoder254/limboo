@@ -208,6 +208,16 @@ export const RESUME_LIMITS = {
   staleThresholdDays: { min: 0, max: 365, default: 0 },
   /** Commit-subject length cap inside a delta. */
   subjectMax: 120,
+  /** Changed source files whose symbols are blob-diffed per delta. */
+  maxSymbolDeltaFiles: 30,
+  /** Byte cap on either side of a symbol blob diff (old blob / new file). */
+  maxSymbolFileBytes: 524_288,
+  /** Symbol names kept per added/removed/changed bucket per file. */
+  maxSymbolsPerFile: 40,
+  /** Unfinished plan items appended to the injected delta block. */
+  maxPlanItemsInjected: 10,
+  /** Character cap per injected plan item line. */
+  planItemCharMax: 200,
 } as const;
 
 /** Bounds + caps for the Voice subsystem (main + renderer both clamp). */

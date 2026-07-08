@@ -317,6 +317,122 @@ export class MemoryManager {
     }
   }
 
+  /**
+   * All `path#name` symbol links on active memories in scope, so the Resume
+   * Pipeline can check each against the (freshly reindexed) symbol index.
+   * Bounded; best-effort: never throws.
+   */
+  listSymbolRefs(workspaceId: string | null): { memoryId: string; ref: string }[] {
+    try {
+      return this.db
+        .prepare(
+          `SELECT ml.memory_id AS memoryId, ml.ref AS ref
+             FROM memory_links ml
+             JOIN memories m ON m.id = ml.memory_id
+            WHERE ml.kind = 'symbol' AND m.status = 'active'
+              AND (m.workspace_id IS ? OR m.workspace_id = ?)
+            LIMIT 500`,
+        )
+        .all(workspaceId, workspaceId) as { memoryId: string; ref: string }[];
+    } catch (err) {
+      logger.warn('memory: symbol-ref listing failed', err);
+      return [];
+    }
+  }
+
+  /**
+   * Downgrade active memories whose linked symbol vanished from its file —
+   * the symbol-granular sibling of {@link downgradeForMissingFiles}. Uses its
+   * own meta flags (`symbolMissing` / `preSymbolDowngradeConfidence`) so a
+   * file-level restore can never mask a still-missing symbol. Idempotent;
+   * best-effort: never throws.
+   */
+  downgradeForMissingSymbols(
+    workspaceId: string | null,
+    refs: string[],
+  ): { id: string; title: string }[] {
+    const affected: { id: string; title: string }[] = [];
+    try {
+      const select = this.db.prepare(
+        `SELECT DISTINCT m.* FROM memory_links ml
+           JOIN memories m ON m.id = ml.memory_id
+          WHERE ml.kind = 'symbol' AND ml.ref = ?
+            AND m.status = 'active'
+            AND (m.workspace_id IS ? OR m.workspace_id = ?)`,
+      );
+      const now = Date.now();
+      const tx = this.db.transaction(() => {
+        for (const raw of refs) {
+          const ref = normalizeSymbolRef(raw);
+          if (!ref) continue;
+          const rows = select.all(ref, workspaceId, workspaceId) as MemoryRow[];
+          for (const row of rows) {
+            const meta = safeParseMeta(row.meta);
+            if (meta.symbolMissing) continue; // already downgraded
+            const before = row.confidence;
+            const next = Math.max(0.1, before * 0.6);
+            meta.symbolMissing = true;
+            meta.symbolMissingAt = now;
+            meta.preSymbolDowngradeConfidence = before;
+            this.db
+              .prepare('UPDATE memories SET confidence = ?, meta = ?, updated_at = ? WHERE id = ?')
+              .run(next, JSON.stringify(meta), now, row.id);
+            affected.push({ id: row.id, title: row.title });
+          }
+        }
+      });
+      tx();
+      if (affected.length > 0) this.notifyChanged();
+    } catch (err) {
+      logger.warn('memory: downgrade for missing symbols failed', err);
+    }
+    return affected;
+  }
+
+  /**
+   * Restore memories previously downgraded for a now-present symbol.
+   * Reinstates `preSymbolDowngradeConfidence` and clears the symbol flags.
+   * Best-effort: never throws.
+   */
+  restoreForPresentSymbols(workspaceId: string | null, refs: string[]): void {
+    try {
+      const select = this.db.prepare(
+        `SELECT DISTINCT m.* FROM memory_links ml
+           JOIN memories m ON m.id = ml.memory_id
+          WHERE ml.kind = 'symbol' AND ml.ref = ?
+            AND (m.workspace_id IS ? OR m.workspace_id = ?)`,
+      );
+      const now = Date.now();
+      let changed = false;
+      const tx = this.db.transaction(() => {
+        for (const raw of refs) {
+          const ref = normalizeSymbolRef(raw);
+          if (!ref) continue;
+          const rows = select.all(ref, workspaceId, workspaceId) as MemoryRow[];
+          for (const row of rows) {
+            const meta = safeParseMeta(row.meta);
+            if (!meta.symbolMissing) continue;
+            const restored =
+              typeof meta.preSymbolDowngradeConfidence === 'number'
+                ? clamp01(meta.preSymbolDowngradeConfidence)
+                : row.confidence;
+            delete meta.symbolMissing;
+            delete meta.symbolMissingAt;
+            delete meta.preSymbolDowngradeConfidence;
+            this.db
+              .prepare('UPDATE memories SET confidence = ?, meta = ?, updated_at = ? WHERE id = ?')
+              .run(restored, JSON.stringify(meta), now, row.id);
+            changed = true;
+          }
+        }
+      });
+      tx();
+      if (changed) this.notifyChanged();
+    } catch (err) {
+      logger.warn('memory: restore for present symbols failed', err);
+    }
+  }
+
   list(filter: MemoryListFilter): Memory[] {
     const limit = clampInt(filter.limit ?? 200, 1, MEMORY_LIMITS.listMax);
     const tiers = (filter.tiers ?? []).filter(isMemoryTier);
@@ -408,12 +524,18 @@ export class MemoryManager {
     }
 
     // No FTS tokens — fall back to a bounded LIKE scan (still parameterized).
-    const like = `%${query.trim().slice(0, MEMORY_LIMITS.queryMax)}%`;
+    // Wildcards are escaped (mirrors search/query.ts toLikePattern, which can't
+    // be imported here without a module cycle) so `%`/`_` match literally.
+    const escaped = query
+      .trim()
+      .slice(0, MEMORY_LIMITS.queryMax)
+      .replace(/[%_\\]/g, (m) => `\\${m}`);
+    const like = `%${escaped}%`;
     const rows = this.db
       .prepare(
         `SELECT * FROM memories m
           WHERE m.status = 'active' AND ${wsClause}
-            AND (m.title LIKE ? OR m.body LIKE ?)
+            AND (m.title LIKE ? ESCAPE '\\' OR m.body LIKE ? ESCAPE '\\')
           ORDER BY m.pinned DESC, m.updated_at DESC LIMIT ?`,
       )
       .all(...wsParam, like, like, limit) as MemoryRow[];

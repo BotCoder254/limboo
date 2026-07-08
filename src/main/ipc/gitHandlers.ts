@@ -215,7 +215,10 @@ export function registerGitHandlers(git: GitManager, agent: AgentManager): void 
       assertId(wsId, 'workspaceId');
       assertId(sessionId, 'sessionId');
       assertText(label, GIT_LIMITS.refNameMax, 'checkpoint label');
-      return git.createCheckpoint(wsId, sessionId, label, { ...opts });
+      // Rebuild renderer opts from an explicit allow-list — never spread them.
+      return git.createCheckpoint(wsId, sessionId, label, {
+        messageId: typeof opts?.messageId === 'string' ? opts.messageId : undefined,
+      });
     },
   );
 
