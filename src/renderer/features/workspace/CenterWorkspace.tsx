@@ -83,7 +83,7 @@ export function CenterWorkspace() {
                   </span>
                   <span className="text-[13px] leading-relaxed text-muted">
                     Describe what you want to build. Limboo coordinates the repository,
-                    files, terminal, and tasks while Claude Code does the work.
+                    files, terminal, and tasks while the agent does the work.
                   </span>
                 </div>
               </div>

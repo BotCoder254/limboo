@@ -116,7 +116,7 @@ export function AttachmentsPanel() {
         <Field
           id="attVision"
           label="Send images to the model"
-          hint="Attach raster images (png, jpg, gif, webp) as vision content so Claude can see them."
+          hint="Attach raster images (png, jpg, gif, webp) as vision content so the model can see them. Claude models only — Cursor runs receive the file manifest instead."
         >
           <Toggle
             checked={attachments.images.attachAsVision}

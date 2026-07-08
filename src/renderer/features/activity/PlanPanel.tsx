@@ -93,7 +93,7 @@ export function PlanPanel() {
         compact
         icon={ClipboardList}
         title="No plan yet"
-        description="Switch the composer to Plan and describe what to build. Claude Code analyzes the repository and proposes a reviewable strategy here before changing anything."
+        description="Switch the composer to Plan and describe what to build. The agent analyzes the repository and proposes a reviewable strategy here before changing anything."
       />
     );
   }

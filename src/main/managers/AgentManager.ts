@@ -63,7 +63,30 @@ import type {
   TerminalCommandRecord,
   ToolRisk,
 } from '@shared/types';
-import { ACTIVITY_LIMITS, AGENT_LIMITS, GIT_LIMITS, RESUME_LIMITS } from '@shared/constants';
+import {
+  ACTIVITY_LIMITS,
+  AGENT_LIMITS,
+  AGENT_MODELS,
+  CURSOR_MODEL_ID_RE,
+  CURSOR_RESUME_ID_RE,
+  GIT_LIMITS,
+  RESUME_LIMITS,
+  providerForModel,
+} from '@shared/constants';
+import type { AgentProvider } from '@shared/constants';
+import type { CursorAuthManager } from './cursor/CursorAuthManager';
+import type { CursorRuntime } from './cursor/CursorRuntime';
+import { bridgeNodeCommand, bridgeScriptPath } from './cursor/bridge/bridgeAssets';
+import { startBridgeServer, type HookDecision, type RunBridgeServer } from './cursor/bridge/pipeServer';
+import { createMcpDispatcher } from './cursor/bridge/toolDispatch';
+import { classifyCursorError, isCursorResumeCorruption } from './cursor/errors';
+import { withSessionHooksJson } from './cursor/hooks';
+import { withSessionMcpJson, type McpBridgeSpec } from './cursor/mcpConfig';
+import { sessionAllowRules, sessionDenyRules, withSessionCliJson } from './cursor/permissions';
+import { withSessionContextRule } from './cursor/rules';
+import { supportsApproveMcps } from './cursor/exec';
+import { mapHookEvent } from './cursor/translate';
+import type { CursorRunOutcome, ProviderRunBridge } from './cursor/types';
 import { IpcEvents } from '@shared/ipc-channels';
 import { getDb } from '../db/database';
 import { logger } from '../logger';
@@ -462,6 +485,51 @@ export class AgentManager {
     this.resolveSessionRoot = resolve;
   }
 
+  /** Cursor print-mode runtime, wired after construction (provider dispatch). */
+  private cursorRuntime: CursorRuntime | null = null;
+
+  /** Inject the Cursor runtime so cursor-model sessions can run. */
+  setCursorRuntime(runtime: CursorRuntime): void {
+    this.cursorRuntime = runtime;
+  }
+
+  /**
+   * True while any session has an in-flight run. Gate for maintenance
+   * operations that would yank the executable out from under a live child
+   * (e.g. `cursor-agent update`).
+   */
+  hasActiveRuns(): boolean {
+    return this.runs.size > 0;
+  }
+
+  /** Cursor auth manager, wired after construction (send gating + lifecycle). */
+  private cursorAuth: CursorAuthManager | null = null;
+
+  /**
+   * Inject the Cursor auth manager. When the active model is a Cursor model,
+   * send-gating and lifecycle reconciliation follow its classification instead
+   * of the Claude credential probe; auth flips re-reconcile live.
+   */
+  setCursorAuth(auth: CursorAuthManager): void {
+    this.cursorAuth = auth;
+    auth.onChange(() => {
+      if (providerForModel(this.settings.getAll().agent.model) === 'cursor') {
+        this.reconcileCursorLifecycle();
+      }
+    });
+  }
+
+  /**
+   * Resolves whether a session's repo config is trusted (Limboo's limboo.json
+   * ack-hash gate). Decides `--trust` for Cursor runs — never passed blindly.
+   */
+  private repoTrustResolver: ((sessionId: string) => boolean) | null = null;
+
+  /** Inject the repo-trust resolver (WorktreeManager's ack-hash gate). */
+  setRepoTrustResolver(resolve: (sessionId: string) => boolean): void {
+    this.repoTrustResolver = resolve;
+  }
+
   /** Git Manager, wired after construction (auto-checkpoints + live refresh). */
   private git: GitManager | null = null;
 
@@ -669,6 +737,7 @@ export class AgentManager {
   start(): void {
     this.setLifecycle('initializing');
     this.diag('lifecycle', 'info', 'Agent manager starting');
+    this.lastModel = this.settings.getAll().agent.model;
     this.probeHealth(true);
     this.startHeartbeat();
     this.sweepDiagnostics();
@@ -722,6 +791,15 @@ export class AgentManager {
             'Claude Code is not authenticated. Open a terminal, run `claude`, and sign in — Limboo reuses that login.',
         };
 
+    // When the active model is a Cursor model, `install` stays the Claude
+    // truth (the Providers card reads it) but the lifecycle — what actually
+    // gates the composer — follows the Cursor auth classification instead.
+    if (providerForModel(this.settings.getAll().agent.model) === 'cursor') {
+      this.setState({ install });
+      this.reconcileCursorLifecycle();
+      return install;
+    }
+
     // Reconcile lifecycle without clobbering an in-flight run's state.
     const busy = this.runs.size > 0;
     let lifecycle = this.state.lifecycle;
@@ -734,15 +812,80 @@ export class AgentManager {
     return install;
   }
 
+  /**
+   * Lifecycle reconciliation for the Cursor provider — mirrors the Claude arm
+   * of {@link probeHealth} but sources from the CursorAuthManager's memoized
+   * classification. Never spawns; an `unknown` state kicks a lazy async probe
+   * whose completion re-enters here via the onChange subscription.
+   */
+  private reconcileCursorLifecycle(): void {
+    if (!this.cursorAuth) return;
+    const auth = this.cursorAuth.getCachedState();
+    const busy = this.runs.size > 0;
+    const settling =
+      this.state.lifecycle === 'starting' ||
+      this.state.lifecycle === 'initializing' ||
+      this.state.lifecycle === 'not-installed' ||
+      this.state.lifecycle === 'auth-required';
+    let lifecycle = this.state.lifecycle;
+    if (auth.status === 'not-installed') {
+      lifecycle = 'not-installed';
+    } else if (auth.status === 'not-authenticated') {
+      lifecycle = 'auth-required';
+    } else if (auth.status === 'authenticated-cli' || auth.status === 'authenticated-api-key') {
+      if (!busy && settling) lifecycle = 'ready';
+    } else {
+      // 'unknown' — never gate on an unprobed state; classify in the background.
+      void this.cursorAuth.probe(false);
+      if (!busy && (this.state.lifecycle === 'starting' || this.state.lifecycle === 'initializing')) {
+        lifecycle = 'ready';
+      }
+    }
+    if (lifecycle !== this.state.lifecycle) this.setState({ lifecycle });
+  }
+
+  /**
+   * Send-gate for Cursor runs: the runtime must be wired and the CLI both
+   * installed and authenticated. Awaits the first classification when nothing
+   * has probed yet (bounded by CURSOR_LIMITS timeouts) so a fresh boot can't
+   * slip an unauthenticated run through.
+   */
+  private async assertCursorReady(): Promise<void> {
+    if (!this.cursorRuntime || !this.cursorAuth) {
+      throw new Error('The Cursor runtime is not available.');
+    }
+    const auth = this.cursorAuth.hasProbed()
+      ? this.cursorAuth.getCachedState()
+      : await this.cursorAuth.probe(false);
+    if (auth.status === 'not-installed') {
+      this.setLifecycle('not-installed');
+      throw new Error(
+        auth.error ?? 'The Cursor CLI is not installed. Install cursor-agent, then retry.',
+      );
+    }
+    if (auth.status === 'not-authenticated' || auth.status === 'unknown') {
+      this.setLifecycle('auth-required');
+      throw new Error(
+        'Cursor is not signed in. Sign in or add an API key under Settings › Agent › Providers.',
+      );
+    }
+  }
+
   /** Force a fresh auth probe — invoked after the user signs in again. */
   retryAuth(): AgentInstall {
     this.diag('auth', 'info', 'Re-checking Claude Code authentication');
     return this.probeHealth(true);
   }
 
+  /** The model at the last settings read — a provider flip re-gates the composer. */
+  private lastModel: string | null = null;
+
   /** Re-read connection settings and restart the heartbeat with new cadence. */
   reconfigure(): void {
     this.startHeartbeat();
+    const model = this.settings.getAll().agent.model;
+    if (this.lastModel !== null && this.lastModel !== model) this.probeHealth(true);
+    this.lastModel = model;
   }
 
   /** Restore a session's transcript + activity (from SQLite) plus live state. */
@@ -956,6 +1099,7 @@ export class AgentManager {
     db.prepare('DELETE FROM agent_messages WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_activity WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_session_meta WHERE session_id = ?').run(sessionId);
+    db.prepare('DELETE FROM agent_provider_sessions WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_diagnostics WHERE session_id = ?').run(sessionId);
     db.prepare('DELETE FROM agent_plans WHERE session_id = ?').run(sessionId);
   }
@@ -1175,10 +1319,15 @@ export class AgentManager {
     if (this.runs.has(sessionId)) {
       throw new Error('The agent is already working on this session.');
     }
-    const install = this.getInstall();
-    if (!install.installed) {
-      this.setLifecycle('auth-required');
-      throw new Error(install.error ?? 'Claude Code is not available.');
+    const provider = providerForModel(this.settings.getAll().agent.model);
+    if (provider === 'cursor') {
+      await this.assertCursorReady();
+    } else {
+      const install = this.getInstall();
+      if (!install.installed) {
+        this.setLifecycle('auth-required');
+        throw new Error(install.error ?? 'Claude Code is not available.');
+      }
     }
     if (this.state.lifecycle === 'rate-limited') {
       throw new Error(this.state.rateLimit?.message ?? 'The agent is rate limited right now.');
@@ -1301,29 +1450,34 @@ export class AgentManager {
           return;
         }
         const raw = err instanceof Error ? err.message : String(err);
+        const provider = providerForModel(this.settings.getAll().agent.model);
 
-        // Corrupted-resume self-heal: the CLI's `[ede_diagnostic] … stop_reason=
-        // tool_use` result means the resumed transcript ends in a tool_use with
-        // no tool_result (a prior run died mid-tool). Resuming it fails the same
-        // way every turn, so drop the stored SDK session id once and retry with
-        // a fresh SDK session (Limboo's own transcript/history is unaffected).
+        // Corrupted-resume self-heal. Claude: the CLI's `[ede_diagnostic] …
+        // stop_reason=tool_use` result means the resumed transcript ends in a
+        // tool_use with no tool_result (a prior run died mid-tool). Cursor:
+        // the stored chat id no longer resolves. Either way, resuming fails
+        // identically every turn — drop the stored id once and retry fresh
+        // (Limboo's own transcript/history is unaffected).
         const resumeCorrupted =
-          raw.includes('ede_diagnostic') ||
-          (raw.includes('returned an error result') && raw.includes('stop_reason=tool_use'));
-        if (resumeCorrupted && !resumeDropped && this.loadSdkSession(sessionId)) {
+          provider === 'cursor'
+            ? isCursorResumeCorruption(raw)
+            : raw.includes('ede_diagnostic') ||
+              (raw.includes('returned an error result') && raw.includes('stop_reason=tool_use'));
+        if (resumeCorrupted && !resumeDropped && this.loadProviderSession(sessionId, provider)) {
           resumeDropped = true;
-          this.forgetSdkSession(sessionId);
+          this.forgetProviderSession(sessionId, provider);
           this.diag(
             'recovery',
             'warning',
-            'Resumed transcript was corrupted — starting a fresh SDK session',
+            'Resumed conversation was corrupted — starting a fresh session',
             redact(raw),
             sessionId,
           );
-          continue; // retry — buildOptions no longer finds a resume id
+          continue; // retry — the next attempt no longer finds a resume id
         }
 
-        const cls = classifyAgentError(redact(raw));
+        const cls =
+          provider === 'cursor' ? classifyCursorError(redact(raw)) : classifyAgentError(redact(raw));
         this.diag('recovery', cls.recoverable ? 'warning' : 'error', `Run error (${cls.outcome})`, redact(raw), sessionId);
 
         if (cls.outcome === 'rate-limited' && cls.rateLimit) {
@@ -1333,10 +1487,18 @@ export class AgentManager {
         }
         if (cls.outcome === 'auth-required') {
           this.setLifecycle('auth-required', { error: redact(raw) });
-          this.completeRequest(sessionId, 'auth-required', 'Sign in to Claude Code again.');
+          this.completeRequest(
+            sessionId,
+            'auth-required',
+            provider === 'cursor'
+              ? 'Sign in to Cursor again (or update the API key in Settings › Agent).'
+              : 'Sign in to Claude Code again.',
+          );
           this.pushEvent({ kind: 'error', sessionId, message: redact(raw), outcome: 'auth-required' });
           this.pushActivity(sessionId, 'error', 'Authentication required', undefined, 'warning');
           this.diag('auth', 'warning', 'Authentication required', redact(raw));
+          // Reconcile the Providers card with the CLI's own view of the world.
+          if (provider === 'cursor') void this.cursorAuth?.probe(true);
           return;
         }
         if (cls.outcome === 'context-overflow') {
@@ -1451,6 +1613,18 @@ export class AgentManager {
     if (run) run.result = undefined;
     this.setRequest(sessionId, { phase: 'connecting' });
 
+    // Provider dispatch: a Cursor model routes into the print-mode runtime,
+    // reusing the exact streaming closures above so everything downstream
+    // (events, persistence, plan artifacts, UI) behaves identically.
+    if (providerForModel(agent.model) === 'cursor') {
+      await this.runCursorOnce(sessionId, prompt, cwd, abort, permMode, {
+        ensureStreaming,
+        queueDelta,
+        finishStreaming,
+      });
+      return;
+    }
+
     try {
       const sdk = await loadSdk();
       const { query } = sdk;
@@ -1560,7 +1734,7 @@ export class AgentManager {
     switch (msg.type) {
       case 'system': {
         if (msg.subtype === 'init') {
-          this.rememberSdkSession(sessionId, msg.session_id);
+          this.rememberProviderSession(sessionId, 'anthropic', msg.session_id);
         }
         break;
       }
@@ -1621,26 +1795,396 @@ export class AgentManager {
         finishStreaming();
         const ok = msg.subtype === 'success';
         const resultText = 'result' in msg && typeof msg.result === 'string' ? msg.result : '';
-        const run = this.runs.get(sessionId);
-        if (run) run.result = { ok, text: resultText || String(msg.subtype ?? '') };
-        this.pushEvent({ kind: 'result', sessionId, ok, text: resultText });
-        if (ok) {
-          // Failure paths are owned by runWithRecovery (classified + surfaced).
-          this.pushActivity(sessionId, 'result', 'Completed', undefined, 'success');
-          this.diag('request', 'info', 'Run completed', undefined, sessionId);
-          if (this.settings.getAll().behavior.notifications) {
-            this.notifications.notify({
-              title: 'Agent finished',
-              body: 'Claude Code completed the task.',
-            });
-          }
-        }
+        this.recordRunResult(sessionId, ok, resultText, resultText || String(msg.subtype ?? ''));
         break;
       }
 
       default:
         break;
     }
+  }
+
+  /**
+   * Record a run's terminal result (shared by the Claude message handler and
+   * the Cursor bridge): stores it on the active run for outcome
+   * classification, emits the result event, and celebrates success. Failure
+   * paths are owned by runWithRecovery (classified + surfaced there).
+   */
+  private recordRunResult(sessionId: string, ok: boolean, text: string, storedText?: string): void {
+    const run = this.runs.get(sessionId);
+    if (run) run.result = { ok, text: storedText ?? text };
+    this.pushEvent({ kind: 'result', sessionId, ok, text });
+    if (ok) {
+      this.pushActivity(sessionId, 'result', 'Completed', undefined, 'success');
+      this.diag('request', 'info', 'Run completed', undefined, sessionId);
+      if (this.settings.getAll().behavior.notifications) {
+        this.notifications.notify({
+          title: 'Agent finished',
+          body: 'The agent completed the task.',
+        });
+      }
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Cursor provider run path                                          */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * A single Cursor print-mode run attempt — the provider twin of the Claude
+   * body of {@link runOnce}, sharing its streaming closures so downstream
+   * behavior is identical. Safe posture: runs are propose-only (no --force)
+   * except an approved-plan implement pass or the explicit auto posture, and
+   * force runs are wrapped in a deny-first session .cursor/cli.json.
+   */
+  private async runCursorOnce(
+    sessionId: string,
+    prompt: string,
+    cwd: string,
+    abort: AbortController,
+    permMode: SessionPermissionMode,
+    stream: {
+      ensureStreaming: () => ChatMessage;
+      queueDelta: (text: string) => void;
+      finishStreaming: (finalText?: string) => void;
+    },
+  ): Promise<void> {
+    const runtime = this.cursorRuntime;
+    if (!runtime) throw new Error('The Cursor runtime is not available.');
+    const agent = this.settings.getAll().agent;
+    const run = this.runs.get(sessionId);
+    const isPlan = permMode === 'plan';
+
+    // Same context producers as the Claude path. Cursor has no system-prompt
+    // preset append; the composed block is injected via a session-scoped
+    // generated rule (.cursor/rules/limboo-context.mdc — the CLI auto-loads
+    // it), with prompt prepending kept as the fallback when the rule write
+    // fails. NOTE the resume delta is marked injected at build time — both
+    // vehicles deliver it, so that stays correct on the fallback path too.
+    const memoryContext = this.memoryContextFor(sessionId, prompt);
+    const searchContext = this.searchContextFor(sessionId, prompt);
+    const resumeContext = this.resumeContextFor(sessionId);
+    const injectedContext =
+      [memoryContext, searchContext, resumeContext].filter(Boolean).join('\n\n') || undefined;
+
+    // Attachments ride as the same manifest text; image vision blocks are a
+    // Claude streaming-input feature and are skipped for Cursor runs. The
+    // manifest is per-turn, so it stays on the prompt (never the rules file).
+    const attachIds = run?.attachmentIds ?? [];
+    const manifest =
+      attachIds.length > 0 && this.attachments
+        ? this.attachments.manifestFor(sessionId, attachIds)
+        : undefined;
+    const basePrompt = manifest ? `${prompt}\n\n${manifest}` : prompt;
+    const promptWithContext = injectedContext
+      ? `<context>\n${injectedContext}\n</context>\n\n${basePrompt}`
+      : basePrompt;
+
+    // An approved plan's implement pass runs with --force (the one transition
+    // that unlocks writes); so does the explicit auto posture. Everything else
+    // is propose-only per the print-mode contract.
+    const applying = !isPlan && this.loadPlan(sessionId)?.status === 'implementing';
+    const force = applying || (!isPlan && permMode === 'acceptEdits' && agent.permissionMode === 'auto');
+    const trusted = this.repoTrustResolver ? this.repoTrustResolver(sessionId) : false;
+
+    // The model id is a settings string — never let it reach argv unless it
+    // both passes the strict charset AND names a model we know serves the
+    // Cursor provider (static catalog ∪ account-discovered ∪ persisted).
+    const model = agent.model;
+    const knownCursorModels = new Set<string>([
+      ...AGENT_MODELS.filter((m) => m.provider === 'cursor').map((m) => m.value),
+      ...(this.cursorAuth?.getCachedState().models ?? []),
+      ...(agent.cursor?.discoveredModels ?? []),
+    ]);
+    if (!CURSOR_MODEL_ID_RE.test(model) || !knownCursorModels.has(model)) {
+      throw new Error(
+        `"${model.slice(0, 80)}" is not an available Cursor model. ` +
+          'Pick a Composer model in the model picker (Settings › Agent), then retry.',
+      );
+    }
+
+    // A stored resume chat id round-trips through the DB; a corrupted or
+    // hand-edited row must never reach `--resume` argv. Drop + forget so the
+    // next turn starts a fresh chat (mirrors the resume-corruption self-heal).
+    let resumeChatId = this.loadProviderSession(sessionId, 'cursor');
+    if (resumeChatId && !CURSOR_RESUME_ID_RE.test(resumeChatId)) {
+      this.diag(
+        'recovery',
+        'warning',
+        'Stored Cursor chat id was malformed — starting a fresh chat',
+        undefined,
+        sessionId,
+      );
+      this.forgetProviderSession(sessionId, 'cursor');
+      resumeChatId = undefined;
+    }
+
+    // Pre-bind: no stored chat yet → mint one via `create-chat` so the chat
+    // id is bound to this session BEFORE any prompt is sent (design doc §4),
+    // instead of waiting to harvest it from the run's init event. Best-effort:
+    // on any failure the init-event harvest below keeps working unchanged.
+    if (!resumeChatId && !abort.signal.aborted) {
+      const minted = await runtime.createChat();
+      if (minted) {
+        this.rememberProviderSession(sessionId, 'cursor', minted);
+        resumeChatId = minted;
+        this.diag('lifecycle', 'debug', 'Pre-bound a new Cursor chat', `chat ${minted}`, sessionId);
+      } else {
+        this.diag(
+          'lifecycle',
+          'debug',
+          'create-chat unavailable — the chat id will bind from the run init event',
+          undefined,
+          sessionId,
+        );
+      }
+    }
+
+    // `--sandbox` is a literal whitelist; 'auto' omits the flag (CLI default).
+    const sandboxPref = agent.cursor?.sandbox;
+    const sandbox =
+      sandboxPref === 'enabled' || sandboxPref === 'disabled' ? sandboxPref : undefined;
+
+    const bridge: ProviderRunBridge = {
+      ensureStreaming: () => {
+        stream.ensureStreaming();
+      },
+      queueDelta: stream.queueDelta,
+      finishStreaming: stream.finishStreaming,
+      onToolUse: (id, name, input) => this.onToolUse(sessionId, id, name, input),
+      onToolResult: (id, status, output) => this.onToolResult(sessionId, id, status, output),
+      onInit: (chatId) => {
+        // The CLI's own init payload is the source — still never persist a
+        // token that couldn't safely round-trip back to `--resume` argv.
+        if (CURSOR_RESUME_ID_RE.test(chatId)) {
+          this.rememberProviderSession(sessionId, 'cursor', chatId);
+        }
+      },
+      onResult: (ok, text) => this.recordRunResult(sessionId, ok, text),
+      diag: (category, severity, label, detail) =>
+        this.diag(category as DiagnosticCategory, severity, label, detail, sessionId),
+    };
+
+    // ---- Per-run bridge (hooks + MCP over a token-authed local pipe) ----
+    // Both layers are best-effort enhancements: an unresolved bundled script
+    // or a failed pipe never blocks the run — the deny-first cli.json and the
+    // propose-only/--force posture stay the enforced baseline regardless.
+    const hooksEnabled = agent.cursor?.hooks !== 'off';
+    const hookRunnerPath = hooksEnabled ? bridgeScriptPath('hookRunner.cjs') : null;
+    const mcpBridgePath = this.memory || this.search ? bridgeScriptPath('mcpBridge.cjs') : null;
+
+    let pipe: RunBridgeServer | null = null;
+    if (hookRunnerPath || mcpBridgePath) {
+      // Duplicate suppression: preToolUse and beforeShellExecution can both
+      // fire for one action (and hook retries happen) — identical concurrent
+      // requests share one decision instead of prompting twice.
+      const inFlight = new Map<string, Promise<HookDecision>>();
+      const dispatcher = createMcpDispatcher(this.memory, this.search, this.workspace);
+      try {
+        pipe = await startBridgeServer({
+          onHook: (event, payload) => {
+            const mapped = mapHookEvent(event, payload);
+            if (!mapped) {
+              // Unknown GATE events fail closed; Cursor also has failClosed set.
+              return Promise.resolve<HookDecision>({
+                permission: 'deny',
+                agentMessage: `Limboo does not handle the ${event || 'unknown'} hook event.`,
+              });
+            }
+            if (mapped.observeOnly) {
+              // afterFileEdit: the stream's tool_call events already feed the
+              // Changes tab / File History — just acknowledge.
+              return Promise.resolve<HookDecision>({ permission: 'allow' });
+            }
+            const key = `${mapped.name}:${JSON.stringify(mapped.input)}`;
+            let decision = inFlight.get(key);
+            if (!decision) {
+              decision = this.decideToolUse(
+                sessionId,
+                cwd,
+                isPlan,
+                mapped.name,
+                mapped.input,
+                abort.signal,
+              ).then((r): HookDecision => {
+                if (r.behavior === 'allow') return { permission: 'allow' };
+                return {
+                  permission: 'deny',
+                  agentMessage: r.message || 'Denied by the user.',
+                  userMessage: r.message,
+                };
+              });
+              inFlight.set(key, decision);
+              void decision.finally(() => {
+                const t = setTimeout(() => inFlight.delete(key), 2_000);
+                t.unref?.();
+              });
+            }
+            return decision;
+          },
+          onMcp: (server, method, params) =>
+            Promise.resolve(dispatcher.dispatch(server, method, params)),
+        });
+      } catch (err) {
+        this.diag(
+          'lifecycle',
+          'warning',
+          'Cursor bridge pipe failed to start — running without hooks/MCP',
+          err instanceof Error ? err.message.slice(0, 300) : undefined,
+          sessionId,
+        );
+      }
+    }
+
+    const mcpSpec: McpBridgeSpec | null =
+      pipe && mcpBridgePath
+        ? {
+            nodeCommand: bridgeNodeCommand(),
+            bridgePath: mcpBridgePath,
+            bridgeEnv: pipe.env,
+            memory: !!this.memory,
+            search: !!this.search,
+          }
+        : null;
+    const hookCfg =
+      pipe && hookRunnerPath
+        ? { nodeCommand: bridgeNodeCommand(), runnerPath: hookRunnerPath }
+        : null;
+    const approveMcps = mcpSpec ? await supportsApproveMcps() : false;
+    if (mcpSpec && !approveMcps) {
+      this.diag(
+        'lifecycle',
+        'debug',
+        'This cursor-agent version has no --approve-mcps — the limboo MCP servers may need a one-time approval',
+        undefined,
+        sessionId,
+      );
+    }
+
+    // Declarative posture (documented CLI feature — the enforced layer): the
+    // deny-first cli.json now wraps EVERY run (the app-data Read/Write guard
+    // matters even propose-only), with allow rules translated from the
+    // standing posture. Deny beats allow, so the merge only tightens.
+    const denyRules = sessionDenyRules(app.getPath('userData'));
+    const allowRules = sessionAllowRules({
+      autoApproveReads: agent.autoApproveReads && agent.permissionMode !== 'approve-all',
+      limbooMcp: mcpSpec != null,
+    });
+
+    let started = false;
+    const runAttempt = async (injectViaRules: boolean): Promise<CursorRunOutcome> => {
+      const spec = {
+        sessionId,
+        prompt: injectViaRules ? basePrompt : promptWithContext,
+        cwd,
+        mode: permMode,
+        force,
+        trusted,
+        model,
+        resumeChatId,
+        sandbox,
+        approveMcps,
+        // ELECTRON_RUN_AS_NODE lets cursor-agent's children run the bundled
+        // .cjs bridges through the Electron binary; harmless to the CLI itself.
+        extraEnv: pipe ? { ...pipe.env, ELECTRON_RUN_AS_NODE: '1' } : undefined,
+        abort,
+      };
+
+      const execute = async (): Promise<CursorRunOutcome> => {
+        started = true;
+        const handle = await runtime.start(spec, bridge);
+        if (run) run.query = { close: handle.close };
+        this.setLifecycle('streaming');
+        this.setRequest(sessionId, { phase: 'streaming' });
+        this.diag('stream', 'debug', 'Streaming response', undefined, sessionId);
+        return handle.done;
+      };
+
+      const withMcp = (): Promise<CursorRunOutcome> => withSessionMcpJson(cwd, mcpSpec, execute);
+      const withHooks = (): Promise<CursorRunOutcome> => withSessionHooksJson(cwd, hookCfg, withMcp);
+      const inner =
+        injectViaRules && injectedContext
+          ? (): Promise<CursorRunOutcome> =>
+              withSessionContextRule(cwd, injectedContext, withHooks)
+          : withHooks;
+      return withSessionCliJson(cwd, { deny: denyRules, allow: allowRules }, inner);
+    };
+
+    let outcome: CursorRunOutcome;
+    try {
+      try {
+        outcome = await runAttempt(true);
+      } catch (err) {
+        // A pre-spawn failure with a rules file pending is most likely the
+        // rule write itself — retry once with prompt-prepended context (the
+        // documented fallback). Anything after spawn rethrows unchanged.
+        if (!started && injectedContext) {
+          this.diag(
+            'lifecycle',
+            'warning',
+            'Context rule write failed — falling back to prompt injection',
+            err instanceof Error ? err.message.slice(0, 300) : undefined,
+            sessionId,
+          );
+          outcome = await runAttempt(false);
+        } else {
+          throw err;
+        }
+      }
+    } finally {
+      stream.finishStreaming();
+      if (pipe) {
+        // Capability record for Settings › Agent › Troubleshooting.
+        this.setState({
+          cursorBridge: {
+            hooksActive: hookCfg ? pipe.hookConnected : null,
+            mcpActive: mcpSpec ? pipe.mcpConnected : null,
+            at: Date.now(),
+          },
+        });
+        void pipe.close();
+      }
+    }
+
+    if (abort.signal.aborted) return;
+
+    // Plan capture, style 'result': Cursor has no ExitPlanMode tool — in plan
+    // mode the plan IS the final result text.
+    if (isPlan && outcome.result?.ok && outcome.result.text.trim().length > 0) {
+      this.capturePlan(sessionId, outcome.result.text);
+      const active = this.runs.get(sessionId);
+      if (active) active.planCaptured = true;
+      return;
+    }
+
+    // Propose→apply: a propose-only run that generated mutations surfaces them
+    // through the existing plan-approval pipeline (Approve reruns with --force
+    // on the same chat — see approvePlan).
+    if (!force && !isPlan && outcome.result?.ok && outcome.proposedMutations > 0) {
+      this.captureCursorProposal(sessionId, outcome);
+    }
+
+    // Same terminal contract as the Claude path: a non-success result is
+    // surfaced as a throw so the recovery loop classifies it.
+    const result = this.runs.get(sessionId)?.result;
+    if (result && !result.ok && !abort.signal.aborted) {
+      throw new Error(result.text || 'The run ended with errors.');
+    }
+  }
+
+  /**
+   * Wrap a propose-only Cursor run's pending mutations in a plan artifact so
+   * the existing plan-ready banner / panel / Approve flow reviews them. The
+   * caveat (documented, accepted): approval re-executes on the resumed chat
+   * rather than replaying stored diffs — the Git panel diff is the
+   * verification surface.
+   */
+  private captureCursorProposal(sessionId: string, outcome: CursorRunOutcome): void {
+    const n = outcome.proposedMutations;
+    const header =
+      `> Cursor proposed ${n} change${n === 1 ? '' : 's'} without applying ` +
+      '(propose-only run). Approve to apply them.';
+    this.capturePlan(sessionId, `${header}\n\n${outcome.result?.text ?? ''}`);
   }
 
   /** Register a tool invocation (drives the inline chip + activity + changes). */
@@ -1900,11 +2444,13 @@ export class AgentManager {
     this.pushActivity(sessionId, 'status', 'Plan approved — implementing', undefined, 'success');
     this.diag('request', 'info', `Plan approved (${mode})`, undefined, sessionId);
 
-    await this.send(
-      sessionId,
-      'The plan is approved. Implement it now, working through the steps in order and tracking your progress with the TodoWrite tool. Ask for approval before any change you are unsure about.',
-      mode,
-    );
+    // Cursor implement passes re-run with --force on the resumed chat (see
+    // runCursorOnce), so the prompt asks it to apply what it already proposed.
+    const prompt =
+      providerForModel(this.settings.getAll().agent.model) === 'cursor'
+        ? 'The plan is approved — implement it now, applying the proposed changes exactly as planned, working through the steps in order.'
+        : 'The plan is approved. Implement it now, working through the steps in order and tracking your progress with the TodoWrite tool. Ask for approval before any change you are unsure about.';
+    await this.send(sessionId, prompt, mode);
   }
 
   /** Pin / unpin the current plan so it is preserved even after a new plan begins. */
@@ -2184,17 +2730,19 @@ export class AgentManager {
     if (attachmentsDir) options.additionalDirectories = [attachmentsDir];
 
     // Resume the Claude Code session so multi-turn conversations keep context.
-    const sdkSessionId = this.loadSdkSession(sessionId);
+    const sdkSessionId = this.loadProviderSession(sessionId, 'anthropic');
     if (sdkSessionId) options.resume = sdkSessionId;
 
     return options;
   }
 
-  private loadSdkSession(sessionId: string): string | undefined {
+  private loadProviderSession(sessionId: string, provider: AgentProvider): string | undefined {
     const row = getDb()
-      .prepare('SELECT sdk_session_id FROM agent_session_meta WHERE session_id = ?')
-      .get(sessionId) as { sdk_session_id?: string } | undefined;
-    return row?.sdk_session_id || undefined;
+      .prepare(
+        'SELECT provider_session_id FROM agent_provider_sessions WHERE session_id = ? AND provider = ?',
+      )
+      .get(sessionId, provider) as { provider_session_id?: string } | undefined;
+    return row?.provider_session_id || undefined;
   }
 
   private makeCanUseTool(sessionId: string, cwd: string, planRun: boolean) {
@@ -2214,6 +2762,34 @@ export class AgentManager {
         return { behavior: 'deny', message: 'Plan captured for your review.', interrupt: true };
       }
 
+      // AskUserQuestion: a workflow pause point, not a tool to approve. Handle it
+      // BEFORE risk classification and the plan-mode read-only guard — clarifying
+      // questions are the whole point of plan mode and must not be blocked there.
+      if (toolName === ASK_USER_QUESTION_TOOL) {
+        return this.requestClarification(sessionId, input, signal);
+      }
+
+      return this.decideToolUse(sessionId, cwd, planRun, toolName, input, signal);
+    };
+  }
+
+  /**
+   * The provider-neutral tool-permission decision core — risk classification,
+   * app-data + workspace path guards, plan read-only enforcement, standing
+   * auto-approvals, remembered choices, and finally the interactive
+   * PermissionRequest → renderer → respondPermission round-trip. Claude's
+   * canUseTool callback and the Cursor hooks bridge both call THIS, so both
+   * providers get the same dialogs, the same risk chips, and the same audit
+   * trail from one implementation.
+   */
+  private async decideToolUse(
+    sessionId: string,
+    cwd: string,
+    planRun: boolean,
+    toolName: string,
+    input: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<PermissionResult> {
       // Attachment carve-out (before the app-data guard, which would otherwise
       // block the staging dir inside userData): READ tools may open files inside
       // THIS session's own attachments dir. Writes/edits there stay denied below,
@@ -2250,13 +2826,6 @@ export class AgentManager {
         toolName.startsWith('mcp__limboo_search__')
       ) {
         return { behavior: 'allow', updatedInput: input };
-      }
-
-      // AskUserQuestion: a workflow pause point, not a tool to approve. Handle it
-      // BEFORE risk classification and the plan-mode read-only guard — clarifying
-      // questions are the whole point of plan mode and must not be blocked there.
-      if (toolName === ASK_USER_QUESTION_TOOL) {
-        return this.requestClarification(sessionId, input, signal);
       }
 
       const risk = classifyTool(toolName);
@@ -2324,7 +2893,6 @@ export class AgentManager {
           },
         });
       });
-    };
   }
 
   /* ---------------------------------------------------------------- */
@@ -2434,22 +3002,28 @@ export class AgentManager {
     );
   }
 
-  private rememberSdkSession(sessionId: string, sdkSessionId: string): void {
+  private rememberProviderSession(
+    sessionId: string,
+    provider: AgentProvider,
+    providerSessionId: string,
+  ): void {
     getDb()
       .prepare(
-        'INSERT OR REPLACE INTO agent_session_meta (session_id, sdk_session_id, updated_at) VALUES (?, ?, ?)',
+        'INSERT OR REPLACE INTO agent_provider_sessions (session_id, provider, provider_session_id, updated_at) VALUES (?, ?, ?, ?)',
       )
-      .run(sessionId, sdkSessionId, Date.now());
+      .run(sessionId, provider, providerSessionId, Date.now());
   }
 
   /**
-   * Drop the stored SDK session id so the next run starts a fresh SDK session
-   * instead of resuming. Used when the resumed transcript is corrupted (e.g. it
-   * ends in a tool_use with no tool_result after a mid-tool kill) — resuming it
-   * would fail identically on every turn.
+   * Drop the stored provider session id so the next run starts a fresh
+   * conversation instead of resuming. Used when the resumed transcript is
+   * corrupted (e.g. it ends in a tool_use with no tool_result after a mid-tool
+   * kill) — resuming it would fail identically on every turn.
    */
-  private forgetSdkSession(sessionId: string): void {
-    getDb().prepare('DELETE FROM agent_session_meta WHERE session_id = ?').run(sessionId);
+  private forgetProviderSession(sessionId: string, provider: AgentProvider): void {
+    getDb()
+      .prepare('DELETE FROM agent_provider_sessions WHERE session_id = ? AND provider = ?')
+      .run(sessionId, provider);
   }
 
   /* ---------------------------------------------------------------- */

@@ -1,26 +1,46 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 13;
+export const SETTINGS_VERSION = 15;
 
 /**
- * The agent providers Limboo can show a glyph for (Claude Code = Anthropic,
- * Cursor = the cursor-agent CLI). Cursor is authentication-only for now — it
- * has no {@link AGENT_MODELS} entries, so it can never be selected as the
- * running agent until its runtime adapter lands.
+ * The agent providers Limboo can run (Claude Code = Anthropic via the Agent
+ * SDK, Cursor = the cursor-agent CLI in print mode). The provider follows the
+ * selected model — picking a Composer model routes runs through the Cursor
+ * runtime adapter.
  */
 export type AgentProvider = 'anthropic' | 'cursor';
 
-/** Selectable Claude models for the agent (id + short label + provider). */
+/** Selectable agent models (id + short label + provider). */
 export const AGENT_MODELS = [
   { value: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', provider: 'anthropic' },
+  { value: 'composer-2', label: 'Composer 2', provider: 'cursor' },
+  { value: 'composer-2.5', label: 'Composer 2.5', provider: 'cursor' },
 ] as const;
+
+/**
+ * Cursor model ids discovered at runtime via `cursor-agent models`. Each
+ * process registers its own copy (main from the auth probe / persisted
+ * settings, renderer from the broadcast auth state + hydrate). Consulted by
+ * {@link providerForModel} AFTER the static list, so a discovered id can
+ * never re-route a built-in Anthropic model.
+ */
+const dynamicCursorModels = new Set<string>();
+
+/** Register runtime-discovered Cursor model ids (validated by the caller). */
+export function registerCursorModels(ids: readonly string[]): void {
+  for (const id of ids) {
+    if (typeof id === 'string' && CURSOR_MODEL_ID_RE.test(id)) dynamicCursorModels.add(id);
+  }
+}
 
 /** Resolve the provider that serves a given model id. */
 export function providerForModel(model: string): AgentProvider {
-  return AGENT_MODELS.find((m) => m.value === model)?.provider ?? 'anthropic';
+  const known = AGENT_MODELS.find((m) => m.value === model)?.provider;
+  if (known) return known;
+  return dynamicCursorModels.has(model) ? 'cursor' : 'anthropic';
 }
 
 /** Bounds the main process clamps agent settings against. */
@@ -68,6 +88,55 @@ export const CURSOR_LIMITS = {
   outputMax: 64 * 1024,
   /** Cap on the manual-login URL captured from the CLI's stdout. */
   loginUrlMax: 2_048,
+  /** A single stream-json NDJSON line beyond this is dropped, never buffered. */
+  ndjsonLineMax: 2_097_152,
+  /** Bounded tail of a run child's stderr kept for error classification. */
+  stderrTailMax: 8_192,
+  /** Grace between SIGTERM and SIGKILL when stopping a run child (posix). */
+  killGraceMs: 3_000,
+  /** Cap on the terminal result text kept from a run. */
+  runResultTextMax: 262_144,
+  /** Discovered model list is re-fetched at most this often. */
+  modelsTtlMs: 3_600_000,
+  /** Max chars for a single discovered model id. */
+  modelIdMax: 64,
+  /** Max discovered model ids kept per fetch. */
+  modelsMax: 50,
+  /** Deadline for a `cursor-agent update` self-update run. */
+  updateTimeoutMs: 180_000,
+  /** Max chars for a `--resume` chat id before it is dropped as corrupt. */
+  resumeIdMax: 200,
+  /** Max chars for the user-configured executable path override. */
+  execPathMax: 1_024,
+  /** Max concurrent connections the per-run bridge pipe accepts. */
+  bridgeMaxConnections: 8,
+  /** Max buffered bytes for one bridge line before the socket is dropped. */
+  bridgeLineMax: 4_194_304,
+  /**
+   * Deadline for one bridge request (an interactive permission prompt can
+   * legitimately wait on the user — keep this generous).
+   */
+  bridgeRequestTimeoutMs: 600_000,
+  /** `timeout` (seconds) written into the generated hooks.json entries. */
+  hookTimeoutSecs: 600,
+} as const;
+
+/** A discovered Cursor model id must match this before it is trusted anywhere. */
+export const CURSOR_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** A stored Cursor `--resume` chat id must match this before reaching argv. */
+export const CURSOR_RESUME_ID_RE = /^[A-Za-z0-9._-]{1,200}$/;
+
+/**
+ * Cursor-owned destinations the UI may open via `shell.openExternal` (single
+ * source of truth — keep these on cursor.com so the generic https validation
+ * in systemHandlers is the only other gate needed).
+ */
+export const CURSOR_URLS = {
+  docs: 'https://cursor.com/docs/cli/overview',
+  install: 'https://cursor.com/docs/cli/installation',
+  dashboard: 'https://cursor.com/dashboard',
+  apiKeys: 'https://cursor.com/dashboard/api',
 } as const;
 
 /** Hard limits the renderer and main process both clamp against. */
@@ -228,8 +297,12 @@ export const RESUME_LIMITS = {
   maxDirtyFilesStored: 100,
   /** Approx character budget for the injected `<repository-delta>` block. */
   injectCharBudget: 4_000,
-  /** Whole-revalidation deadline; a miss degrades to "no delta". */
-  revalidateTimeoutMs: 10_000,
+  /**
+   * Whole-revalidation deadline; a miss degrades to "no delta". Enrichment
+   * yields cooperatively before this fires; the hard stop covers cold-cache
+   * git spawns on large repos (Windows first runs regularly exceeded 10s).
+   */
+  revalidateTimeoutMs: 30_000,
   /** Days before an untouched session skips revalidation (0 = always run). */
   staleThresholdDays: { min: 0, max: 365, default: 0 },
   /** Commit-subject length cap inside a delta. */
@@ -424,6 +497,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     cursor: {
       preferredAuth: 'auto',
       manualBrowserLogin: false,
+      executablePath: '',
+      sandbox: 'auto',
+      hooks: 'auto',
+      discoveredModels: [],
     },
   },
   git: {
@@ -566,7 +643,7 @@ export function clamp(value: number, min: number, max: number): number {
 /* ------------------------------------------------------------------ */
 
 /** Bumped whenever the workspace DB schema changes incompatibly. */
-export const WORKSPACE_SCHEMA_VERSION = 11;
+export const WORKSPACE_SCHEMA_VERSION = 12;
 
 /** Input caps the main process enforces on renderer-supplied session values. */
 export const SESSION_LIMITS = {

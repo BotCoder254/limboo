@@ -5,11 +5,12 @@
  * `useSettingsStore.update`, so changes apply to the next prompt immediately.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Brain, Check, ChevronDown, type LucideIcon } from 'lucide-react';
-import { AGENT_MODELS, providerForModel } from '@shared/constants';
+import { Brain, Check, ChevronDown, Search, type LucideIcon } from 'lucide-react';
+import { providerForModel, type AgentProvider } from '@shared/constants';
 import { cn } from '@/renderer/lib/cn';
 import { ProviderIcon } from '@/renderer/components/brand/ProviderIcon';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
+import { useAgentModels } from '@/renderer/features/agent/models';
 
 export interface Option<T extends string> {
   value: T;
@@ -30,6 +31,7 @@ export function MiniSelect<T extends string>({
   title,
   disabled,
   accent = false,
+  searchable = false,
 }: {
   value: T;
   options: Option<T>[];
@@ -41,13 +43,19 @@ export function MiniSelect<T extends string>({
   disabled?: boolean;
   /** Render the trigger as a filled accent pill (used for the active Plan state). */
   accent?: boolean;
+  /** Show a filter input at the top of the popover (for long option lists). */
+  searchable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const ref = useRef<HTMLDivElement>(null);
   const current = options.find((o) => o.value === value);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setQuery('');
+      return;
+    }
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
@@ -61,6 +69,11 @@ export function MiniSelect<T extends string>({
       window.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? options.filter((o) => `${o.label} ${o.value}`.toLowerCase().includes(q))
+    : options;
 
   return (
     <div ref={ref} className="relative no-drag min-w-0">
@@ -84,49 +97,92 @@ export function MiniSelect<T extends string>({
       </button>
       {open && (
         <div className="absolute bottom-full left-0 z-30 mb-1.5 min-w-[180px] animate-pop-in overflow-hidden rounded-lg border border-line bg-elevated p-1 shadow-xl">
-          {options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-surface-2',
-                option.value === value ? 'text-fg' : 'text-muted',
-              )}
-            >
-              {option.glyph}
-              <span className="min-w-0 flex-1 truncate">{option.label}</span>
-              {option.value === value && <Check size={13} className="shrink-0 text-accent" />}
-            </button>
-          ))}
+          {searchable && (
+            <div className="mb-1 flex items-center gap-1.5 rounded-md bg-surface-2 px-2">
+              <Search size={11} className="shrink-0 text-faint" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search…"
+                className="h-6 w-full bg-transparent text-[12px] text-fg outline-none placeholder:text-faint"
+              />
+            </div>
+          )}
+          {/* Height-capped so long option lists (e.g. discovered Cursor
+              models) scroll instead of growing the popover past the
+              thinking-select scale. */}
+          <div className="max-h-56 overflow-y-auto">
+            {visible.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-surface-2',
+                  option.value === value ? 'text-fg' : 'text-muted',
+                )}
+              >
+                {option.glyph}
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {option.value === value && <Check size={13} className="shrink-0 text-accent" />}
+              </button>
+            ))}
+            {visible.length === 0 && (
+              <p className="px-2 py-1.5 text-[12px] text-faint">No matches</p>
+            )}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
+const PROVIDER_LABEL: Record<AgentProvider, string> = {
+  anthropic: 'Claude Code',
+  cursor: 'Cursor',
+};
+
 export function ComposerControls({ disabled = false }: { disabled?: boolean }) {
   const agent = useSettingsStore((s) => s.settings.agent);
   const update = useSettingsStore((s) => s.update);
+  const models = useAgentModels();
+
+  // The provider follows the model; the Agent select switches by jumping to
+  // the target provider's first catalog model, and the Model select then
+  // offers only that provider's models.
+  const provider = providerForModel(agent.model);
+  const providerModels = models.filter((m) => m.provider === provider);
 
   return (
     <div className="flex min-w-0 items-center gap-0.5">
       <MiniSelect
+        title="Agent"
+        value={provider}
+        triggerGlyph={<ProviderIcon provider={provider} size={12} className="text-faint" />}
+        options={(Object.keys(PROVIDER_LABEL) as AgentProvider[]).map((p) => ({
+          value: p,
+          label: PROVIDER_LABEL[p],
+          glyph: <ProviderIcon provider={p} size={13} className="text-muted" />,
+        }))}
+        onChange={(next) => {
+          if (next === provider) return;
+          const first = models.find((m) => m.provider === next);
+          if (first) void update({ agent: { model: first.value } });
+        }}
+        disabled={disabled}
+      />
+      <span className="h-3.5 w-px bg-line" />
+      <MiniSelect
         title="Model"
         value={agent.model}
-        triggerGlyph={
-          <ProviderIcon provider={providerForModel(agent.model)} size={12} className="text-faint" />
-        }
-        options={AGENT_MODELS.map((m) => ({
-          value: m.value,
-          label: m.label,
-          glyph: <ProviderIcon provider={m.provider} size={13} className="text-muted" />,
-        }))}
+        options={providerModels.map((m) => ({ value: m.value, label: m.label }))}
         onChange={(model) => void update({ agent: { model } })}
         disabled={disabled}
+        searchable
       />
       <span className="h-3.5 w-px bg-line" />
       <MiniSelect

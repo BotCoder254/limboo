@@ -1,8 +1,29 @@
+import { copyFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+
+// The Cursor bridge scripts (hook runner + stdio MCP bridge) are standalone,
+// dependency-free CJS files that `cursor-agent` spawns as separate processes —
+// they must ship as REAL files beside main.js (asar-unpacked in packaged
+// builds; see forge.config.ts), never bundled into it.
+const BRIDGE_SCRIPTS = ['hookRunner.cjs', 'mcpBridge.cjs'];
+function copyCursorBridgeScripts(): Plugin {
+  return {
+    name: 'copy-cursor-bridge-scripts',
+    writeBundle(options) {
+      const outDir = options.dir ?? join('.vite', 'build');
+      const srcDir = fileURLToPath(new URL('./src/main/managers/cursor/bridge', import.meta.url));
+      for (const name of BRIDGE_SCRIPTS) {
+        copyFileSync(join(srcDir, name), join(outDir, name));
+      }
+    },
+  };
+}
 
 // https://vitejs.dev/config
 export default defineConfig({
+  plugins: [copyCursorBridgeScripts()],
   // Pin a distinct output filename. Forge's Vite plugin names every build
   // `[name].js` from the entry basename — both the main and preload entries are
   // `index.ts`, so without this they would both emit `index.js` and clobber each

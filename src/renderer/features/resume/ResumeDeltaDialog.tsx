@@ -142,21 +142,28 @@ export function ResumeDeltaDialog() {
               </span>
               <div className="flex flex-col gap-1 rounded-md border border-line bg-surface-2 px-3 py-2.5">
                 {delta.symbols.map((s) => (
-                  <div key={s.path} className="flex flex-col gap-0.5 text-[12px]">
+                  <div key={s.path} className="flex min-w-0 flex-col gap-0.5 text-[12px]">
                     <code className="truncate font-mono text-[11px] text-muted">{s.path}</code>
-                    <span className="text-[11px]">
+                    {/* Wrapping flex row + per-name break-all: long symbol
+                        names wrap inside the card instead of overflowing and
+                        overlapping neighbouring entries. */}
+                    <span className="flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
                       {s.added.map((n) => (
-                        <span key={`a-${n}`} className="mr-2 text-success">
+                        <span key={`a-${n}`} className="min-w-0 break-all text-success">
                           +{n}
                         </span>
                       ))}
                       {s.removed.map((n) => (
-                        <span key={`r-${n}`} className="mr-2 text-danger">
+                        <span key={`r-${n}`} className="min-w-0 break-all text-danger">
                           -{n}
                         </span>
                       ))}
                       {(s.changed ?? []).map((n) => (
-                        <span key={`c-${n}`} className="mr-2 text-warning" title="Signature changed">
+                        <span
+                          key={`c-${n}`}
+                          className="min-w-0 break-all text-warning"
+                          title="Signature changed"
+                        >
                           ~{n}
                         </span>
                       ))}

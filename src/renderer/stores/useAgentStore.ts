@@ -19,6 +19,7 @@ import type {
   AgentInstall,
   AgentLifecycleStatus,
   AgentSessionSnapshot,
+  AgentState,
   ChatMessage,
   ClarificationRequest,
   CursorAuthState,
@@ -29,6 +30,7 @@ import type {
   RequestState,
   SessionPermissionMode,
 } from '@shared/types';
+import { registerCursorModels } from '@shared/constants';
 import { useUIStore } from './useUIStore';
 import { useAttachmentStore } from './useAttachmentStore';
 
@@ -73,6 +75,10 @@ interface AgentStoreState {
   composerModeBySession: Record<string, SessionPermissionMode>;
   /** Cursor provider auth state (secret-free); null until the lazy probe lands. */
   cursorAuth: CursorAuthState | null;
+  /** Last Cursor run's bridge probe (hooks/MCP connectivity) — Troubleshooting. */
+  cursorBridge: AgentState['cursorBridge'];
+  /** True while a `cursor-agent update` self-update is in flight. */
+  cursorUpdating: boolean;
   hydrated: boolean;
 
   setComposerMode: (sessionId: string, mode: SessionPermissionMode) => void;
@@ -96,6 +102,7 @@ interface AgentStoreState {
   cursorLogout: () => Promise<void>;
   cursorSetApiKey: (key: string) => Promise<boolean>;
   cursorRemoveApiKey: () => Promise<void>;
+  cursorUpdateCli: () => Promise<void>;
   respond: (id: string, behavior: 'allow' | 'deny', remember?: boolean) => void;
   respondClarification: (
     id: string,
@@ -276,6 +283,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     pendingClarificationBySession: {},
     composerModeBySession: {},
     cursorAuth: null,
+    cursorBridge: undefined,
+    cursorUpdating: false,
     hydrated: false,
 
     setComposerMode: (sessionId, mode) =>
@@ -301,6 +310,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         rateLimit: agentState.rateLimit,
         heartbeat: agentState.heartbeat,
         activeSessionId: agentState.activeSessionId,
+        cursorBridge: agentState.cursorBridge,
         // Replay any requests that were already pending before this window
         // hydrated (e.g. a reload while another session is paused) — the
         // discrete onPermissionRequest/onClarificationRequest events below
@@ -321,6 +331,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
           rateLimit: s.rateLimit,
           heartbeat: s.heartbeat,
           activeSessionId: s.activeSessionId,
+          cursorBridge: s.cursorBridge,
         }),
       );
       api.onEvent((event) => apply(event));
@@ -341,8 +352,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
       );
 
       // Cursor provider auth — lazy probe + live updates (secret-free state).
-      api.cursor?.onAuthChanged?.((cursorAuth) => set({ cursorAuth }));
-      void api.cursor?.getAuthState?.().then((cursorAuth) => set({ cursorAuth }));
+      // Discovered model ids feed this process's provider-routing registry so
+      // the pickers and providerForModel() stay in sync with main.
+      const intakeCursorAuth = (cursorAuth: CursorAuthState) => {
+        if (cursorAuth.models?.length) registerCursorModels(cursorAuth.models);
+        set({ cursorAuth });
+      };
+      api.cursor?.onAuthChanged?.(intakeCursorAuth);
+      void api.cursor?.getAuthState?.().then(intakeCursorAuth);
 
       // Seed the diagnostics console with recent history.
       void get().loadDiagnostics();
@@ -499,6 +516,28 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
           description: err instanceof Error ? err.message : String(err),
           tone: 'danger',
         });
+      }
+    },
+
+    cursorUpdateCli: async () => {
+      if (get().cursorUpdating) return;
+      set({ cursorUpdating: true });
+      try {
+        const result = await window.limboo?.agent?.cursor?.updateCli?.();
+        if (!result) return;
+        useUIStore.getState().addToast({
+          title: result.ok ? 'Cursor CLI updated' : 'Cursor CLI update failed',
+          description: result.message,
+          tone: result.ok ? 'success' : 'danger',
+        });
+      } catch (err) {
+        useUIStore.getState().addToast({
+          title: 'Cursor CLI update failed',
+          description: err instanceof Error ? err.message : String(err),
+          tone: 'danger',
+        });
+      } finally {
+        set({ cursorUpdating: false });
       }
     },
 

@@ -1,0 +1,869 @@
+================================================================================
+WHAT CURSOR ADDS — DEEP INTEGRATION RESEARCH FOR THE LIMBOO AGENT ADAPTER
+ARCHITECTURE
+================================================================================
+
+Status: research / design document (nothing in this file is built yet).
+Researched from the official Cursor documentation (cursor.com/docs) in July
+2026; every claim about Cursor traces to a source listed in section 18. Every
+claim about Limboo traces to the current codebase (file paths given inline).
+
+--------------------------------------------------------------------------------
+0. PREAMBLE — THE AGENT ADAPTER ARCHITECTURE THESIS
+--------------------------------------------------------------------------------
+
+Limboo does not replace its Claude Code integration with Cursor. It evolves
+into a multi-agent orchestration platform in which both Claude Code and Cursor
+are first-class coding agents managed by the same Agent Manager. The
+architectural insight that makes this cheap is that Limboo should stop
+thinking in terms of "Claude integration" and start thinking in terms of an
+Agent Adapter Architecture: a thin translation layer per agent runtime, with
+everything above the adapters left completely untouched. Nothing above the
+adapters changes — the Session Manager, Workspace Manager, Repository Index /
+Search Engine, File System Layer, Git Engine, Terminal Manager, Activity
+Timeline, Task Panel, Composer, Permission system, Diff Viewer, Checkpoints,
+Memory System, Resume Pipeline, and the entire layout all remain exactly as
+designed. The UI never knows whether Claude or Cursor is running; it only
+knows "the current session has an active coding agent". The adapter translates
+between Limboo's internal event model (the AgentEvent union in
+src/shared/types.ts) and whichever SDK or CLI is attached to the session. That
+is exactly how professional orchestration platforms are designed, and Limboo
+is unusually well positioned for it: an exploration of the codebase confirms
+that the Claude coupling is concentrated almost entirely inside one file,
+src/main/managers/AgentManager.ts, behind a provider-neutral contract — the
+AgentEvent / AgentState / PermissionRequest types, the IPC channels in
+src/shared/ipc-channels.ts, the window.limboo.agent preload namespace, the
+useAgentStore renderer store, and the Composer / permission / plan / timeline
+UI need no changes at all. There is even a dormant provider abstraction
+already in the tree (AgentProvider = 'anthropic', AGENT_MODELS, and
+providerForModel() in src/shared/constants.ts:7-19, plus ProviderIcon.tsx in
+the renderer) that was clearly intended as this exact extension point; today
+it only knows Anthropic. The sections below document, feature by feature, what
+Cursor's runtime adds, how each capability works according to the official
+docs, where it plugs into Limboo's existing seams, and which Electron and Node
+APIs each piece needs. Cursor's capabilities fit naturally BESIDE Claude
+rather than replacing it.
+
+--------------------------------------------------------------------------------
+1. AUTHENTICATION (start here — the first thing the adapter must handle)
+--------------------------------------------------------------------------------
+
+Cursor's agent runtime supports two authentication methods, and the adapter
+must handle both because they serve different situations. The first is
+interactive browser OAuth: running `agent login` (the cursor-agent CLI's login
+subcommand) opens the user's default browser and prompts them to authenticate
+with their Cursor account; on success the credentials are securely stored
+locally by the CLI itself, exactly the way Claude Code stores its own OAuth
+credentials under ~/.claude. If opening a browser is undesirable (headless
+boxes, remote shells), setting the environment variable NO_OPEN_BROWSER=1
+makes the CLI print the login URL instead of launching the browser, so the
+user can visit it manually. The second method is API-key authentication, which
+is the one designed for automation, CI, and programmatic embedding — i.e., the
+one Limboo's adapter will lean on. API keys are generated from the Cursor
+Dashboard (an admin- or user-scoped key; the key format is the literal prefix
+"crsr_" followed by 64 hexadecimal characters, which is also what secret
+scanners like GitGuardian detect), and they are supplied either through the
+CURSOR_API_KEY environment variable (the documented preferred channel) or the
+--api-key <key> command-line flag. Two more subcommands complete the auth
+lifecycle: `agent status` (alias `whoami`, supporting --format json) reports
+the current authentication state, account details, and endpoint configuration
+without ever printing the secret itself, and `agent logout` clears the stored
+authentication. The same CURSOR_API_KEY / apiKey credential is what the
+@cursor/sdk TypeScript SDK (section 13) and the Cloud Agents API (section 14)
+authenticate with, so one stored secret unlocks all three integration routes.
+Note one important limitation from the SDK docs: the SDK does NOT
+auto-discover credentials from a local Cursor app installation — the key must
+be provided explicitly — whereas the CLI does use its own locally stored login.
+
+Where it plugs into Limboo: this maps one-to-one onto the pattern
+AgentManager already uses for Claude in probeHealth()
+(src/main/managers/AgentManager.ts:694-734), which only checks for the
+PRESENCE of credentials (env vars or credential files) and never reads the
+secret. The Cursor adapter's health probe does the same: check for
+CURSOR_API_KEY in the environment, check for the CLI's local login state by
+spawning `agent status --format json` argv-only (never shell: true, per the
+CLAUDE.md §6 terminal/git contract), and classify the install as
+missing / installed-but-unauthenticated / ready. Because Limboo may also want
+to hold a key on the user's behalf (entered once in Settings → Agent), the key
+is encrypted at rest with Electron safeStorage — the CLAUDE.md §6 secrets
+contract explicitly reserves safeStorage for exactly this ("Secrets/API keys
+should use Electron safeStorage — never plain files") — decrypted only in the
+main process at spawn time, injected into the child's env as CURSOR_API_KEY
+(never placed in argv, the same lesson recorded from the Bitbucket pipeline
+work: tokens in argv leak into process lists), and redacted from every log
+line by extending the redact() secret patterns AgentManager already applies
+(AgentManager.ts:215-220) and the central log redaction in
+src/main/logger.ts to cover the crsr_[0-9a-f]{64} shape. The renderer never
+sees the key at all: settings expose only a boolean "configured" state over
+the existing settings IPC, and the "Retry" path reuses the agentRetryAuth
+channel that already exists in src/shared/ipc-channels.ts.
+
+Electron/Node APIs involved: safeStorage.encryptString /
+safeStorage.decryptString and safeStorage.isEncryptionAvailable (key at rest,
+stored as a base64 blob in a main-process-only file under app.getPath
+('userData'), never in settings.json which the renderer can read);
+child_process.spawn with an argv array for `agent status` / `agent login`;
+shell.openExternal for opening the Cursor Dashboard API-keys page or the
+NO_OPEN_BROWSER login URL (going through the existing systemHandlers.ts
+openExternal cap-and-validate path); process.env composition at spawn time;
+and the existing logger.ts redaction hook.
+
+--------------------------------------------------------------------------------
+2. THE CURSOR-AGENT CLI AND PRINT (NON-INTERACTIVE) MODE
+--------------------------------------------------------------------------------
+
+The Cursor CLI is a standalone terminal-native agent binary (installed via
+per-OS install scripts for macOS, Linux, WSL, and Windows) whose default mode
+is an interactive chat UI, but whose real value to an embedding host like
+Limboo is print mode: passing -p / --print runs the agent non-interactively —
+one prompt in, a stream of structured events out, then exit. Print mode is
+explicitly documented for "integration into scripts and CI pipelines" and
+combines with --output-format (section 3) for machine-readable output. The
+working directory the agent operates on is the current working directory by
+default, or an explicit repository root passed with --workspace <path>; in
+headless/trusted contexts --trust marks the workspace trusted so repo-level
+config is honored without an interactive prompt. Critically for a host that
+guards its own filesystem: in print mode, WITHOUT the --force flag the agent's
+proposed file changes are only proposed, not applied — --force (alias --yolo,
+"force allow commands unless explicitly denied") is what authorizes the agent
+to actually modify files and run commands non-interactively, subject to the
+permissions configuration described in section 7. The CLI also exposes
+utility subcommands the adapter uses around the edges: `about` (version /
+system / account info), `update` (self-update), `models` / --list-models
+(section 6), `create-chat` (section 4), and `install-shell-integration` (not
+relevant to embedding). Exit behavior is documented for the json format: on
+failure the process exits non-zero and writes errors to stderr without
+emitting valid JSON, which gives the adapter a clean failure signal.
+
+Where it plugs into Limboo: the adapter spawns `cursor-agent` the same way
+AgentManager resolves and launches the Claude Code executable today
+(resolveClaudeExecutable, AgentManager.ts:110-136 — memoized path resolution
+with an app.asar → app.asar.unpacked rewrite for packaged builds). For Cursor
+the resolution order is: an explicit path from settings, then PATH lookup,
+then the default install location per platform. The spawn itself follows the
+repo's hard security contract (CLAUDE.md §6): argv arrays only, no shell:
+true, cwd validated to stay inside the session's effective execution root —
+which is resolved by the WorktreeManager (resolveSessionRoot), the exact same
+injected resolver AgentManager already consumes via setSessionRootResolver
+(src/main/index.ts:195). Limboo passes that root as --workspace so Cursor and
+Claude operate on the identical checkout (see section 12 on why Cursor's own
+worktree feature is deliberately NOT used). stdout/stderr are consumed as
+streams; the run is cancelled by killing the child process from the same
+AbortController path that stops Claude runs today (agentStop channel →
+abortController in buildOptions).
+
+Electron/Node APIs involved: child_process.spawn (argv-only, env with
+CURSOR_API_KEY injected, cwd = session root); readline.createInterface or a
+manual buffered line-splitter over child.stdout for NDJSON framing; AbortSignal
+/ child.kill() for stop; app.getAppPath / process.resourcesPath for
+packaged-path resolution parity with resolveClaudeExecutable; fs.promises
+.access for install detection; and the existing stderr redactor hook that
+buildOptions already wires for Claude.
+
+--------------------------------------------------------------------------------
+3. STRUCTURED OUTPUT — JSON AND STREAM-JSON (THE WIRE PROTOCOL)
+--------------------------------------------------------------------------------
+
+This is the feature that makes the adapter almost mechanical, because Cursor's
+streaming protocol is nearly isomorphic to the Claude Agent SDK's message
+stream that AgentManager already translates. With --print, the CLI supports
+three output formats via --output-format: "text" (final answer only, no
+progress — useful for utility one-shots), "json" (a single terminal object on
+success: { type: "result", subtype: "success", is_error, duration_ms,
+duration_api_ms, result: "<full assistant text>", session_id: "<uuid>",
+request_id }), and "stream-json", which emits newline-delimited JSON (NDJSON)
+events throughout execution. The stream-json event vocabulary, per the docs:
+a "system"/"init" event emitted once per session carrying apiKeySource
+("env" | "flag" | "login"), cwd, session_id, the model display name, and
+permissionMode; a "user" event echoing the prompt as role/content blocks;
+"assistant" events carrying message.content[] text blocks; "tool_call" events
+with subtype "started" and "completed", correlated by a call_id, whose
+tool_call payload is a TYPED union per tool (e.g. readToolCall with args
+{path} and a result.success carrying content/totalLines/totalChars, or
+writeToolCall whose result.success reports path/linesCreated/fileSize); and a
+terminal "result" event with the same shape as the json format. Adding
+--stream-partial-output (only valid with stream-json) upgrades assistant
+events to character-level deltas, with a documented disambiguation rule the
+adapter must implement: an assistant event with timestamp_ms present and
+model_call_id absent is a streaming delta (consume it); one with both present
+is a buffered flush before a tool call (skip it); one with both absent is the
+final flush at turn end (skip it). Every event carries the same session_id for
+the whole execution, each event is one line terminated by \n, thinking events
+are suppressed in print mode, and consumers are told to ignore unknown fields
+for forward compatibility.
+
+Where it plugs into Limboo: this maps line-for-line onto handleMessage
+(AgentManager.ts:1552-1643), the existing SDK-wire-format → AgentEvent
+translator. The CursorAdapter's translation table: "system"/"init" →
+remember the session_id as the resume token (the rememberSdkSession analogue,
+section 4) and emit the request-state event; assistant partial deltas →
+message-delta events, fed through the exact same delta coalescing constants
+(DELTA_FLUSH_CHARS/MS, AgentManager.ts:178-179) and the renderer's
+requestAnimationFrame delta batching in useAgentStore, which needs no change;
+"tool_call started" → tool-start with the tool name and risk classification
+(section 7); "tool_call completed" → tool-end, plus a file-change AgentEvent
+when the completed tool is a write/edit (the writeToolCall result even hands
+Limboo the exact path and size, feeding the Changes tab and File History the
+same way Claude's tool_result parsing does); "result" → the result event and
+run-outcome mapping in runWithRecovery. Because the renderer's entire event
+model (AgentEvent union, src/shared/types.ts:2001-2014) is already
+provider-neutral, the Composer conversation view, tool chips
+(AgentCommandBlock.tsx), activity timeline, and diff counts light up for
+Cursor runs with zero renderer changes — this is the concrete payoff of the
+adapter thesis.
+
+Electron/Node APIs involved: pure Node stream handling — readline over
+child.stdout with a JSON.parse per line inside a try/catch (tolerating
+unknown event types per the compatibility note), stderr accumulation for the
+non-JSON failure path, and the existing broadcastChannel(IpcEvents.agentEvent)
+fan-out (AgentManager.ts:2692-2703) which already delivers events to all
+BrowserWindows over webContents.send.
+
+--------------------------------------------------------------------------------
+4. SESSIONS AND RESUME
+--------------------------------------------------------------------------------
+
+Cursor's CLI has first-class session persistence that mirrors what Limboo
+already does for Claude SDK sessions. Every execution is a chat session
+identified by the uuid session_id present on every stream event. The CLI can
+list previous chats for selection (`agent ls`), resume the most recent
+conversation (`agent resume`, or the --continue flag), resume a specific
+conversation by id (--resume [chatId], documented as "load prior context"),
+and — most useful for an embedding host — pre-create an empty chat and get its
+id back before any prompt is sent (`create-chat`). That last subcommand means
+Limboo can mint a Cursor chat id at session-creation time and bind it to the
+Limboo session up front, rather than waiting to harvest the id from the first
+run's init event. In the TypeScript SDK the same concept appears as durable
+agent ids (`agent-<uuid>` locally) with Agent.resume(agentId) reattaching to
+existing state, backed by a pluggable on-disk store (section 13).
+
+Where it plugs into Limboo: Limboo already persists a per-session provider
+resume token — agent_session_meta.sdk_session_id, written by
+rememberSdkSession (AgentManager.ts:2436-2442) when the Claude SDK's
+system/init message arrives, read by loadSdkSession (:2192) and replayed as
+options.resume on the next run. The Cursor adapter stores its chat id (or SDK
+agentId) in the same table keyed by provider, harvested either from
+create-chat at session creation or from the stream-json init event, and
+replays it as --resume <chatId> / Agent.resume(). The corrupted-resume
+self-heal that exists for Claude (AgentManager.ts:1304-1323, which drops the
+stored SDK session on the known [ede_diagnostic] corruption signature and
+retries fresh) is provider-specific by nature: the Cursor adapter supplies its
+own "resume failed → forget token → retry fresh" classifier, which is exactly
+why error classification is an adapter method rather than shared code
+(section 17). Note the layering: Cursor resumes the CONVERSATION, while
+Limboo's own Resume Pipeline (ResumeManager + session_snapshots) reconciles
+REPOSITORY state — the two are complementary, and the <repository-delta>
+injection works for Cursor runs through the context mechanism in section 10.
+
+Electron/Node APIs involved: nothing new — the existing better-sqlite3
+agent_session_meta table (parameterized statements only, per the CLAUDE.md §6
+DB contract) plus one spawn of `create-chat` at session bind time.
+
+--------------------------------------------------------------------------------
+5. MODES — AGENT / PLAN / ASK
+--------------------------------------------------------------------------------
+
+Cursor's CLI ships three operational modes that align with Limboo's composer
+modes. Agent mode is the default full editing mode. Plan mode (--mode=plan,
+shorthand --plan, or /plan interactively) has the agent refine an approach
+before writing code. Ask mode (--mode=ask) explores and answers questions
+about the codebase without making edits — a read-only mode Claude Code does
+not expose as a first-class switch (Limboo currently approximates it by
+gating tools in canUseTool during plan runs). Interactively the modes rotate
+with Shift+Tab; programmatically they are per-run flags, and the TypeScript
+SDK exposes the same concept as mode: "agent" | "plan" on Agent.create and
+per-send overrides.
+
+Where it plugs into Limboo: Limboo's AgentMode ('plan' | 'implement') and the
+composer's SessionPermissionMode ('plan' | 'default' | 'acceptEdits') map
+cleanly: plan → --mode=plan, default/acceptEdits → agent mode with the
+permission posture from section 7 deciding how much is auto-approved. One real
+behavioral difference the adapter must absorb: Claude's plan capture is
+tool-shaped — AgentManager intercepts the SDK's ExitPlanMode tool call inside
+canUseTool (AgentManager.ts:2205-2214) to capture the plan text and interrupt
+the run. Cursor has no ExitPlanMode tool; in plan mode the plan IS the
+assistant's final output. So the CursorAdapter's plan capture reads the
+terminal result text of a plan-mode run and feeds it into the existing plan
+lifecycle (beginPlan / capturePlan / approvePlan / rejectPlan and the
+agent_plans table), after which "approve plan" starts an implement run exactly
+as it does for Claude. This is a capability-flag difference (planCaptureStyle:
+'tool' | 'result') in the adapter contract, not a UI difference — PlanPanel
+and the plan IPC channels are untouched. Cursor's ask mode is a bonus Limboo
+can surface later as a third composer mode without adapter changes, since it
+is just another mode string.
+
+Electron/Node APIs involved: none beyond the run-spec plumbing — mode is one
+argv flag / SDK option computed from the same send() parameters AgentManager
+already receives over the agentSend IPC channel.
+
+--------------------------------------------------------------------------------
+6. MODELS AND COMPOSER (DYNAMIC MODEL DISCOVERY)
+--------------------------------------------------------------------------------
+
+Cursor's runtime is model-pluralistic: --model <model> selects the model for a
+run, and the CLI can enumerate what the authenticated account may use via the
+`models` subcommand / --list-models. The flagship first-party family is
+Composer (composer-2 and successors, e.g. composer-2.5 in SDK examples) —
+Cursor's own frontier coding model, positioned as "frontier-level performance
+at a fraction of the cost" with token-based pricing (Composer 2 Standard
+launched at $0.50/M input and $2.50/M output tokens); account-permitting,
+frontier models from other providers are also selectable through the same
+flag (SDK examples show ids like "gpt-5.5"). The TypeScript SDK makes
+discovery a first-class API — Cursor.models.list() returns id, displayName,
+description, aliases, parameter definitions, and variants, and the docs'
+stated best practice is to discover models at startup rather than hard-coding
+ids. The Cloud Agents API mirrors this with GET /v1/models.
+
+Where it plugs into Limboo: today the model picker is driven by the hardcoded
+AGENT_MODELS array and providerForModel() in src/shared/constants.ts:10-19,
+which is exactly the dormant seam to extend: AGENT_MODELS grows entries with
+provider: 'cursor', providerForModel() routes by model id namespace, and —
+as a follow-up — the static list can be augmented at runtime by an adapter
+capability (listModels()) that shells out to `models --format json` or
+Cursor.models.list(), cached in the main process and exposed over a small IPC
+read. settings.agent.model already flows into buildOptions as a plain string,
+so per-provider model ids need no type changes; the Settings → Agent panel
+(AgentPanel.tsx) gains a provider section and the ProviderIcon component
+(currently only AnthropicMark) gains a Cursor glyph. This is also where the
+"what Cursor adds" value is most user-visible: a genuinely different model
+family (Composer) optimized for low-latency agentic coding, selectable
+per-session beside Claude models, with per-run token usage reporting (the
+SDK's TokenUsage / turn-ended events) available to surface in the timeline
+later.
+
+Electron/Node APIs involved: one spawn or SDK call for model listing (cached;
+never per-keystroke), the existing settings IPC for persistence, and nothing
+else — model choice is data, not infrastructure.
+
+--------------------------------------------------------------------------------
+7. THE PERMISSIONS SYSTEM (ALLOW/DENY RULES, --FORCE, AND HOW LIMBOO GATES IT)
+--------------------------------------------------------------------------------
+
+Cursor's CLI has a declarative, file-based permission system that is the
+inverse of Claude's callback-based one, and understanding the difference is
+the heart of the adapter's security design. Permissions live in a
+"permissions" object with "allow" and "deny" lists, read from a global file
+(~/.cursor/cli-config.json) and a project file (<project>/.cursor/cli.json);
+deny rules always supersede allow rules. The rule grammar is typed by
+capability: Shell(commandBase) gates shell commands by their first token with
+glob and command:args granularity (Shell(git), Shell(npm), Shell(curl:*));
+Read(pathOrGlob) and Write(pathOrGlob) gate file access by glob, with relative
+paths scoped to the workspace and absolute paths targeting external files
+(Read(src/**/*.ts)); WebFetch(domainOrPattern) gates network fetches by domain
+with subdomain wildcards; and Mcp(server:tool) gates MCP tools per server with
+wildcard support (Mcp(datadog:*)). In interactive use, anything not covered
+by a rule prompts the user to approve (y) or reject (n); in print mode there
+is no prompt, so behavior is: without --force changes are proposed but not
+applied, and with --force everything is allowed UNLESS explicitly denied —
+which means --force must only ever be issued together with a strict deny/allow
+rule set. This differs fundamentally from Claude's model, where the SDK calls
+back into the host (canUseTool) for every tool use and the host answers
+allow/deny interactively per call.
+
+Where it plugs into Limboo: Limboo's existing permission bridge — risk
+classification via READ_TOOLS/WRITE_TOOLS/COMMAND_TOOLS sets
+(AgentManager.ts:141-146), classifyTool, the settings-driven auto-approval
+(settings.agent.permissionMode: 'approve-edits' | 'approve-all' | 'auto',
+autoApproveReads), the interactive PermissionRequest broadcast over
+IpcEvents.agentPermissionRequest, and remembered choices — stays the single
+source of truth, and the adapter TRANSLATES the user's standing posture into
+Cursor's declarative format: at run start, the adapter materializes a
+session-scoped .cursor/cli.json inside the session worktree (written through
+the guarded FileSystemManager writer path so the workspace-boundary checks
+apply), containing a deny-first rule set derived from Limboo's policy —
+always-deny rules for the app-data guard (touchesAppData,
+AgentManager.ts:2236) and workspace escape, allow rules matching what the
+user's permissionMode would auto-approve (e.g. Read(**) when autoApproveReads,
+Write(**) only under acceptEdits/auto) — and only passes --force when the
+effective posture is the equivalent of Limboo's 'auto'. For the interactive
+per-call prompts that make Limboo's permission UI valuable, the declarative
+file is not enough; that is what hooks are for (section 8), which give the
+adapter a synchronous per-tool-call decision point that feeds the existing
+PermissionRequest / respondPermission flow (AgentManager.ts:797-824)
+unchanged. Cursor's proposed-not-applied default in print mode is actually a
+safety bonus: a Limboo plan-mode run simply omits --force and gets read-only
+behavior "for free", mirroring the plan-run read-only enforcement Claude gets
+from canUseTool (:2266-2269).
+
+Electron/Node APIs involved: fs writes for the generated per-session
+cli.json (atomic write via the existing fs/writer.ts path-guarded writer);
+JSON construction from the settings snapshot in the main process; no renderer
+involvement — the permission UI continues to receive the same
+PermissionRequest objects it receives today.
+
+--------------------------------------------------------------------------------
+8. HOOKS (THE OBSERVABILITY AND CONTROL PLANE)
+--------------------------------------------------------------------------------
+
+Hooks are Cursor's mechanism for observing, controlling, and extending the
+agent loop, and for an orchestration host they are the single most important
+Cursor feature after the stream protocol, because they give Limboo a
+synchronous veto over every dangerous action even though the agent runs as a
+separate process. Hooks are defined in hooks.json files with a documented
+precedence chain (enterprise MDM → team dashboard → project
+<root>/.cursor/hooks.json → user ~/.cursor/hooks.json); each hook is a
+spawned process that communicates JSON over stdio — input on stdin, decision
+on stdout — and runs before or after defined stages of the agent loop. The
+event catalog is extensive: sessionStart/sessionEnd (environment setup,
+context injection via an additional_context output, cleanup); preToolUse /
+postToolUse / postToolUseFailure (generic tool interception — preToolUse
+receives tool_name, tool_input, tool_use_id, cwd and can answer permission
+"allow" | "deny", rewrite the input via updated_input, and attach
+user/agent-facing messages; postToolUse can inject additional_context);
+beforeShellExecution / afterShellExecution (shell-specific control with the
+command text, cwd, and sandbox state; answers allow | deny | ask);
+beforeMCPExecution / afterMCPExecution (the same for MCP tools);
+beforeReadFile (sees the file content BEFORE it reaches the model — the
+documented use case is secret/PII redaction and blocking sensitive files);
+afterFileEdit (receives file_path plus the old_string/new_string edit list —
+the documented use case is running formatters and code accounting);
+beforeSubmitPrompt (prompt validation with a continue boolean); subagentStart
+/ subagentStop (Task-tool lifecycle with matchers by subagent type); stop
+(fires at loop completion and can return a followup_message to auto-continue,
+bounded by loop_limit, default 5); and preCompact (observation of context
+compaction). Per-script options include timeout, matcher (filter by tool
+type, command regex, or subagent type), loop_limit, and — critical for
+security hooks — failClosed: true, which blocks the action if the hook itself
+fails (default is fail-open). Exit code 2 is a hard block equivalent to
+permission "deny". There are also prompt-based hooks ({ type: "prompt" })
+where an LLM evaluates a natural-language condition and returns { ok, reason }
+— policy-as-prompt. Hook processes receive environment variables including
+CURSOR_PROJECT_DIR, CURSOR_VERSION, CURSOR_USER_EMAIL, and
+CURSOR_TRANSCRIPT_PATH, and hooks.json files are watched and hot-reloaded.
+Cloud agents support a documented subset (beforeShellExecution, beforeReadFile,
+afterFileEdit, pre/postToolUse and subagent/preCompact events; not
+sessionStart/End or beforeSubmitPrompt).
+
+Where it plugs into Limboo: hooks are how the adapter reconstructs Claude's
+canUseTool semantics on top of Cursor. The adapter ships a tiny bundled hook
+runner (a Node script installed with the app) and materializes a
+session-scoped .cursor/hooks.json in the worktree that registers it for
+preToolUse, beforeShellExecution, and beforeReadFile with failClosed: true.
+The runner forwards each hook input over a local IPC channel to the main
+process (a named pipe / unix domain socket created per run by the adapter),
+where the EXISTING permission machinery — classifyTool risk sets, plan-run
+read-only enforcement, path guard isInside(cwd, target)
+(AgentManager.ts:2272-2282), auto-approval settings, remembered choices, and
+finally the interactive PermissionRequest → renderer → respondPermission
+round-trip — produces the decision, which the runner writes to stdout as
+{ permission: "allow" | "deny" }. The result: the SAME permission dialogs,
+the SAME risk chips, and the SAME audit trail for both agents, with the
+decision logic living in exactly one place. Beyond gating, hooks feed Limboo's
+observability for free: afterFileEdit events land in the File History ring
+and the Changes tab alongside the FileSystemManager watcher's own signal;
+afterShellExecution provides command audit entries for the Activity Timeline;
+and sessionStart's additional_context output is a second injection point for
+the memory/search/resume context blocks (section 10). The stop hook's
+followup_message loop is deliberately NOT used — Limboo owns the conversation
+loop.
+
+Electron/Node APIs involved: net.createServer over a named pipe
+(\\.\pipe\limboo-<runId> on Windows) or unix socket for the hook-runner →
+main-process decision channel, with a per-run random token so only Limboo's
+own hook processes can connect; the bundled runner script resolved through
+the same asar-unpacked pathing as other bundled executables; fs atomic writes
+for the generated hooks.json (guarded writer); and the existing
+broadcastChannel permission-request path — no new renderer IPC at all.
+
+--------------------------------------------------------------------------------
+9. SANDBOX (OS-LEVEL EXECUTION CONTAINMENT)
+--------------------------------------------------------------------------------
+
+Cursor's CLI includes an OS-level sandbox for command execution, configured
+with the `sandbox` subcommand family (sandbox enable / disable / reset) and
+per-run with --sandbox <mode>. Individual commands can be executed inside the
+sandbox with `sandbox run <cmd>` taking explicit policy flags: --allow-paths
+(extra read/write paths), --readonly-paths, --blocked-patterns (path patterns
+to block), and --network (network access is off unless enabled). Disabling
+the sandbox falls back to "allowlist mode", i.e. the permission rules of
+section 7 remain the gate. The TypeScript SDK exposes the same as
+local.sandboxOptions.enabled on Agent.create. This is defense-in-depth that
+Claude Code does not currently give Limboo: Limboo's own guards (path checks
+in canUseTool, the FS writer's workspace-boundary/symlink guards) are
+app-level policy, while Cursor's sandbox is kernel-level containment of the
+spawned shell itself.
+
+Where it plugs into Limboo: the adapter enables the sandbox by default for
+Cursor runs and translates Limboo's boundaries into sandbox policy — allow
+the session's effective root (the WorktreeManager-resolved checkout) as a
+writable path, the attachment staging directory (userData/attachments/
+<sessionId>) as read-only (mirroring the attachment read carve-out that
+canUseTool implements for Claude at AgentManager.ts:2220-2231), block
+userData itself (the touchesAppData guard made kernel-enforced), and keep
+--network aligned with settings.agent.webSearch. A settings toggle under
+settings.agent (per-provider section) lets power users relax it. Nothing in
+the renderer changes; this is pure run-spec construction.
+
+Electron/Node APIs involved: none beyond argv construction — the sandbox is
+Cursor's own OS integration; Limboo just parameterizes it from app.getPath
+('userData') and the session-root resolver.
+
+--------------------------------------------------------------------------------
+10. RULES AND CONTEXT FILES (.cursor/rules, AGENTS.md — AND LIMBOO'S CONTEXT
+    INJECTION)
+--------------------------------------------------------------------------------
+
+The CLI agent supports the same rules system as the Cursor editor: rule files
+under .cursor/rules in the repository are loaded as standing instructions,
+and — very conveniently for Limboo — AGENTS.md and CLAUDE.md at the project
+root are automatically loaded and applied as rules. Interactively, @ selects
+files into context and /summarize compresses the conversation; rules can be
+generated with the generate-rule subcommand. This matters to Limboo because
+of how its three context producers work today: for Claude, AgentManager
+injects <project-memory> (MemoryManager.buildContextBlock), <project-context>
+(SearchManager), and <repository-delta> (ResumeManager) as a single
+systemPrompt append on the claude_code preset ({ type: 'preset', preset:
+'claude_code', append }, AgentManager.ts:2173-2175). Cursor has no equivalent
+"system prompt preset append" switch on the CLI, so the adapter needs a
+different injection vehicle — and Cursor offers two documented ones: a
+generated rules file, and prompt composition.
+
+Where it plugs into Limboo: the memory/search/resume managers and their
+budgeted block builders are untouched (they are provider-neutral platform
+services); only the LAST step — how the rendered blocks reach the model —
+becomes adapter-specific. The chosen mechanism for the Cursor adapter is a
+session-scoped generated rule: the adapter writes the composed context block
+to .cursor/rules/limboo-context.mdc (or an equivalently named generated file)
+in the session worktree immediately before each run, through the guarded FS
+writer, and deletes/rewrites it per run so it never goes stale — with prompt
+prepending (concatenating the block above the user's prompt text in the
+--print argument) as the fallback for one-shot utility runs where writing
+files is undesirable. Because Cursor auto-loads CLAUDE.md/AGENTS.md, Limboo
+repos that already carry a CLAUDE.md (like this one) get their operational
+guide honored by BOTH agents with zero work, which is a genuine "what Cursor
+adds" synergy: one repo contract, two runtimes. The sessionStart hook's
+additional_context output (section 8) is a third vehicle kept in reserve;
+rules were chosen because they survive multi-turn runs and are visible/
+auditable on disk.
+
+Electron/Node APIs involved: fs atomic write/delete through fs/writer.ts for
+the generated rule file (workspace-boundary guarded, .git-segment protected);
+string budget composition already implemented in the three managers; nothing
+else.
+
+--------------------------------------------------------------------------------
+11. MCP (MODEL CONTEXT PROTOCOL) SUPPORT
+--------------------------------------------------------------------------------
+
+Cursor's CLI and SDK are full MCP clients: MCP in the CLI uses the same
+configuration as the editor (mcp.json — project .cursor/mcp.json and user
+~/.cursor/mcp.json), any configured server works in both, and the CLI adds
+management subcommands (`mcp list` with status, `mcp list-tools <id>`,
+`mcp enable/disable <id>` for the local approved list, `mcp login <id>` for
+servers needing auth) plus --approve-mcps to auto-approve all configured
+servers in non-interactive runs. The TypeScript SDK accepts inline mcpServers
+configs (stdio with command/args/env/cwd, or http/sse with url/headers/auth)
+with a documented precedence of per-send inline > creation-time inline >
+project files > user files > dashboard; MCP tool calls are gated by the
+Mcp(server:tool) permission grammar (section 7) and the
+beforeMCPExecution/afterMCPExecution hooks (section 8).
+
+Where it plugs into Limboo: this is where Limboo's platform-service design
+pays off twice. Limboo already exposes its Memory System and Search Engine to
+Claude as in-process MCP servers (createMemoryMcpServer /
+createSearchMcpServer grafted into runOnce at AgentManager.ts:1469-1482, with
+the read-only limboo_search tools defined in search/searchTools.ts). Those
+are SDK-shaped in-process servers, so for Cursor the adapter exposes the same
+tool surface as a thin stdio MCP server: a small bundled Node entry point
+that speaks MCP over stdio and forwards to the same MemoryManager /
+SearchManager methods over the same local pipe used by the hook runner. The
+adapter materializes the session's .cursor/mcp.json pointing limboo_memory
+and limboo_search at that bundled command, passes --approve-mcps (their
+tools are already auto-allowed for Claude in canUseTool, :2247-2252 — same
+trust decision), and adds allow rules Mcp(limboo_memory:*) /
+Mcp(limboo_search:*). The result is the orchestration-platform property the
+user is after: BOTH agents query the SAME memory and the SAME repository
+index, so knowledge captured while Claude works is retrievable when Cursor
+works and vice versa — the platform services stay provider-independent, as
+CLAUDE.md §8 already specifies they must be.
+
+Electron/Node APIs involved: a bundled stdio MCP entry script (packaged
+asar-unpacked, spawned by cursor-agent itself, not by Limboo); the named-pipe
+bridge to the main process for actual data access (keeping better-sqlite3
+access in one process, avoiding multi-process WAL contention); fs writes for
+the generated mcp.json.
+
+--------------------------------------------------------------------------------
+12. GIT WORKTREES (CURSOR'S — AND WHY LIMBOO DOESN'T USE THEM)
+--------------------------------------------------------------------------------
+
+The Cursor CLI can self-manage isolation: -w / --worktree [name] runs the
+agent in a new git worktree under ~/.cursor/worktrees/<reponame>/<name>, with
+--worktree-base <branch> choosing the base and --skip-worktree-setup skipping
+setup scripts. This is a genuinely good feature for standalone CLI use — and
+the adapter must deliberately NOT use it. Limboo already has a first-class
+WorktreeManager (managers/worktree/WorktreeManager.ts) that provisions one
+isolated checkout per session under {userData}/worktrees, is the single
+resolver of a session's effective execution root, handles Windows-safe
+removal ordering, boot-time recovery, archive teardown, and the limboo.json
+ack-hash trust gate. Two systems creating worktrees for the same repo would
+double-manage checkouts, break the "single resolver" invariant that
+Agent/Terminal/Git/Search/FS managers all depend on, and scatter state into
+~/.cursor/worktrees where Limboo's recovery logic cannot see it.
+
+Where it plugs into Limboo: the rule is one line in the adapter contract —
+always pass --workspace <resolveSessionRoot(sessionId)> and never -w. Cursor
+then operates inside the SAME checkout that the Terminal Engine's PTYs, the
+Git Engine's status/diff, the FileSystemManager's watcher, and the Search
+indexer already target, so every downstream feature (Changes tab, checkpoints,
+diff viewer, services) observes Cursor's edits identically to Claude's. This
+section exists in the document precisely because it is the one Cursor feature
+whose correct integration is to switch it OFF.
+
+Electron/Node APIs involved: none — argv discipline only.
+
+--------------------------------------------------------------------------------
+13. THE @cursor/sdk TYPESCRIPT SDK (THE RECOMMENDED ADAPTER RUNTIME)
+--------------------------------------------------------------------------------
+
+In late April 2026 Cursor released a public-beta TypeScript SDK — npm install
+@cursor/sdk — that is the direct structural analogue of the
+@anthropic-ai/claude-agent-sdk Limboo already drives, and it is the
+recommended runtime for the CursorAdapter (with the CLI's stream-json as the
+fallback). The shape: Agent.create({ apiKey, model: { id: "composer-2" },
+local: { cwd } }) returns a durable agent handle; agent.send(message) returns
+a Run; and `for await (const event of run.stream())` yields normalized events
+— "system" (init), "user", "assistant" (text + tool_use blocks), "thinking",
+"tool_call" (call_id, name, status running|completed|error, args, result),
+"status", "task", "usage" (per-turn TokenUsage), and "request" (awaiting user
+input). For finer-grained UI streaming there is an onDelta callback receiving
+InteractionUpdate objects: text-delta, thinking-delta, tool-call-started /
+partial-tool-call / tool-call-completed, step-started/completed, token-delta,
+shell-output-delta, and turn-ended with full token usage (input/output/
+cacheRead/cacheWrite/reasoning). Runs support wait(), cancel(),
+conversation() (a structured per-turn transcript), and status listeners.
+Local agents persist through a pluggable LocalAgentStore (on-disk SQLite by
+default — requiring node:sqlite from Node 22.13+ — or a portable JSONL store,
+or a custom implementation of its four substores: agents, checkpoints, runs,
+runEvents), and Agent.resume(agentId) reattaches across invocations. Options
+cover mode ("agent" | "plan"), settingSources (which .cursor config layers
+load: project/user/team/plugins), sandboxOptions, mcpServers inline configs,
+named subagents (agents: { name: { description, prompt, model } }),
+customTools (host-defined tools exposed to the model as an MCP server — local
+runtime only), autoReview (a safety classifier over tool calls), and
+enableAgentRetries. Errors are TYPED classes — AuthenticationError,
+RateLimitError, ConfigurationError, AgentBusyError, NetworkError,
+AgentNotFoundError, UnsupportedRunOperationError — each with isRetryable,
+code, status, and requestId. Cursor.models.list() and Cursor.me() cover
+discovery and key introspection. The same SDK can also target cloud VMs
+(cloud: { repos, autoCreatePR }) and self-hosted workers with the identical
+send/stream surface. Packaging notes that matter to an Electron host: the SDK
+ships per-platform native binaries as @cursor/sdk-<os>-<arch> (sandboxing and
+ripgrep), pricing is token-based (Composer 2 at $0.50/M in, $2.50/M out at
+launch), and inline mcpServers/customTools are not persisted across
+Agent.resume() — the adapter must re-supply them each run.
+
+Where it plugs into Limboo: the SDK slots into the exact seams the Explore
+mapping identified. loadSdk()'s dynamic-ESM-import trick
+(AgentManager.ts:87-93) is reused verbatim for @cursor/sdk; buildOptions has
+a Cursor twin that maps the same run-spec (cwd from the session-root
+resolver, model, mode, resume agentId, abort via run.cancel(), attachments as
+SDKUserMessage images — the SDK accepts { text, images: [{ data, mimeType }] },
+matching the vision path Limboo built for Claude); handleMessage has a Cursor
+twin translating stream()/onDelta events into AgentEvent (onDelta's
+text-delta replaces Claude's stream_event text_delta, tool-call-started/
+completed replace tool_use/tool_result, turn-ended's usage becomes future
+token telemetry); the typed error classes REPLACE regex-based
+classifyAgentError (:236-258) for this provider — a strictly better
+classification story (AuthenticationError → the existing auth lifecycle,
+RateLimitError → the existing rate-limit banner and clearRateLimit flow,
+isRetryable → runWithRecovery's retry loop); customTools offers a cleaner
+in-process alternative to the stdio MCP bridge of section 11 for the local
+runtime (the adapter can register limboo_memory/limboo_search as customTools
+directly, no pipe needed — with the stdio server kept for CLI-mode parity);
+and the LocalAgentStore is pointed at a directory under userData so Cursor's
+conversation persistence lives beside limboo.db rather than in ~/.cursor.
+Two operational cautions, both with precedent in this repo: (1) Node-version
+coupling — the SDK's default SQLite store needs Node 22.13+, so verify
+Electron 42's Node satisfies it and otherwise select the JSONL store; (2) the
+native @cursor/sdk-<os>-<arch> binaries must be excluded from asar /
+unpacked exactly like the Claude SDK's bundled claude executable (the
+existing packaging memory: point executables at the app.asar.unpacked copy or
+the agent won't launch when packaged) and like node-pty's prebuilds in
+forge.config.ts.
+
+Electron/Node APIs involved: dynamic import() of the ESM SDK from the CJS
+main bundle; app.getPath('userData') for the agent store location;
+AbortController → run.cancel() wiring; the asar-unpack configuration in
+packaging (forge.config.ts / electron-builder files globs); and the same
+safeStorage-held CURSOR_API_KEY from section 1 passed as the apiKey option
+in-process (never through argv or a child env this time — an in-process SDK
+avoids even the env exposure).
+
+--------------------------------------------------------------------------------
+14. CLOUD AGENTS API (REMOTE BACKGROUND RUNS)
+--------------------------------------------------------------------------------
+
+Beyond local execution, Cursor operates a hosted runtime — Cloud Agents —
+with a public REST API (beta, all plans) that Limboo can integrate later as a
+"run this in the background, off my machine" tier that Claude Code has no
+first-party equivalent for. The shape, per the endpoint docs: POST /v1/agents
+launches an agent with prompt.text (plus optional prompt.images, model,
+repos[] to clone — up to 20 — and environment settings), returning a durable
+agent object and an initial run in status CREATING; each agent runs on a
+dedicated VM with strong sandboxing, a clone of the repo, and a configured dev
+environment, can push branches, and can auto-create PRs. Follow-ups are new
+runs on the same agent (POST /v1/agents/{id}/runs, reusing workspace state;
+409 agent_busy if one is active). Progress is streamed over Server-Sent
+Events (GET .../runs/{runId}/stream) with event types status, assistant,
+thinking, tool_call, interaction_update, heartbeat, result, error, done — and
+supports resumption via the Last-Event-ID header within a retention window.
+Runs can be cancelled; terminal runs report result text, durationMs, and
+pushed git.branches[] with optional prUrl. Agents expose artifacts (listed
+and downloaded via 15-minute presigned S3 URLs), aggregated token usage
+(GET .../usage), archive/unarchive/delete lifecycle, GET /v1/models, and
+GET /v1/repositories (GitHub repos accessible via Cursor's GitHub App —
+heavily rate-limited: 1/user/minute). Auth is the same crsr_ key as Basic
+(key as username) or Bearer. Webhooks for status changes are documented as
+"coming soon" on v1 (supported on the legacy v0). The @cursor/sdk drives the
+same runtime with the identical Agent/send/stream surface (cloud: { repos,
+autoCreatePR }), which is the reason to integrate cloud runs THROUGH the SDK
+rather than hand-rolling REST.
+
+Where it plugs into Limboo: this is future scope, deliberately out of the
+first adapter milestone, but the architecture slot is visible now: a cloud
+run is a session whose "effective execution root" is remote, so it bypasses
+the WorktreeManager/Terminal/FS layers and feeds ONLY the conversation
+surfaces (timeline, composer, plan panel) from the SSE/SDK stream, with
+results landing as a branch/PR that Limboo's existing Git Engine
+(fetch/pull, ahead-behind pill) then observes. It maps onto the same
+AgentEvent translation as sections 3/13 — the SSE event vocabulary is again
+near-isomorphic. The CLAUDE.md §6 contract for any outbound fetch applies in
+full: an SSRF allowlist (api.cursor.com only), no redirects to internal
+hosts, resolve-and-check before connecting, and key redaction in logs.
+Limboo stores no repo credentials for this — repo access is granted
+Cursor-side via their GitHub App.
+
+Electron/Node APIs involved: Electron net / global fetch in the main process
+for REST + SSE (with keep-alive and Last-Event-ID reconnect), safeStorage for
+the same API key, and Notification (the existing NotificationManager) for
+"cloud run finished" — nothing renderer-side beyond the events that already
+exist.
+
+--------------------------------------------------------------------------------
+15. ACP — THE AGENT CLIENT PROTOCOL (THE GENERALIZATION PATH)
+--------------------------------------------------------------------------------
+
+The Cursor CLI can run as `agent acp`: an Agent Client Protocol server
+speaking JSON-RPC 2.0 over stdio, messages newline-delimited per the ACP
+transport spec. ACP is the emerging open standard for "any coding agent in
+any IDE" — Zed and JetBrains both drive agents through it, and adapters exist
+that wrap Cursor, Claude, Codex, and Gemini behind the same protocol. For
+Limboo this is strategically important even if it is not the first
+integration route: an AcpAdapter implementing Limboo's AgentAdapter contract
+against ACP's session/prompt/tool-call RPCs would let Limboo attach ANY
+ACP-speaking agent — not just Cursor — with one adapter, which is the logical
+endgame of the Agent Adapter Architecture. The reason it is not the FIRST
+route for Cursor specifically: the native stream-json/SDK surfaces expose
+more of Cursor's own capabilities (permissions grammar, sandbox flags, hooks,
+create-chat, models listing) than the protocol's common denominator, and
+Limboo's permission bridge wants those specifics. The pragmatic sequence is:
+CursorAdapter first (SDK/CLI-native, sections 1-13), AcpAdapter later as the
+universal fallback for third-party agents.
+
+Where it plugs into Limboo: identical seam — an adapter implementation that
+spawns `cursor-agent acp` (or any other ACP server), speaks JSON-RPC over the
+child's stdio, and translates ACP session updates into AgentEvent. The
+permission mapping is actually cleaner here than the CLI's: ACP has
+first-class request/response permission RPCs that align with Limboo's
+PermissionRequest bridge directly.
+
+Electron/Node APIs involved: child_process.spawn plus a small JSON-RPC 2.0
+framing layer over stdio (newline-delimited, same line-splitter as section
+3); no network.
+
+--------------------------------------------------------------------------------
+16. SELF-HOSTED WORKERS, PLUGINS, AND THE WIDER PLATFORM APIs (BRIEF)
+--------------------------------------------------------------------------------
+
+Three more Cursor platform capabilities are worth recording for completeness,
+all lower priority for Limboo. First, self-hosted workers: `agent worker
+start` runs a private cloud worker on the user's own hardware/network
+(--worker-dir exposes workspace roots, --label / --pool / --pool-name manage
+pool assignment, --auth-token-file supplies its credential, and `worker
+debug` runs preflight diagnostics), and both the SDK (env: { type: "pool" |
+"machine", name }) and cloud API can target them — this gives enterprises the
+cloud-agent programming model with code that never leaves their network, and
+would let a future Limboo "background run" execute on a user-controlled box.
+Second, plugins: --plugin-dir loads local plugin directories into the CLI,
+and the workspaceOpen hook can return pluginPaths dynamically — an extension
+surface Limboo does not need initially but should not design against. Third,
+the wider REST APIs — Admin (team members, spend), Analytics (usage metrics,
+ETag-cached), AI Code Tracking (AI-attribution at commit level), and Bugbot
+(trigger reviews and fetch per-review analytics) — are enterprise/team-scoped
+observability endpoints; the natural eventual consumer in Limboo is the
+Activity/insights surface, not the agent loop. None of these affect the
+adapter contract; they ride on the same crsr_ key and the same SSRF-allowlisted
+fetch path as section 14.
+
+Where it plugs into Limboo / Electron APIs: same outbound-fetch contract as
+section 14 for the REST APIs; worker mode would reuse the section-13 SDK
+adapter with a different env target; no new process-boundary implications.
+
+--------------------------------------------------------------------------------
+17. THE ADAPTER CONTRACT — WHAT THE SEAMS DEMAND
+--------------------------------------------------------------------------------
+
+Distilling sections 1-16 against the verified codebase map, the AgentAdapter
+interface that AgentManager will depend on (selected per session by
+settings.agent.provider, injected through the same setter-injection pattern
+the composition root already uses at src/main/index.ts:156-197) must cover
+exactly the points where AgentManager is Claude-coupled today, and nothing
+more. Those seams are: (1) detect()/probeHealth — executable and auth
+presence detection without reading secrets (Claude: env vars + ~/.claude
+files at AgentManager.ts:694; Cursor: CURSOR_API_KEY / safeStorage-held key /
+`agent status`); (2) run(spec) → AsyncIterable<AdapterEvent> — start a run
+from the neutral run-spec (cwd, prompt, mode, model, resumeToken, attachment
+manifest + image blocks, injectedContext, abortSignal, maxTurns, thinking,
+webSearch) hiding SDK-vs-CLI differences (Claude: query() at :1454; Cursor:
+@cursor/sdk agent.send()/run.stream() or spawned stream-json); (3) options
+mapping — everything buildOptions does at :2131, per provider (system-prompt
+preset-append vs generated rules file; env flags; MCP wiring vs customTools;
+permissions posture vs generated cli.json + hooks); (4) stream translation —
+the provider's wire format into the frozen AgentEvent union (:1552 for
+Claude; section 3/13 tables for Cursor); (5) tool identity and permission
+gating — per-provider tool-name → ToolRisk mapping, plan-capture style
+('tool' via ExitPlanMode vs 'result' text), clarification support
+(AskUserQuestion has no Cursor equivalent — capability-flagged off), and the
+gate mechanism (canUseTool callback vs hooks-over-named-pipe); (6)
+resume-token get/set with provider-specific corruption recovery (:2192/:2436
+/:1304); (7) error classification — regex classifier for Claude, typed
+CursorSdkError subclasses for Cursor, both normalizing to the existing
+auth/rate-limit/context/transient categories that drive lifecycle and
+banners; (8) utility one-shots — the tool-less commit-message run
+(buildUtilityOptions :1138) becomes a capability (Cursor: --print
+--output-format text with a cheap Composer model). The configuration/UI
+touch list outside AgentManager is small and already located: widen
+AgentProvider and AGENT_MODELS and providerForModel() in
+src/shared/constants.ts:7-19, add a provider selector + per-provider
+connection block to AppSettings.agent (bump SETTINGS_VERSION), add a Cursor
+glyph to ProviderIcon.tsx, and de-Claude the copy in AgentPanel.tsx /
+Composer / PlanPanel strings. Explicitly unchanged: AgentEvent, AgentState,
+PermissionRequest, all agent IPC channels, the preload namespace,
+useAgentStore, and every downstream UI surface — the proof of the preamble's
+thesis.
+
+--------------------------------------------------------------------------------
+18. SOURCES
+--------------------------------------------------------------------------------
+
+Cursor official documentation and announcements (fetched July 2026):
+- Authentication (CLI):        https://cursor.com/docs/cli/reference/authentication
+- Using Agent in CLI:          https://cursor.com/docs/cli/using
+- CLI Parameters:              https://cursor.com/docs/cli/reference/parameters
+- Output Format (stream-json): https://cursor.com/docs/cli/reference/output-format
+- Headless CLI:                https://cursor.com/docs/cli/headless
+- Permissions (CLI):           https://cursor.com/docs/cli/reference/permissions
+- Hooks:                       https://cursor.com/docs/hooks
+- MCP (CLI):                   https://cursor.com/docs/cli/mcp
+- ACP:                         https://cursor.com/docs/cli/acp
+- Cursor APIs overview:        https://cursor.com/docs/api
+- Cloud Agents API endpoints:  https://cursor.com/docs/cloud-agent/api/endpoints
+- TypeScript SDK docs:         https://cursor.com/docs/sdk/typescript
+- TypeScript SDK announcement: https://cursor.com/blog/typescript-sdk
+
+Limboo codebase references verified against the working tree at the time of
+writing: src/main/managers/AgentManager.ts, src/shared/types.ts,
+src/shared/constants.ts, src/shared/ipc-channels.ts, src/preload/index.ts,
+src/renderer/stores/useAgentStore.ts, src/main/index.ts, and CLAUDE.md.
+================================================================================

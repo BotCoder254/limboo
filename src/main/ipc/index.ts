@@ -77,5 +77,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerResumeHandlers(deps.resume, deps.session);
   registerUpdateHandlers(deps.updates);
   registerVoiceHandlers(deps.voice, deps.voiceModels, deps.settings);
-  registerCursorHandlers(deps.cursorAuth);
+  registerCursorHandlers(deps.cursorAuth, () => deps.agent.hasActiveRuns());
 }

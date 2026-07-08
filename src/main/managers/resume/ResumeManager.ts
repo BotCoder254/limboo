@@ -175,6 +175,18 @@ export class ResumeManager {
   private readonly states = new Map<string, ResumeState>();
   private prevActiveId: string | null = null;
 
+  /**
+   * Monotonic revalidation generation per session. `Promise.race` cannot
+   * cancel the losing branch, so a timed-out `revalidateInner` keeps running —
+   * the generation lets it notice it lost (stop early, drop its state writes)
+   * instead of overwriting the degraded 'idle' phase minutes later.
+   */
+  private readonly revalGen = new Map<string, number>();
+
+  private isCurrentGen(sessionId: string, gen: number): boolean {
+    return this.revalGen.get(sessionId) === gen;
+  }
+
   getState(sessionId: string): ResumeState {
     return this.states.get(sessionId) ?? { sessionId, phase: 'idle' };
   }
@@ -346,21 +358,38 @@ export class ResumeManager {
   async revalidate(sessionId: string): Promise<void> {
     const cfg = this.settings.getAll().resume;
     if (!cfg.enabled) return;
+    const gen = (this.revalGen.get(sessionId) ?? 0) + 1;
+    this.revalGen.set(sessionId, gen);
+    const deadline = Date.now() + RESUME_LIMITS.revalidateTimeoutMs;
+    // The timer must be cleared when the race settles: an uncleared timer
+    // rejects an un-awaited promise later — an unhandled rejection on every
+    // SUCCESSFUL revalidation.
+    let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
-        this.revalidateInner(sessionId, cfg.maxCommitsInDelta, cfg.staleThresholdDays),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('revalidate timeout')), RESUME_LIMITS.revalidateTimeoutMs),
-        ),
+        this.revalidateInner(sessionId, gen, deadline, cfg.maxCommitsInDelta, cfg.staleThresholdDays),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('revalidate timeout')),
+            RESUME_LIMITS.revalidateTimeoutMs,
+          );
+        }),
       ]);
     } catch (err) {
       logger.warn('resume: revalidation degraded to no-delta', err);
+      // Invalidate the still-running inner (Promise.race cannot cancel it) so
+      // its late state writes are dropped instead of overwriting 'idle'.
+      if (this.revalGen.get(sessionId) === gen) this.revalGen.set(sessionId, gen + 1);
       this.setState({ sessionId, phase: 'idle' });
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
   private async revalidateInner(
     sessionId: string,
+    gen: number,
+    deadline: number,
     maxCommits: number,
     staleThresholdDays: number,
   ): Promise<void> {
@@ -401,6 +430,7 @@ export class ResumeManager {
         anchor,
         maxCommits,
       );
+      if (!this.isCurrentGen(sessionId, gen)) return; // lost the race — 'idle' already published
       delta.rootChanged = true;
       await this.publishDelta(sessionId, delta);
       await this.captureSnapshot(sessionId, 'revalidate');
@@ -408,6 +438,7 @@ export class ResumeManager {
     }
 
     const current = await this.readAnchor(root);
+    if (!this.isCurrentGen(sessionId, gen)) return;
 
     // Cheap short-circuit: nothing moved — the overwhelmingly common case.
     if (
@@ -441,6 +472,7 @@ export class ResumeManager {
       current,
       maxCommits,
     );
+    if (!this.isCurrentGen(sessionId, gen)) return;
 
     // A dirty-hash-only wobble with no visible change isn't worth surfacing.
     if (
@@ -454,7 +486,8 @@ export class ResumeManager {
       return;
     }
 
-    await this.enrichDelta(session.workspaceId, root, snap.head, delta);
+    await this.enrichDelta(session.workspaceId, root, snap.head, delta, deadline);
+    if (!this.isCurrentGen(sessionId, gen)) return;
     await this.publishDelta(sessionId, delta);
     // Refresh the anchor so the delta is one-shot: the next activation
     // short-circuits clean while the pending row waits for the first prompt.
@@ -466,15 +499,27 @@ export class ResumeManager {
    * importer counts for the changed source files. Best-effort — a failure or a
    * disabled search index leaves the delta unenriched. Bounded by the same
    * incremental cap the indexer uses, and only when search is enabled.
+   *
+   * Deadline-cooperative: this is the expensive tail of revalidation (a
+   * bounded reindex plus one `git show` per candidate file), so it checks the
+   * revalidation deadline between stages and per file, keeping whatever
+   * partial enrichment it produced — a partially enriched delta beats losing
+   * the whole delta to the timeout.
    */
   private async enrichDelta(
     workspaceId: string,
     root: string,
     snapHead: string | null,
     delta: RepoDelta,
+    deadline: number,
   ): Promise<void> {
     if (!this.search || !this.settings.getAll().search.enabled) return;
     if (delta.rootChanged) return; // no meaningful per-file diff across roots
+    // Leave headroom so publishing the (partially enriched) delta still fits
+    // inside the revalidation deadline.
+    const budget = deadline - 500;
+    const expired = () => Date.now() >= budget;
+    if (expired()) return;
     try {
       const changed = delta.files
         .filter((f) => f.status !== 'deleted' && INDEXABLE.test(f.path))
@@ -483,7 +528,8 @@ export class ResumeManager {
 
       // Reindex the changed set first (bounded like the watcher's incremental
       // pass) so importer counts and symbol-link checks see the current tree.
-      const canReindex = changed.length > 0 && changed.length <= FS_LIMITS.incrementalIndexMax;
+      const canReindex =
+        changed.length > 0 && changed.length <= FS_LIMITS.incrementalIndexMax && !expired();
       if (canReindex) await this.search.indexFiles(workspaceId, changed);
 
       // Memory revalidation: linked-file memories whose file vanished get their
@@ -520,6 +566,7 @@ export class ResumeManager {
         .filter((f) => INDEXABLE.test(f.path))
         .slice(0, RESUME_LIMITS.maxSymbolDeltaFiles);
       for (const file of candidates) {
+        if (expired()) break; // keep the symbols diffed so far
         const diff = await this.symbolDiffForFile(root, snapHead, file);
         if (diff) symbols.push(diff);
       }

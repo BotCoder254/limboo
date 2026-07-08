@@ -13,6 +13,7 @@
 import { z } from 'zod';
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import type { SearchHit } from '@shared/types';
+import { intArg, strArg, type PlainTool } from '../cursor/bridge/plainTool';
 import type { SearchManager } from './SearchManager';
 import type { WorkspaceManager } from '../WorkspaceManager';
 
@@ -30,6 +31,88 @@ function fmt(h: SearchHit): string {
   return `- [${h.kind}] ${h.title}${h.subtitle ? ` — ${h.subtitle}` : ''}`;
 }
 
+/** Shared `{ query, limit }` JSON Schema for the retrieval tools. */
+function querySchema(queryHint: string, limitHint: string): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: queryHint },
+      limit: { type: 'number', description: limitHint },
+    },
+    required: ['query'],
+  };
+}
+
+/**
+ * The `limboo_search` tool set as transport-neutral plain tools — the single
+ * handler implementation behind both the SDK-shaped server (Claude runs) and
+ * the stdio bridge dispatcher (Cursor runs). Read-only, workspace-scoped.
+ */
+export function searchPlainTools(search: SearchManager, workspace: WorkspaceManager): PlainTool[] {
+  const wsId = (): string | null => workspace.getActive()?.id ?? null;
+  return [
+    {
+      name: 'search_project',
+      description:
+        'Retrieve the files, symbols and documentation the local Search Engine ' +
+        'judges most relevant to a query, across the whole workspace. Use this ' +
+        'FIRST to decide what to open — then read the ranked results with your own ' +
+        'Read/Grep/Glob tools. Faster than blind exploration.',
+      inputSchema: querySchema(
+        'What to look for (keywords, a symbol name, a phrase).',
+        'Max hits per group (default 12).',
+      ),
+      run: (args) => {
+        const query = strArg(args.query);
+        if (!query) return 'A non-empty "query" is required.';
+        const groups = search.globalSearch(query, {
+          workspaceId: wsId(),
+          limit: intArg(args.limit, 1, 50, 12),
+        });
+        if (groups.length === 0) return `No matches for "${query}".`;
+        return groups.map((g) => `${g.label}:\n${g.hits.map(fmt).join('\n')}`).join('\n\n');
+      },
+    },
+    {
+      name: 'find_files',
+      description:
+        'Find workspace files by name, path fragment, or content. Returns ranked, ' +
+        'workspace-relative paths to open.',
+      inputSchema: querySchema(
+        'Filename, path fragment, or content keywords.',
+        'Max results (default 20).',
+      ),
+      run: (args) => {
+        const query = strArg(args.query);
+        if (!query) return 'A non-empty "query" is required.';
+        const hits = search.searchFiles(query, {
+          workspaceId: wsId(),
+          limit: intArg(args.limit, 1, 50, 20),
+        });
+        if (hits.length === 0) return `No files match "${query}".`;
+        return hits.map(fmt).join('\n');
+      },
+    },
+    {
+      name: 'find_symbols',
+      description:
+        'Find declarations (functions, classes, interfaces, types, …) by name across ' +
+        'the workspace. Returns path:line locations to jump to.',
+      inputSchema: querySchema('Symbol name or fragment.', 'Max results (default 20).'),
+      run: (args) => {
+        const query = strArg(args.query);
+        if (!query) return 'A non-empty "query" is required.';
+        const hits = search.searchSymbols(query, {
+          workspaceId: wsId(),
+          limit: intArg(args.limit, 1, 50, 20),
+        });
+        if (hits.length === 0) return `No symbols match "${query}".`;
+        return hits.map(fmt).join('\n');
+      },
+    },
+  ];
+}
+
 /**
  * Build the `limboo_search` MCP server exposing read-only retrieval tools to the
  * agent. Returns a server instance ready to drop into `Options.mcpServers`.
@@ -40,59 +123,16 @@ export function createSearchMcpServer(
   workspace: WorkspaceManager,
 ): McpSdkServerConfigWithInstance {
   const { createSdkMcpServer, tool } = sdk;
-  const wsId = (): string | null => workspace.getActive()?.id ?? null;
+  const zodArgs = {
+    query: z.string().min(1),
+    limit: z.number().int().min(1).max(50).optional(),
+  };
 
   return createSdkMcpServer({
     name: 'limboo_search',
     version: '1.0.0',
-    tools: [
-      tool(
-        'search_project',
-        'Retrieve the files, symbols and documentation the local Search Engine ' +
-          'judges most relevant to a query, across the whole workspace. Use this ' +
-          'FIRST to decide what to open — then read the ranked results with your own ' +
-          'Read/Grep/Glob tools. Faster than blind exploration.',
-        {
-          query: z.string().min(1).describe('What to look for (keywords, a symbol name, a phrase).'),
-          limit: z.number().int().min(1).max(50).optional().describe('Max hits per group (default 12).'),
-        },
-        async (args) => {
-          const groups = search.globalSearch(args.query, { workspaceId: wsId(), limit: args.limit ?? 12 });
-          if (groups.length === 0) return text(`No matches for "${args.query}".`);
-          const body = groups
-            .map((g) => `${g.label}:\n${g.hits.map(fmt).join('\n')}`)
-            .join('\n\n');
-          return text(body);
-        },
-      ),
-      tool(
-        'find_files',
-        'Find workspace files by name, path fragment, or content. Returns ranked, ' +
-          'workspace-relative paths to open.',
-        {
-          query: z.string().min(1).describe('Filename, path fragment, or content keywords.'),
-          limit: z.number().int().min(1).max(50).optional().describe('Max results (default 20).'),
-        },
-        async (args) => {
-          const hits = search.searchFiles(args.query, { workspaceId: wsId(), limit: args.limit ?? 20 });
-          if (hits.length === 0) return text(`No files match "${args.query}".`);
-          return text(hits.map(fmt).join('\n'));
-        },
-      ),
-      tool(
-        'find_symbols',
-        'Find declarations (functions, classes, interfaces, types, …) by name across ' +
-          'the workspace. Returns path:line locations to jump to.',
-        {
-          query: z.string().min(1).describe('Symbol name or fragment.'),
-          limit: z.number().int().min(1).max(50).optional().describe('Max results (default 20).'),
-        },
-        async (args) => {
-          const hits = search.searchSymbols(args.query, { workspaceId: wsId(), limit: args.limit ?? 20 });
-          if (hits.length === 0) return text(`No symbols match "${args.query}".`);
-          return text(hits.map(fmt).join('\n'));
-        },
-      ),
-    ],
+    tools: searchPlainTools(search, workspace).map((t) =>
+      tool(t.name, t.description, zodArgs, async (args) => text(t.run(args))),
+    ),
   });
 }

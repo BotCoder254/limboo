@@ -1,28 +1,32 @@
 /**
- * Cursor provider card — Settings › Agent › Providers. Authentication only
- * (the runtime adapter is a later phase): connect via the interactive
- * `cursor-agent login` flow (with a manual-browser mode for headless setups)
- * or a Cursor API key held safeStorage-encrypted in the main process.
+ * Cursor provider card — Settings › Agent › Providers. Authentication (the
+ * interactive `cursor-agent login` flow with a manual-browser mode, or a
+ * Cursor API key held safeStorage-encrypted in the main process) plus CLI
+ * maintenance: executable-path override, sandbox mode, and self-update.
  *
  * Security posture: this card never sees, caches, or renders a secret. The
  * key lives only in transient local input state (cleared on save/unmount) and
  * crosses IPC exactly once; everything rendered comes from the secret-free
- * {@link CursorAuthState}. URLs open only through the validated
- * `window.limboo.system.openExternal` path.
+ * {@link CursorAuthState}. URLs are the shared CURSOR_URLS constants and open
+ * only through the validated `window.limboo.system.openExternal` path.
  */
 import { useEffect, useState } from 'react';
+import { CURSOR_URLS } from '@shared/constants';
 import { Spinner } from '@/renderer/components/ui';
 import { cursorStatusMeta } from '@/renderer/features/agent/status';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useUIStore } from '@/renderer/stores/useUIStore';
-import { ActionButton, Field, SegmentedControl, StackedField, Toggle } from '../controls';
+import {
+  ActionButton,
+  Field,
+  SecretInput,
+  SegmentedControl,
+  StackedField,
+  TextInput,
+  Toggle,
+} from '../controls';
 import { ProviderStatusRow } from './ProviderCard';
-
-const DOCS_URL = 'https://cursor.com/docs/cli/overview';
-const DASHBOARD_URL = 'https://cursor.com/dashboard';
-/** API keys live under Dashboard → API Keys (docs: cursor.com/dashboard/api). */
-const API_KEYS_URL = 'https://cursor.com/dashboard/api';
 
 export function CursorProviderCard() {
   const auth = useAgentStore((s) => s.cursorAuth);
@@ -32,6 +36,8 @@ export function CursorProviderCard() {
   const logout = useAgentStore((s) => s.cursorLogout);
   const setApiKey = useAgentStore((s) => s.cursorSetApiKey);
   const removeApiKey = useAgentStore((s) => s.cursorRemoveApiKey);
+  const updating = useAgentStore((s) => s.cursorUpdating);
+  const updateCli = useAgentStore((s) => s.cursorUpdateCli);
   const cursorPrefs = useSettingsStore((s) => s.settings.agent.cursor);
   const update = useSettingsStore((s) => s.update);
   const addToast = useUIStore((s) => s.addToast);
@@ -40,6 +46,16 @@ export function CursorProviderCard() {
   const [keyDraft, setKeyDraft] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
   useEffect(() => () => setKeyDraft(''), []);
+
+  // Executable-path override: draft locally, commit on blur (main validates
+  // fail-closed, re-probes, and reports problems via the auth state's error).
+  const [pathDraft, setPathDraft] = useState(cursorPrefs.executablePath);
+  useEffect(() => setPathDraft(cursorPrefs.executablePath), [cursorPrefs.executablePath]);
+  const commitPath = () => {
+    const next = pathDraft.trim();
+    if (next === cursorPrefs.executablePath) return;
+    void update({ agent: { cursor: { executablePath: next } } });
+  };
 
   const openExternal = (url: string) => void window.limboo?.system?.openExternal?.(url);
   const meta = cursorStatusMeta(auth?.status ?? 'unknown');
@@ -91,7 +107,8 @@ export function CursorProviderCard() {
       {auth?.status === 'not-installed' && (
         <div className="flex items-center gap-1.5 px-2 py-1.5">
           <ActionButton label="Refresh" onClick={refresh} />
-          <ActionButton label="Install guide" onClick={() => openExternal(DOCS_URL)} />
+          <ActionButton label="Install guide" onClick={() => openExternal(CURSOR_URLS.install)} />
+          <ActionButton label="Docs" onClick={() => openExternal(CURSOR_URLS.docs)} />
         </div>
       )}
 
@@ -113,7 +130,9 @@ export function CursorProviderCard() {
           <ActionButton
             label="Open Dashboard"
             onClick={() =>
-              openExternal(auth.status === 'authenticated-api-key' ? API_KEYS_URL : DASHBOARD_URL)
+              openExternal(
+                auth.status === 'authenticated-api-key' ? CURSOR_URLS.apiKeys : CURSOR_URLS.dashboard,
+              )
             }
           />
         </div>
@@ -138,6 +157,66 @@ export function CursorProviderCard() {
               // Persist first, then re-classify — the probe reads the setting in main.
               void update({ agent: { cursor: { preferredAuth: v } } }).then(refresh)
             }
+          />
+        </Field>
+      )}
+
+      {/* CLI maintenance — version + self-update (refused during active runs). */}
+      {installed && (
+        <Field
+          id="cursorUpdateCli"
+          label="CLI version"
+          hint="Runs cursor-agent update. Refused while an agent run is active."
+        >
+          <span className="flex items-center gap-2 text-[11px] text-muted">
+            <span className="font-mono">{auth?.cliVersion ?? 'unknown'}</span>
+            {updating ? (
+              <span className="flex items-center gap-1.5">
+                <Spinner size={12} />
+                Updating…
+              </span>
+            ) : (
+              <ActionButton label="Update CLI" onClick={() => void updateCli()} />
+            )}
+          </span>
+        </Field>
+      )}
+
+      {/* Sandbox posture for runs — a literal-whitelisted --sandbox flag. */}
+      {installed && (
+        <Field
+          id="cursorSandbox"
+          label="Sandbox"
+          hint="Cursor's execution sandbox for runs. Auto leaves the CLI's default; Enabled/Disabled passes --sandbox explicitly."
+        >
+          <SegmentedControl
+            value={cursorPrefs.sandbox}
+            options={[
+              { value: 'auto', label: 'Auto' },
+              { value: 'enabled', label: 'Enabled' },
+              { value: 'disabled', label: 'Disabled' },
+            ]}
+            onChange={(v) => void update({ agent: { cursor: { sandbox: v } } })}
+          />
+        </Field>
+      )}
+
+      {/* Session hooks bridge — Limboo's per-tool permission prompts, registered
+          per run via a session-scoped hooks.json. Capability-gated: it can only
+          tighten (the deny-first rule file applies either way). */}
+      {installed && (
+        <Field
+          id="cursorHooks"
+          label="Permission hooks"
+          hint="Auto registers Limboo's interactive per-tool approval prompts for each run (applies when the CLI executes hooks; only ever tightens). Off skips registering them."
+        >
+          <SegmentedControl
+            value={cursorPrefs.hooks}
+            options={[
+              { value: 'auto', label: 'Auto' },
+              { value: 'off', label: 'Off' },
+            ]}
+            onChange={(v) => void update({ agent: { cursor: { hooks: v } } })}
           />
         </Field>
       )}
@@ -205,17 +284,16 @@ export function CursorProviderCard() {
           >
             {auth.encryptionAvailable ? (
               <div className="flex items-center gap-1.5">
-                <input
-                  type="password"
+                <SecretInput
                   value={keyDraft}
                   placeholder="Paste your Cursor API key"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(e) => setKeyDraft(e.target.value)}
-                  className="w-64 rounded-md border border-line bg-surface-2 px-2 py-1 text-[12px] text-fg placeholder:text-faint focus:border-line-strong focus:outline-none"
+                  onChange={setKeyDraft}
                 />
                 <ActionButton label="Save key" primary onClick={() => void saveKey()} />
-                <ActionButton label="Open Dashboard" onClick={() => openExternal(API_KEYS_URL)} />
+                <ActionButton
+                  label="Open Dashboard"
+                  onClick={() => openExternal(CURSOR_URLS.apiKeys)}
+                />
               </div>
             ) : (
               <span className="text-[11px] text-warning">
@@ -230,21 +308,29 @@ export function CursorProviderCard() {
       {/* Replace-key input (authenticated-api-key state). */}
       {auth?.status === 'authenticated-api-key' && showKeyInput && (
         <div className="flex items-center gap-1.5 px-2 py-1.5">
-          <input
-            type="password"
-            value={keyDraft}
-            placeholder="Paste the new API key"
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            className="w-64 rounded-md border border-line bg-surface-2 px-2 py-1 text-[12px] text-fg placeholder:text-faint focus:border-line-strong focus:outline-none"
-          />
+          <SecretInput value={keyDraft} placeholder="Paste the new API key" onChange={setKeyDraft} />
           <ActionButton label="Save key" primary onClick={() => void saveKey()} />
         </div>
       )}
 
+      {/* Executable override — always rendered: it IS the recovery path when
+          cursor-agent lives outside PATH / the default install dir. */}
+      <StackedField
+        id="cursorExecutablePath"
+        label="Executable path"
+        hint="Absolute path to cursor-agent — the binary, the install directory, or the .cmd shim (shims and directories resolve to the native node.exe layout). When set it is used exclusively (no PATH fallback); leave blank to auto-detect. Validation errors show in the status line above."
+      >
+        <TextInput
+          value={pathDraft}
+          placeholder="Auto-detect (PATH, %LOCALAPPDATA%\cursor-agent, ~/.local/bin)"
+          onChange={setPathDraft}
+          onBlur={commitPath}
+        />
+      </StackedField>
+
       <p className="px-2 text-[11px] text-faint">
-        Running Cursor agents arrives in a later update — connect your account now so it&apos;s ready.
+        Once connected, pick a Composer model under Model &amp; thinking to run Cursor as the coding
+        agent. Runs are propose-only until you approve their changes.
       </p>
     </div>
   );
