@@ -32,6 +32,8 @@ import { AutoUpdateManager } from './managers/AutoUpdateManager';
 import { VoiceManager } from './managers/voice/VoiceManager';
 import { VoiceModelManager } from './managers/voice/VoiceModelManager';
 import { AttachmentManager } from './managers/attachments/AttachmentManager';
+import { SecretStore } from './secrets/SecretStore';
+import { CursorAuthManager } from './managers/cursor/CursorAuthManager';
 import { getDb, closeDb } from './db/database';
 import { registerAllIpc } from './ipc';
 
@@ -92,6 +94,7 @@ function bootstrap(): void {
   let updates: AutoUpdateManager;
   let voiceModels: VoiceModelManager;
   let voice: VoiceManager;
+  let cursorAuth: CursorAuthManager;
   let memorySweepTimer: ReturnType<typeof setInterval> | undefined;
   const windowState = new WindowStateManager();
   const appMenu = new AppMenuManager();
@@ -114,6 +117,10 @@ function bootstrap(): void {
     workspace = new WorkspaceManager();
     sessions = new SessionManager();
     agent = new AgentManager(workspace, settings, notifications);
+    // Cursor provider — authentication only (Agent Adapter Architecture Phase 1).
+    // API keys live safeStorage-encrypted in the SecretStore; probing is lazy
+    // and classifies per the user's `agent.cursor.preferredAuth` setting.
+    cursorAuth = new CursorAuthManager(new SecretStore(), settings);
     fileSystem = new FileSystemManager(workspace);
     terminal = new TerminalManager(workspace, settings);
     git = new GitManager(workspace, settings);
@@ -224,6 +231,7 @@ function bootstrap(): void {
       updates,
       voice,
       voiceModels,
+      cursorAuth,
     });
     // Begin capability supervision (probe + heartbeat) once IPC is wired.
     agent.start();
@@ -323,6 +331,7 @@ function bootstrap(): void {
 
   app.on('before-quit', () => {
     agent?.cleanup();
+    cursorAuth?.dispose();
     void fileSystem?.dispose();
     proxy?.stop();
     services?.dispose();

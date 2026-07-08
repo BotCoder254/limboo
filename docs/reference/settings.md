@@ -10,7 +10,7 @@ Settings are stored at `settings.json` under the OS user-data directory, deep-me
 with defaults on load, clamped, and migrated when `SETTINGS_VERSION` changes. See
 [the Settings subsystem](../architecture/subsystems/settings.md).
 
-The current `SETTINGS_VERSION` is **11**.
+The current `SETTINGS_VERSION` is **13**.
 
 ## appearance
 
@@ -63,6 +63,12 @@ display toggles.
 `agent.terminal`: `shell` `''` (OS default), `fontSize` `13`, `cursorStyle` `block`,
 `cursorBlink` `true`, `scrollback` `5000`, `copyOnSelect` `false`, `confirmKill`
 `true`, `mirrorAgentCommands` `true`.
+
+`agent.cursor` (Cursor provider — authentication only): `preferredAuth` `auto`
+(one of `auto` / `api-key` / `cli-login`), `manualBrowserLogin` `false` (print the
+login URL instead of auto-opening a browser). **No secrets live here** — the
+optional Cursor API key is safeStorage-encrypted in a main-only file under
+`userData/secrets/`, never in `settings.json`. Bounds in `CURSOR_LIMITS`.
 
 ## git
 

@@ -1,8 +1,8 @@
 /**
- * Provider glyphs for the model pickers. Claude Code is served by Anthropic, so
- * today there is a single provider mark. Rendered as inline SVG using
- * `currentColor` so it always stays on-palette (no background, no gradient) per
- * the product's visual rules. Keyed by the `AgentProvider` union from constants.
+ * Provider glyphs for the model pickers and provider cards. Rendered as inline
+ * SVG using `currentColor` so they always stay on-palette (no background, no
+ * gradient) per the product's visual rules. Keyed by the `AgentProvider` union
+ * from constants.
  */
 import type { AgentProvider } from '@shared/constants';
 
@@ -26,6 +26,28 @@ export function AnthropicMark({ size = 14, className }: { size?: number; classNa
   );
 }
 
+/**
+ * The Cursor mark — the isometric cube, flattened to three `currentColor`
+ * faces at stepped opacities (flat fills, no gradient) so it inherits the
+ * surrounding token like every other glyph.
+ */
+export function CursorMark({ size = 14, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M12 2 21.5 7.25 12 12.5 2.5 7.25Z" />
+      <path fillOpacity="0.62" d="M2.5 7.25 12 12.5V23L2.5 17.75Z" />
+      <path fillOpacity="0.34" d="M21.5 7.25V17.75L12 23V12.5Z" />
+    </svg>
+  );
+}
+
 export function ProviderIcon({
   provider,
   size = 14,
@@ -36,6 +58,8 @@ export function ProviderIcon({
   className?: string;
 }) {
   switch (provider) {
+    case 'cursor':
+      return <CursorMark size={size} className={className} />;
     case 'anthropic':
     default:
       return <AnthropicMark size={size} className={className} />;

@@ -23,6 +23,7 @@ import type {
   ClarificationDecision,
   ClarificationRequest,
   CommandId,
+  CursorAuthState,
   DeepPartial,
   FileHistoryEntry,
   FileReadResult,
@@ -291,6 +292,25 @@ const agentApi = {
     subscribe<PermissionRequest>(IpcEvents.agentPermissionRequest, cb),
   onClarificationRequest: (cb: (request: ClarificationRequest) => void): (() => void) =>
     subscribe<ClarificationRequest>(IpcEvents.agentClarificationRequest, cb),
+  /**
+   * Cursor provider authentication (capability-based — the API key crosses
+   * exactly once via setApiKey and is never returned by any method).
+   */
+  cursor: {
+    getAuthState: (): Promise<CursorAuthState> =>
+      ipcRenderer.invoke(IpcChannels.agentCursorGetAuthState),
+    refreshAuth: (): Promise<CursorAuthState> =>
+      ipcRenderer.invoke(IpcChannels.agentCursorRefreshAuth),
+    loginStart: (manual?: boolean): Promise<void> =>
+      ipcRenderer.invoke(IpcChannels.agentCursorLoginStart, manual === true),
+    loginCancel: (): Promise<void> => ipcRenderer.invoke(IpcChannels.agentCursorLoginCancel),
+    logout: (): Promise<void> => ipcRenderer.invoke(IpcChannels.agentCursorLogout),
+    setApiKey: (key: string): Promise<void> =>
+      ipcRenderer.invoke(IpcChannels.agentCursorSetApiKey, key),
+    removeApiKey: (): Promise<void> => ipcRenderer.invoke(IpcChannels.agentCursorRemoveApiKey),
+    onAuthChanged: (cb: (state: CursorAuthState) => void): (() => void) =>
+      subscribe<CursorAuthState>(IpcEvents.agentCursorAuthChanged, cb),
+  },
 };
 
 const fsApi = {

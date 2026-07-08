@@ -1,10 +1,15 @@
 import type { AppSettings, WorkspaceConfig } from './types';
 
 /** Bumped whenever the {@link AppSettings} shape changes incompatibly. */
-export const SETTINGS_VERSION = 12;
+export const SETTINGS_VERSION = 13;
 
-/** The agent providers Limboo can show a glyph for (Claude Code = Anthropic). */
-export type AgentProvider = 'anthropic';
+/**
+ * The agent providers Limboo can show a glyph for (Claude Code = Anthropic,
+ * Cursor = the cursor-agent CLI). Cursor is authentication-only for now — it
+ * has no {@link AGENT_MODELS} entries, so it can never be selected as the
+ * running agent until its runtime adapter lands.
+ */
+export type AgentProvider = 'anthropic' | 'cursor';
 
 /** Selectable Claude models for the agent (id + short label + provider). */
 export const AGENT_MODELS = [
@@ -42,6 +47,27 @@ export const AGENT_CONNECTION_LIMITS = {
   maxRecoveryAttempts: { min: 0, max: 10, default: 3 },
   heartbeatFailureThreshold: { min: 1, max: 10, default: 2 },
   idleTimeout: { min: 0, max: 1_800_000, default: 300_000 },
+} as const;
+
+/**
+ * Bounds + caps for the Cursor provider (authentication only). All
+ * `cursor-agent` invocations are argv-only and bounded by these caps; the API
+ * key is validated leniently (the `crsr_` prefix is not contractual).
+ */
+export const CURSOR_LIMITS = {
+  /** Accepted API-key length range (lenient — format not guaranteed by docs). */
+  apiKeyMin: 8,
+  apiKeyMax: 512,
+  /** Deadline for a `cursor-agent status --format json` probe. */
+  statusTimeoutMs: 10_000,
+  /** Deadline for the `cursor-agent --version` / PATH resolution probe. */
+  versionTimeoutMs: 5_000,
+  /** A stuck interactive `cursor-agent login` child is killed after this. */
+  loginTimeoutMs: 300_000,
+  /** Cap on captured CLI stdout/stderr (bytes). */
+  outputMax: 64 * 1024,
+  /** Cap on the manual-login URL captured from the CLI's stdout. */
+  loginUrlMax: 2_048,
 } as const;
 
 /** Hard limits the renderer and main process both clamp against. */
@@ -394,6 +420,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
       copyOnSelect: false,
       confirmKill: true,
       mirrorAgentCommands: true,
+    },
+    cursor: {
+      preferredAuth: 'auto',
+      manualBrowserLogin: false,
     },
   },
   git: {

@@ -85,6 +85,16 @@ export const IpcChannels = {
   agentClearRateLimit: 'agent:clearRateLimit',
   agentRetryAuth: 'agent:retryAuth',
 
+  // Cursor provider — authentication only (no run capability yet). The API
+  // key crosses exactly once (set) and is never returned by any channel.
+  agentCursorGetAuthState: 'agent:cursorGetAuthState',
+  agentCursorRefreshAuth: 'agent:cursorRefreshAuth',
+  agentCursorLoginStart: 'agent:cursorLoginStart',
+  agentCursorLoginCancel: 'agent:cursorLoginCancel',
+  agentCursorLogout: 'agent:cursorLogout',
+  agentCursorSetApiKey: 'agent:cursorSetApiKey',
+  agentCursorRemoveApiKey: 'agent:cursorRemoveApiKey',
+
   // Plan Mode — review-first workflow over the coding agent.
   agentGetPlan: 'agent:getPlan',
   agentApprovePlan: 'agent:approvePlan',
@@ -243,6 +253,8 @@ export const IpcEvents = {
   sessionActiveChanged: 'session:active-changed',
   /** The agent runtime state changed (status / install / active session). */
   agentStateChanged: 'agent:state-changed',
+  /** The Cursor provider's auth state changed (probe / login / key set). */
+  agentCursorAuthChanged: 'agent:cursor-auth-changed',
   /** A structured agent event (message delta, tool call, file change, …). */
   agentEvent: 'agent:event',
   /** The agent needs the user to approve or deny a tool call. */

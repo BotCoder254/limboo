@@ -83,9 +83,11 @@ export interface AppSettings {
     notifications: boolean;
   };
   /**
-   * Coding-agent (Claude Code) orchestration preferences. Limboo never stores
-   * Anthropic credentials — Claude Code owns authentication. These knobs only
-   * shape how the local agent process is driven.
+   * Coding-agent orchestration preferences. Limboo never stores Anthropic
+   * credentials — Claude Code owns its own authentication. An optional Cursor
+   * API key is held encrypted via Electron `safeStorage` in a main-process-only
+   * file under `userData/secrets/` — never in this settings file, never sent to
+   * the renderer. These knobs only shape how the local agent process is driven.
    */
   agent: {
     /** Anthropic model id passed to the Claude Code runtime. */
@@ -194,6 +196,16 @@ export interface AppSettings {
       confirmKill: boolean;
       /** Mirror agent-run shell commands into the integrated terminal. */
       mirrorAgentCommands: boolean;
+    };
+    /**
+     * Cursor provider preferences (authentication only). No secrets live here —
+     * the API key is safeStorage-encrypted in a main-only file.
+     */
+    cursor: {
+      /** Which auth path the health probe prefers when both are available. */
+      preferredAuth: 'auto' | 'api-key' | 'cli-login';
+      /** Print the login URL instead of auto-opening a browser (NO_OPEN_BROWSER). */
+      manualBrowserLogin: boolean;
     };
   };
   /**
@@ -1692,6 +1704,67 @@ export interface AgentState {
     lastOkAt: number | null;
     consecutiveFailures: number;
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Cursor provider — authentication only (no run capability yet)       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Classification of the local Cursor CLI / credential state. Computed entirely
+ * from local signals (PATH resolution, credential *presence*, and
+ * `cursor-agent status --format json`) — no network probes, and the secret
+ * itself is never read for classification.
+ */
+export type CursorAuthStatus =
+  | 'unknown' // never probed yet
+  | 'not-installed' // cursor-agent not found on PATH
+  | 'not-authenticated' // CLI present, no login and no API key
+  | 'authenticated-cli' // the CLI reports a signed-in Cursor account
+  | 'authenticated-api-key'; // a CURSOR_API_KEY is configured (env or encrypted)
+
+/** Phase of an in-flight interactive `cursor-agent login` child. */
+export type CursorLoginPhase =
+  | 'idle'
+  | 'launching' // spawn issued, no signal yet
+  | 'waiting-browser' // CLI opened the user's browser; awaiting completion
+  | 'waiting-manual-url' // NO_OPEN_BROWSER mode; URL captured for the UI
+  | 'verifying' // login child exited; re-probing auth state
+  | 'failed';
+
+/**
+ * The Cursor provider's auth state, broadcast to every window on change.
+ * NEVER carries the API key or any credential material — only presence
+ * booleans, whitelisted account scalars, and redacted diagnostics.
+ */
+export interface CursorAuthState {
+  status: CursorAuthStatus;
+  /** `cursor-agent --version` output, when resolvable. */
+  cliVersion?: string;
+  /** Whitelisted scalars from `status --format json` (never the raw payload). */
+  account?: { email?: string; name?: string };
+  /** API-key presence metadata — the key itself never leaves the main process. */
+  apiKey: {
+    configured: boolean;
+    /** Where the key comes from: the process env or the encrypted SecretStore. */
+    source?: 'env' | 'encrypted';
+    /** Epoch ms the encrypted key was last written (SecretStore metadata). */
+    updatedAt?: number;
+  };
+  /** Interactive login progress (single-flight). */
+  login: {
+    phase: CursorLoginPhase;
+    /** Validated https login URL captured in manual-browser mode. */
+    url?: string;
+    /** Short redacted reason when phase === 'failed'. */
+    error?: string;
+  };
+  /** Whether Electron safeStorage encryption is available on this OS. */
+  encryptionAvailable: boolean;
+  /** Epoch ms of the last completed probe. */
+  lastCheckedAt?: number;
+  /** Human-readable diagnostic from the last probe (already redacted). */
+  error?: string;
 }
 
 /** Severity for a diagnostics console line. */

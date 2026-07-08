@@ -90,6 +90,13 @@ Coding-agent orchestration and the structured event stream.
   `retryAuth()`, `respondPermission(decision)`
 - `onStateChanged(cb)`, `onEvent(cb)`, `onPermissionRequest(cb)` — subscriptions.
   `onEvent` is the unified streaming timeline; see [Data flow](../architecture/data-flow.md).
+- `cursor.*` — Cursor provider authentication (auth only; no run capability yet).
+  Capability-based: no method ever returns a credential; the API key crosses IPC
+  exactly once via `setApiKey` and is safeStorage-encrypted in the main process.
+  - `cursor.getAuthState() -> CursorAuthState`, `cursor.refreshAuth() -> CursorAuthState`
+  - `cursor.loginStart(manual?)`, `cursor.loginCancel()`, `cursor.logout()`
+  - `cursor.setApiKey(key)`, `cursor.removeApiKey()`
+  - `cursor.onAuthChanged(cb)` — subscription.
 
 ## fs
 
