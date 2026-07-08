@@ -96,7 +96,8 @@ limboo/
     │   ├── paths.ts           #   assetPath() resolver
     │   ├── sendCommand.ts     #   native menu/tray → renderer command bridge
     │   ├── window/            #   createWindow.ts (frameless, sandbox, icon) + windowState.ts
-    │   ├── managers/          #   Settings, Notification, AppMenu, Tray managers
+    │   ├── managers/          #   Settings, Notification, AppMenu, Tray managers (+ cursor/ auth)
+    │   ├── secrets/           #   SecretStore.ts — safeStorage-encrypted secrets under userData/secrets/
     │   └── ipc/               #   registry.ts (handle wrapper) + *Handlers + registerAllIpc()
     ├── preload/
     │   └── index.ts           # the ONLY bridge — exposes window.limboo.{window,settings,system,app,events}
@@ -406,7 +407,12 @@ version is just a dev/baseline placeholder. To release: `git tag vX.Y.Z && git p
     internal hosts. Resolve+check the target before connecting.
   - **Secrets / API keys**: encrypt with Electron `safeStorage`, never plaintext
     files; **redact secrets/tokens** before they reach
-    [`logger.ts`](src/main/logger.ts).
+    [`logger.ts`](src/main/logger.ts). This is now implemented:
+    [`src/main/secrets/SecretStore.ts`](src/main/secrets/SecretStore.ts) is the
+    safeStorage-backed store (opaque files under `userData/secrets/`, decrypt
+    only at spawn time, names-only logging) — new secrets go through it, and
+    `logger.ts` + `AgentManager.redact` already strip `crsr_` / `CURSOR_API_KEY`
+    material.
   - **Terminal / Git engines**: spawn with **no `shell: true`** — pass argv arrays
     (`spawn(cmd, [args])`); validate every `cwd`/path stays inside the session
     repo (path-traversal guard) before touching the filesystem.
@@ -656,7 +662,91 @@ boot revalidation chains after `worktrees.recover().finally(retarget)`).
   gated to the active session) + `resume:state-changed`. Settings under the **Memory
   & Search** category (`settings.resume`, bounds in `RESUME_LIMITS`).
 
-**Still open / future** — Repository clone/track UI, a dedicated Permission System
+### Agent Adapter Architecture (multi-agent: Claude + Cursor) — IN PROGRESS
+
+**Build-order item (1), Authentication, is BUILT; the rest is planned.** Limboo
+is evolving from "a Claude integration" into a
+multi-agent orchestration platform via an **Agent Adapter Architecture**: a thin
+translation layer per agent runtime, with **nothing above the adapters changing**.
+The UI never knows which agent is running — it only knows "the current session has
+an active coding agent". Full research/design doc:
+[`docs/agents/cursor-integration.txt`](docs/agents/cursor-integration.txt).
+
+- **The seam is already narrow.** Claude coupling is concentrated in
+  `AgentManager.ts`; the `AgentEvent`/`AgentState`/`PermissionRequest` types, all
+  agent IPC channels, the preload namespace, `useAgentStore`, and the
+  Composer/permission/plan/timeline UI are provider-neutral and stay frozen. The
+  planned `AgentAdapter` interface covers exactly: executable/auth detection
+  (`probeHealth`), run invocation (`run(spec) → AsyncIterable<AdapterEvent>`),
+  per-provider options mapping (`buildOptions`), wire-format → `AgentEvent`
+  translation (`handleMessage`), tool-identity/permission gating (`makeCanUseTool`
+  tool-name sets, plan-capture style), resume-token get/set
+  (`agent_session_meta`), error classification (`classifyAgentError`), and
+  utility one-shots (`buildUtilityOptions`).
+- **BUILT — build-order item (1), Authentication.** The Cursor auth layer is
+  live (auth only — Cursor still cannot *run*; `AGENT_MODELS` deliberately has
+  no Cursor entries, so it is structurally unselectable as the running agent):
+  - `src/main/managers/cursor/CursorAuthManager.ts` — lazy, fully local
+    classification (`not-installed` / `not-authenticated` / `authenticated-cli`
+    / `authenticated-api-key`) honoring `settings.agent.cursor.preferredAuth`
+    (`auto` = key wins; `api-key` = a stored CLI login never classifies;
+    `cli-login` = a stored key is kept but ignored), single-flight
+    `cursor-agent login` child (timeout-killed, `dispose()` on quit),
+    manual-browser mode (`NO_OPEN_BROWSER=1`; the captured login URL must be
+    https, credential-free, AND on a Cursor-owned host — `cursor.com` /
+    `cursor.sh` or subdomain, dot-boundary match), `logout` (also clears stale
+    login state), API-key set/remove, and `getSpawnEnv()` (the only sanctioned
+    decrypt site; Phase 2's runtime hook — returns `{}` under `cli-login`).
+    Broadcasts secret-free `CursorAuthState` on `agent:cursor-auth-changed`.
+  - `src/main/managers/cursor/exec.ts` — argv-only runner (runGit idiom):
+    PATH probe + Windows `where.exe` fallback + `~/.local/bin/{cursor-agent,agent}`
+    install-dir probe (plain `agent` is never PATH-searched — collision risk);
+    `.cmd` shims run via `%ComSpec%` only with static-whitelisted literal args;
+    bounded output; `redactCursor()`.
+  - `src/main/secrets/SecretStore.ts` — the safeStorage secret store (§6).
+  - IPC: 7 `agent:cursor*` channels (`src/main/ipc/cursorHandlers.ts`, all via
+    `handle()`; key validated + never echoed), preload `agent.cursor.*`
+    namespace, `useAgentStore.cursorAuth` + actions.
+  - UI: `CursorProviderCard` under Settings › Agent › **Providers**, sharing
+    the provider layout with the Claude row via `ProviderStatusRow`
+    (`panels/ProviderCard.tsx`) — status renders as a lucide **icon + label**
+    pill (`cursorStatusMeta`/`lifecycleMeta.icon` in `features/agent/status.ts`;
+    e.g. Download + "Install CLI", never bare "Not installed" text). Shared
+    `ActionButton` lives in `settings/controls.tsx`; a `SegmentedControl`
+    exposes `preferredAuth`. `CursorMark` in `ProviderIcon.tsx`, catalog search
+    fields. Settings: `agent.cursor` (`preferredAuth`, `manualBrowserLogin`),
+    `SETTINGS_VERSION` 13, bounds in `CURSOR_LIMITS`. The
+    **Connection & reliability** section (`agent.connection`) is provider-neutral
+    and shared by every provider.
+- **Cursor adapter, remaining build order:** (1) ~~Authentication~~ (BUILT,
+  above). (2) **Runtime** —
+  `@cursor/sdk` local runtime preferred (typed errors, `run.stream()`/`onDelta`,
+  `Agent.resume`, store under `userData`; native `@cursor/sdk-<os>-<arch>`
+  binaries need the same asar-unpack treatment as the Claude SDK executable);
+  fallback: spawn `cursor-agent --print --output-format stream-json
+  --stream-partial-output` and translate the NDJSON events. (3) **Permissions** —
+  translate Limboo's posture into a session-scoped `.cursor/cli.json`
+  (deny-first) + hooks (`preToolUse`/`beforeShellExecution`/`beforeReadFile`,
+  `failClosed`) bridged over a named pipe into the existing `PermissionRequest`
+  flow; `--force` only for the `auto` posture; Cursor sandbox on by default.
+  (4) **Context injection** — memory/search/resume blocks land via a generated
+  session-scoped rules file (Cursor auto-loads `AGENTS.md`/`CLAUDE.md`; no
+  system-prompt preset-append exists). (5) **MCP reuse** — expose
+  `limboo_memory`/`limboo_search` to Cursor (stdio bridge or SDK `customTools`)
+  so both agents share the same platform services. (6) **Worktrees** — always
+  pass `--workspace <resolveSessionRoot(...)>`, never Cursor's `-w` (Limboo's
+  WorktreeManager stays the single root resolver).
+- **Config surface (remaining):** `AgentProvider` is already widened and the
+  Cursor glyph exists; still to do when the runtime lands — add Cursor entries
+  to `AGENT_MODELS`/`providerForModel()` (the deliberate "unselectable" guard),
+  a provider selector for the running agent, and de-Claude the copy in
+  Composer/Plan strings.
+- **Later:** Cursor Cloud Agents (SSE-streamed remote runs; SSRF-allowlisted
+  fetch per §6) and an **ACP adapter** (`agent acp`, JSON-RPC over stdio) as the
+  universal route to any ACP-speaking agent.
+
+**Still open / future** — the Agent Adapter Architecture above (Cursor as the
+second first-class agent), repository clone/track UI, a dedicated Permission System
 beyond the agent's `canUseTool`, merge-conflict resolution UI, remote management, and
 stash. Local vector embeddings on top of BM25 (both Memory and Search rankings are
 already fusion-ready) and recording File Writer mutations into the session activity

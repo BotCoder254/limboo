@@ -12,6 +12,8 @@ import { useSettingsStore } from '@/renderer/stores/useSettingsStore';
 import { useAgentStore } from '@/renderer/stores/useAgentStore';
 import { lifecycleMeta } from '@/renderer/features/agent/status';
 import { Field, Section, Select, SegmentedControl, StackedField, Toggle } from '../controls';
+import { ProviderStatusRow } from './ProviderCard';
+import { CursorProviderCard } from './CursorProviderCard';
 
 export function AgentPanel() {
   const agent = useSettingsStore((s) => s.settings.agent);
@@ -30,26 +32,20 @@ export function AgentPanel() {
   return (
     <div className="flex flex-col gap-5">
       <Section
-        title="Coding agent"
-        hint="Limboo orchestrates the local Claude Code process and reuses its existing authentication — your API keys never pass through this app."
+        title="Providers"
+        hint="The coding agents Limboo can orchestrate. Claude Code reuses its own local login; Cursor connects via CLI sign-in or an encrypted API key — Anthropic keys never pass through this app."
       >
-        <div className="flex items-center gap-3 rounded-md border border-line bg-surface-2 px-3 py-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-elevated text-muted">
-            <ProviderIcon provider="anthropic" size={18} className="text-muted" />
-          </span>
-          <div className="flex min-w-0 flex-col">
-            <span className="text-[13px] text-fg">Claude Code</span>
-            <span className="text-[11px] text-faint">
-              {install.installed
-                ? 'Connected — reusing your local Claude Code login.'
-                : install.error ?? 'Not connected.'}
-            </span>
-          </div>
-          <span className="ml-auto flex items-center gap-1.5 rounded-full bg-elevated px-2 py-0.5 text-[10px] text-muted">
-            <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} />
-            {meta.label}
-          </span>
-        </div>
+        <ProviderStatusRow
+          provider="anthropic"
+          name="Claude Code"
+          statusLine={
+            install.installed
+              ? 'Connected — reusing your local Claude Code login.'
+              : install.error ?? 'Not connected.'
+          }
+          meta={meta}
+        />
+        <CursorProviderCard />
       </Section>
 
       <Section title="Model & thinking">
@@ -148,7 +144,7 @@ export function AgentPanel() {
 
       <Section
         title="Connection & reliability"
-        hint="How Limboo supervises the Claude Code capability. A failed request never marks the agent dead — these knobs govern heartbeat checks and automatic recovery."
+        hint="How Limboo supervises the connected coding agent — shared by every provider. A failed request never marks the agent dead; these knobs govern heartbeat checks and automatic recovery."
       >
         <Field
           id="heartbeatInterval"

@@ -18,6 +18,7 @@ import type { ResumeManager } from '../managers/resume/ResumeManager';
 import type { AutoUpdateManager } from '../managers/AutoUpdateManager';
 import type { VoiceManager } from '../managers/voice/VoiceManager';
 import type { VoiceModelManager } from '../managers/voice/VoiceModelManager';
+import type { CursorAuthManager } from '../managers/cursor/CursorAuthManager';
 import { registerWindowHandlers } from './windowHandlers';
 import { registerSettingsHandlers } from './settingsHandlers';
 import { registerSystemHandlers } from './systemHandlers';
@@ -35,6 +36,7 @@ import { registerSearchHandlers } from './searchHandlers';
 import { registerResumeHandlers } from './resumeHandlers';
 import { registerUpdateHandlers } from './updateHandlers';
 import { registerVoiceHandlers } from './voiceHandlers';
+import { registerCursorHandlers } from './cursorHandlers';
 
 export interface IpcDeps {
   settings: SettingsManager;
@@ -54,6 +56,7 @@ export interface IpcDeps {
   updates: AutoUpdateManager;
   voice: VoiceManager;
   voiceModels: VoiceModelManager;
+  cursorAuth: CursorAuthManager;
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -74,4 +77,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerResumeHandlers(deps.resume, deps.session);
   registerUpdateHandlers(deps.updates);
   registerVoiceHandlers(deps.voice, deps.voiceModels, deps.settings);
+  registerCursorHandlers(deps.cursorAuth);
 }

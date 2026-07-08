@@ -21,6 +21,7 @@ This page mirrors that file. When in doubt, the source file is authoritative.
 | Worktree  | `worktree:list`, `worktree:prune`, `worktree:recreate`, `worktree:detach`, `worktree:getRepoConfig`, `worktree:ackConfig`, `worktree:runSetup` |
 | Services  | `service:list`, `service:start`, `service:stop`, `service:restart`, `script:run` |
 | Agent     | `agent:getInstall`, `agent:getState`, `agent:send`, `agent:stop`, `agent:getSnapshot`, `agent:permissionRespond`, `agent:clarificationRespond`, `agent:clearSession`, `agent:getDiagnostics`, `agent:clearRateLimit`, `agent:retryAuth` |
+| Cursor auth | `agent:cursorGetAuthState`, `agent:cursorRefreshAuth`, `agent:cursorLoginStart`, `agent:cursorLoginCancel`, `agent:cursorLogout`, `agent:cursorSetApiKey`, `agent:cursorRemoveApiKey` |
 | Plan mode | `agent:getPlan`, `agent:approvePlan`, `agent:rejectPlan`, `agent:regeneratePlan`, `agent:setPlanPinned`, `agent:listPlanRevisions`, `agent:restorePlanRevision` |
 | File system | `fs:index`, `fs:getTree`, `fs:readFile`, `fs:getHistory`, `fs:reveal` |
 | Terminal  | `terminal:create`, `terminal:list`, `terminal:write`, `terminal:resize`, `terminal:kill`, `terminal:rename`, `terminal:clear` |
@@ -48,6 +49,7 @@ There is also one fire-and-forget renderer -> main channel (`IpcSends`, via
 | `agent:event` | A structured agent event (message delta, tool call, file change, ...). |
 | `agent:permission-request` | The agent needs the user to approve or deny a tool. |
 | `agent:clarification-request` | The agent (AskUserQuestion) needs clarifying answers. |
+| `agent:cursor-auth-changed` | The Cursor provider's auth state changed (probe / login / key set). |
 | `fs:index-progress` | Progress of an in-flight workspace index pass. |
 | `fs:tree-changed` | The active workspace's directory tree changed. |
 | `terminal:data` | A chunk of PTY output (raw VT bytes). |

@@ -23,6 +23,24 @@ If none is found, the agent reports an `auth-required` state. Sign in to Claude 
 as usual, then use "retry auth" so Limboo re-probes. Questions about provider
 pricing or model behavior belong with the agent / provider, not Limboo.
 
+### Connecting Cursor (preview)
+
+Settings › Agent › Providers has a **Cursor** card. Running Cursor agents arrives
+in a later update — connecting your account now just gets it ready. Two paths:
+
+- **Sign in** — Limboo runs `cursor-agent login`; the CLI authenticates in your
+  browser and keeps its own credentials (Limboo never reads or copies them).
+  Enable **Manual browser login** on remote/headless machines: the login URL is
+  printed instead, with Copy URL / Open Browser actions.
+- **API key** — paste a key from the Cursor Dashboard. It is encrypted with the
+  OS keychain (Electron `safeStorage`), stored outside the settings file, never
+  shown again, and injected only into Cursor child processes as `CURSOR_API_KEY`.
+  A `CURSOR_API_KEY` already present in your environment is detected and wins.
+
+The card classifies the state locally (no network): Not installed → Sign in
+required → Connected (via CLI login or API key). **Refresh** re-probes after you
+install the CLI or sign in elsewhere.
+
 ## Plan vs implement
 
 - **Plan mode** — the agent produces a review-first plan and stops. You approve,

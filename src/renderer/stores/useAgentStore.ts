@@ -21,6 +21,7 @@ import type {
   AgentSessionSnapshot,
   ChatMessage,
   ClarificationRequest,
+  CursorAuthState,
   FileChange,
   PermissionRequest,
   PlanRevision,
@@ -70,6 +71,8 @@ interface AgentStoreState {
    *  Owned here (not Composer-local state) so plan approval can flip a session
    *  out of Plan mode the moment implementation begins. */
   composerModeBySession: Record<string, SessionPermissionMode>;
+  /** Cursor provider auth state (secret-free); null until the lazy probe lands. */
+  cursorAuth: CursorAuthState | null;
   hydrated: boolean;
 
   setComposerMode: (sessionId: string, mode: SessionPermissionMode) => void;
@@ -87,6 +90,12 @@ interface AgentStoreState {
   clear: (sessionId: string) => void;
   clearRateLimit: () => void;
   retryAuth: () => void;
+  cursorRefresh: () => void;
+  cursorLoginStart: (manual: boolean) => Promise<void>;
+  cursorLoginCancel: () => void;
+  cursorLogout: () => Promise<void>;
+  cursorSetApiKey: (key: string) => Promise<boolean>;
+  cursorRemoveApiKey: () => Promise<void>;
   respond: (id: string, behavior: 'allow' | 'deny', remember?: boolean) => void;
   respondClarification: (
     id: string,
@@ -266,6 +275,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     pendingBySession: {},
     pendingClarificationBySession: {},
     composerModeBySession: {},
+    cursorAuth: null,
     hydrated: false,
 
     setComposerMode: (sessionId, mode) =>
@@ -329,6 +339,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
           },
         })),
       );
+
+      // Cursor provider auth — lazy probe + live updates (secret-free state).
+      api.cursor?.onAuthChanged?.((cursorAuth) => set({ cursorAuth }));
+      void api.cursor?.getAuthState?.().then((cursorAuth) => set({ cursorAuth }));
 
       // Seed the diagnostics console with recent history.
       void get().loadDiagnostics();
@@ -424,6 +438,68 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
 
     retryAuth: () => {
       void window.limboo?.agent?.retryAuth?.();
+    },
+
+    cursorRefresh: () => {
+      void window.limboo?.agent?.cursor?.refreshAuth?.();
+    },
+
+    cursorLoginStart: async (manual) => {
+      try {
+        await window.limboo?.agent?.cursor?.loginStart?.(manual);
+      } catch (err) {
+        useUIStore.getState().addToast({
+          title: 'Could not start Cursor sign-in',
+          description: err instanceof Error ? err.message : String(err),
+          tone: 'danger',
+        });
+      }
+    },
+
+    cursorLoginCancel: () => {
+      void window.limboo?.agent?.cursor?.loginCancel?.();
+    },
+
+    cursorLogout: async () => {
+      try {
+        await window.limboo?.agent?.cursor?.logout?.();
+        useUIStore.getState().addToast({ title: 'Signed out of Cursor', tone: 'info' });
+      } catch (err) {
+        useUIStore.getState().addToast({
+          title: 'Cursor sign-out failed',
+          description: err instanceof Error ? err.message : String(err),
+          tone: 'danger',
+        });
+      }
+    },
+
+    // Returns true on success so the card can clear its local input field.
+    cursorSetApiKey: async (key) => {
+      try {
+        await window.limboo?.agent?.cursor?.setApiKey?.(key);
+        useUIStore.getState().addToast({ title: 'Cursor API key saved', tone: 'success' });
+        return true;
+      } catch (err) {
+        useUIStore.getState().addToast({
+          title: 'Could not save the API key',
+          description: err instanceof Error ? err.message : String(err),
+          tone: 'danger',
+        });
+        return false;
+      }
+    },
+
+    cursorRemoveApiKey: async () => {
+      try {
+        await window.limboo?.agent?.cursor?.removeApiKey?.();
+        useUIStore.getState().addToast({ title: 'Cursor API key removed', tone: 'info' });
+      } catch (err) {
+        useUIStore.getState().addToast({
+          title: 'Could not remove the API key',
+          description: err instanceof Error ? err.message : String(err),
+          tone: 'danger',
+        });
+      }
     },
 
     respond: (id, behavior, remember) => {

@@ -37,9 +37,12 @@ specific, implemented defense.
 5. **Content-Security-Policy** — strict `self`-only in production (no eval); relaxed
    only for Vite HMR in development. ([`src/main/index.ts`](../../src/main/index.ts))
 
-6. **No shell execution** — git and the terminal are spawned with argv arrays via
-   `execFile` / `node-pty`, never `shell: true`, so there is no shell string to
-   inject into. ([`managers/git/exec.ts`](../../src/main/managers/git/exec.ts),
+6. **No shell execution** — git, the terminal, and the Cursor CLI are spawned with
+   argv arrays via `execFile` / `spawn` / `node-pty`, never `shell: true`, so there
+   is no shell string to inject into. Windows `.cmd` shims for `cursor-agent` are
+   bridged through `%ComSpec%` only when every argument matches a static-literal
+   whitelist. ([`managers/git/exec.ts`](../../src/main/managers/git/exec.ts),
+   [`managers/cursor/exec.ts`](../../src/main/managers/cursor/exec.ts),
    [`TerminalManager.ts`](../../src/main/managers/TerminalManager.ts))
 
 7. **Path-traversal guards** — every renderer-supplied path is validated to stay
@@ -55,9 +58,18 @@ specific, implemented defense.
    key (settings, workspace config, permission decisions, and the settings
    deep-merge).
 
-10. **Secret redaction** — secrets and tokens are redacted before anything reaches
-    the logger; embedded-credential remote URLs are redacted from git results and
-    logs. ([`logger.ts`](../../src/main/logger.ts))
+10. **Secret redaction** — secrets and tokens (including `crsr_` Cursor keys and
+    `CURSOR_API_KEY=` values) are redacted before anything reaches the logger;
+    embedded-credential remote URLs are redacted from git results and logs.
+    ([`logger.ts`](../../src/main/logger.ts))
+
+11. **Encrypted secret storage** — the only credential Limboo holds on the user's
+    behalf (an optional Cursor API key) lives in the safeStorage-backed
+    [`SecretStore`](../../src/main/secrets/SecretStore.ts): encrypted at rest under
+    `userData/secrets/`, gated on `safeStorage.isEncryptionAvailable()`, decrypted
+    only at child-spawn time into the child **environment** (never argv, never IPC,
+    never logs), with a stale-blob self-heal on keychain resets. The renderer sees
+    only a `configured` boolean + timestamp.
 
 ## Input caps
 

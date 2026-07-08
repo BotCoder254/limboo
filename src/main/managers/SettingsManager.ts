@@ -129,6 +129,14 @@ export class SettingsManager {
     );
     c.idleTimeout = clamp(c.idleTimeout, L.idleTimeout.min, L.idleTimeout.max);
 
+    // Cursor provider (auth only) — whitelist the auth-path enum and coerce the
+    // manual-login toggle. No secrets here: the API key lives in the SecretStore.
+    const cursor = merged.agent.cursor;
+    if (!['auto', 'api-key', 'cli-login'].includes(cursor.preferredAuth)) {
+      cursor.preferredAuth = 'auto';
+    }
+    cursor.manualBrowserLogin = !!cursor.manualBrowserLogin;
+
     merged.git.maxCheckpoints = Math.round(
       clamp(merged.git.maxCheckpoints, GIT_LIMITS.maxCheckpoints.min, GIT_LIMITS.maxCheckpoints.max),
     );

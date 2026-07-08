@@ -215,7 +215,8 @@ function filePathOf(input: Record<string, unknown>): string | undefined {
 function redact(text: string): string {
   return text
     .replace(/sk-[A-Za-z0-9_-]{10,}/g, 'sk-***')
-    .replace(/(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)=\S+/gi, '$1=***')
+    .replace(/crsr_[A-Za-z0-9_-]{8,}/g, 'crsr_***')
+    .replace(/(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|CURSOR_API_KEY)=\S+/gi, '$1=***')
     .replace(/(authorization|bearer)\s*[:=]?\s*[A-Za-z0-9._-]{10,}/gi, '$1 ***');
 }
 

@@ -24,8 +24,33 @@ with `managers/memory/memoryTools.ts`.
 
 `probeHealth()` checks for an existing sign-in (the `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` env vars, or the Claude Code
-credentials file) and reports `AgentInstall`. Limboo stores no credentials.
-`retryAuth()` forces a re-probe after the user signs in again.
+credentials file) and reports `AgentInstall`. Limboo stores no Anthropic
+credentials. `retryAuth()` forces a re-probe after the user signs in again.
+
+### Cursor authentication (Agent Adapter Architecture, Phase 1)
+
+Cursor is the second provider, currently **authentication only** — it cannot run
+yet (`AGENT_MODELS` has no Cursor entries, so it is structurally unselectable as
+the running agent). The code lives beside, not inside, this manager:
+
+- `src/main/managers/cursor/CursorAuthManager.ts` — lazy local classification
+  (`not-installed` / `not-authenticated` / `authenticated-cli` /
+  `authenticated-api-key`), the interactive `cursor-agent login` child (single-
+  flight, timeout-killed, manual-browser mode via `NO_OPEN_BROWSER=1` with a
+  validated https URL surfaced to the UI), `logout`, and API-key lifecycle.
+  State broadcasts on `agent:cursor-auth-changed` and never carries secrets.
+- `src/main/managers/cursor/exec.ts` — argv-only `cursor-agent` runner (the
+  `runGit` idiom): PATH resolution with a Windows `where.exe` fallback, batch
+  shims bridged through `%ComSpec%` only with static-whitelisted literal args,
+  bounded output, `redactCursor()` on everything captured.
+- `src/main/secrets/SecretStore.ts` — the app's safeStorage-backed secret store
+  (first consumer). The Cursor API key is encrypted at rest under
+  `userData/secrets/`, decrypted only at child-spawn time (`getSpawnEnv()`),
+  and never IPC'd, logged, or placed on argv.
+
+`status --format json` output is parsed defensively (whitelisted scalars only);
+`crsr_` tokens and `CURSOR_API_KEY=` values are redacted centrally in
+`logger.ts` and in this manager's `redact()`.
 
 ## Lifecycle and recovery
 

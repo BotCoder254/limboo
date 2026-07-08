@@ -125,6 +125,36 @@ export function Meta({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Compact inline action button for provider cards and other settings rows. */
+export function ActionButton({
+  label,
+  onClick,
+  danger,
+  primary,
+}: {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  primary?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-md border px-2 py-1 text-[11px] transition-colors',
+        primary
+          ? 'border-accent/50 bg-elevated text-fg hover:border-accent'
+          : danger
+            ? 'border-line bg-surface-2 text-danger hover:border-danger'
+            : 'border-line bg-surface-2 text-muted hover:text-fg',
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
 /**
  * Accessible switch. Sized in **fixed px** (not rem) on purpose: the document
  * root font-size is `calc(16px * var(--limboo-font-scale))`, so rem-based track/

@@ -30,7 +30,7 @@ function resolveLogFile(): string | null {
  * Cheap trigger pre-check before running the redaction regexes: only lines
  * containing one of these substrings are scanned at all (logging is hot).
  */
-const REDACT_TRIGGERS = ['sk-', 'bearer', 'token', 'secret', 'password', 'apikey', 'api_key', 'gh', '://'];
+const REDACT_TRIGGERS = ['sk-', 'bearer', 'token', 'secret', 'password', 'apikey', 'api_key', 'gh', '://', 'crsr'];
 
 /**
  * Central secret redaction (CLAUDE.md §6: secrets/tokens are redacted before
@@ -45,10 +45,13 @@ const REDACT_PATTERNS: RegExp[] = [
   /\b(?:sk|gh[pousr]|github_pat|glpat|xox[baprs])[-_][A-Za-z0-9_-]{8,200}\b/g,
   // Bearer / token authorization headers.
   /\b(bearer|authorization)\s*[:=]?\s+[A-Za-z0-9._~+/-]{8,400}=*/gi,
-  // key=value style secrets (token=, api_key:, password= …).
-  /\b(token|secret|password|passwd|apikey|api_key|access_key|private_key)\b(\s*[:=]\s*)(["']?)[^\s"'&]{4,400}\3/gi,
+  // key=value style secrets (token=, api_key:, password= …). CURSOR_API_KEY
+  // needs its own alternate — the `_` in `cursor_api_key` defeats \bapi_key\b.
+  /\b(token|secret|password|passwd|apikey|api_key|cursor_api_key|access_key|private_key)\b(\s*[:=]\s*)(["']?)[^\s"'&]{4,400}\3/gi,
   // URL userinfo credentials (https://user:pass@host).
   /(\w+:\/\/)([^\s/:@]{1,128}):([^\s/@]{1,256})@/g,
+  // Cursor API keys (crsr_… — lenient shape; the prefix is not contractual).
+  /\bcrsr_[A-Za-z0-9_-]{8,200}\b/g,
 ];
 
 function redactSecrets(line: string): string {
@@ -60,6 +63,7 @@ function redactSecrets(line: string): string {
   out = out.replace(REDACT_PATTERNS[2], '$1 [redacted]');
   out = out.replace(REDACT_PATTERNS[3], '$1$2[redacted]');
   out = out.replace(REDACT_PATTERNS[4], '$1$2:[redacted]@');
+  out = out.replace(REDACT_PATTERNS[5], '[redacted]');
   return out;
 }
 

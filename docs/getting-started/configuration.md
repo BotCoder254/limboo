@@ -42,6 +42,11 @@ terminal/git drawer widths. These persist (debounced) as you resize.
 
 The largest category. Highlights:
 
+- **Providers** — connection status per coding agent. Claude Code reuses its own
+  local login. **Cursor** (authentication only for now) connects via
+  `cursor-agent login` — with an optional manual-browser mode that prints the
+  login URL — or a Cursor API key stored encrypted via the OS keychain
+  (`safeStorage`); the key is never written to settings files or shown again.
 - **Model** — the Claude model the agent uses (Opus 4.8, Sonnet 4.6, Haiku 4.5).
 - **Permission mode** — how aggressively tool calls are auto-approved.
 - **Web search**, **auto-approve reads**, **max turns**.
