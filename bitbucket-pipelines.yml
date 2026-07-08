@@ -12,8 +12,10 @@
 # publishes the GitHub Release with the same idempotent create-or-clobber logic as
 # GitLab's release:github job. Identical asset names mean the last finisher's
 # upload wins (by design; GitLab's multi-OS pipeline normally finishes last).
-# Bitbucket cloud runners are Linux-only, so Windows/macOS packaging stays on the
-# GitLab SaaS runners.
+# Bitbucket cloud runners are Linux-only; Windows/macOS packaging runs here too as
+# MANUAL steps on SELF-HOSTED runners (register under Repository settings ->
+# Runners) — mirroring GitLab's allow_failure SaaS jobs, they never block the
+# Linux release. GitLab's SaaS runners remain the primary Windows/macOS builders.
 #
 # Versioning is TAG-DRIVEN: every job that reads the version first runs
 # ci/scripts/apply-tag-version.mjs (which also understands BITBUCKET_TAG), so all
@@ -181,9 +183,25 @@ definitions:
             gh --version
           - |
             set -eu
-            : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set as a SECURED repository variable}"
+            # Pre-flight: fail with ACTIONABLE diagnostics instead of a cryptic gh
+            # error (the v1.3.5 run failed because the variable was not visible here).
+            if [ -z "${GITHUB_TOKEN:-}" ]; then
+              echo "ERROR: GITHUB_TOKEN is not visible to this pipeline step." >&2
+              echo "Fix: bitbucket.org/limboo_/limboo -> Repository settings -> Pipelines ->" >&2
+              echo "     Repository variables -> add Name=GITHUB_TOKEN, Value=<GitHub PAT with" >&2
+              echo "     repo scope on BotCoder254/limboo>, check [Secured]. A workspace" >&2
+              echo "     variable on the limboo_ workspace also works. Then RE-RUN this step." >&2
+              exit 1
+            fi
             export GH_TOKEN="$GITHUB_TOKEN"
             export GH_REPO=BotCoder254/limboo
+            # Verify the token actually reaches the repo before publishing, so an
+            # expired/underscoped PAT produces a clear message instead of a gh stack.
+            gh api "repos/$GH_REPO" --jq .full_name >/dev/null 2>&1 || {
+              echo "ERROR: GITHUB_TOKEN is set but cannot access $GH_REPO (expired, revoked," >&2
+              echo "       or missing repo scope / Contents: read+write). Replace the token." >&2
+              exit 1
+            }
             PRERELEASE=""
             case "$BITBUCKET_TAG" in *-*) PRERELEASE="--prerelease" ;; esac
             if gh release view "$BITBUCKET_TAG" >/dev/null 2>&1; then
@@ -220,6 +238,81 @@ definitions:
                 -F files=@"$f"
             done
 
+    # ------------------------------------------------- package: windows / macos
+    # Mirrors of GitLab's package:windows / package:macos SaaS jobs. Bitbucket
+    # cloud runners are LINUX-ONLY, so these target SELF-HOSTED runners
+    # (runs-on: self.hosted + windows/macos — register one under Repository
+    # settings -> Runners) and are `trigger: manual`, placed AFTER the Linux
+    # release steps: exactly like GitLab's `allow_failure: true`, a missing
+    # runner or untriggered step NEVER blocks the Linux release. Each builds its
+    # OS installers from the same tag-stamped source and uploads them to the
+    # SAME GitHub Release with --clobber (the release already exists by the time
+    # these steps are reachable).
+    - step: &package-windows
+        name: "package: windows (manual, self-hosted runner)"
+        runs-on: [self.hosted, windows]
+        trigger: manual
+        script:
+          # Self-hosted Windows runners execute PowerShell (same as GitLab's SaaS
+          # Windows runner — this is a direct port of that job + the gh upload).
+          - node --version
+          - npm ci
+          - node ci/scripts/apply-tag-version.mjs
+          - npm run dist -- --publish never
+          - node ci/scripts/verify-signing.mjs dist
+          - New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          - Copy-Item dist/*.exe, dist/latest.yml artifacts/windows/
+          - if (Test-Path dist/*.blockmap) { Copy-Item dist/*.blockmap artifacts/windows/ } else { Write-Host "[stage] no *.blockmap" }
+          - if (-not (Test-Path artifacts/windows/*.exe)) { Write-Error "[stage] MISSING *.exe"; exit 1 }
+          - if (-not (Test-Path artifacts/windows/latest.yml)) { Write-Error "[stage] MISSING latest.yml"; exit 1 }
+          - |
+            $ErrorActionPreference = "Stop"
+            if (-not $env:GITHUB_TOKEN) { Write-Error "GITHUB_TOKEN must be set as a SECURED repository variable"; exit 1 }
+            $v = "2.95.0"
+            Invoke-WebRequest "https://github.com/cli/cli/releases/download/v$v/gh_${v}_windows_amd64.zip" -OutFile gh.zip
+            Expand-Archive gh.zip -DestinationPath ghcli -Force
+            $env:GH_TOKEN = $env:GITHUB_TOKEN
+            $env:GH_REPO = "BotCoder254/limboo"
+            $files = @(Get-ChildItem artifacts/windows/* | ForEach-Object FullName)
+            & ghcli/bin/gh.exe release upload $env:BITBUCKET_TAG @files --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        artifacts:
+          - artifacts/**
+
+    - step: &package-macos
+        name: "package: macos (manual, self-hosted runner)"
+        runs-on: [self.hosted, macos]
+        trigger: manual
+        script:
+          - |
+            set -eu
+            # No signing cert on the runner by default; stops electron-builder
+            # probing the keychain (same override as GitLab's package:macos).
+            # When CSC_LINK / CSC_KEY_PASSWORD are configured, drop this.
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            node --version
+            npm ci
+            node ci/scripts/apply-tag-version.mjs
+            npm run dist -- --publish never
+            node ci/scripts/verify-signing.mjs dist
+            mkdir -p artifacts/macos
+            cp dist/*.dmg dist/*.zip dist/latest-mac.yml artifacts/macos/
+            if ls dist/*.blockmap >/dev/null 2>&1; then cp dist/*.blockmap artifacts/macos/; else echo "[stage] no *.blockmap"; fi
+            for pat in "artifacts/macos/*.dmg" "artifacts/macos/*.zip" "artifacts/macos/latest-mac.yml"; do
+              ls $pat >/dev/null 2>&1 || { echo "[stage] MISSING required artifact: $pat"; exit 1; }
+            done
+          - |
+            set -eu
+            : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set as a SECURED repository variable}"
+            GH_CLI_VERSION="2.95.0"
+            case "$(uname -m)" in arm64) GHARCH=macOS_arm64 ;; *) GHARCH=macOS_amd64 ;; esac
+            curl -fsSL -o ghcli.zip "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_${GHARCH}.zip"
+            unzip -oq ghcli.zip
+            export GH_TOKEN="$GITHUB_TOKEN" GH_REPO=BotCoder254/limboo
+            "./gh_${GH_CLI_VERSION}_${GHARCH}/bin/gh" release upload "$BITBUCKET_TAG" artifacts/macos/* --clobber
+        artifacts:
+          - artifacts/**
+
 pipelines:
   # CI layer — every branch push: validate -> build -> test (mirror of the GitLab
   # push pipeline; never produces shippable artifacts).
@@ -244,7 +337,9 @@ pipelines:
       - step: *test
 
   # Release layer — every v* tag runs the full pipeline through release (mirror of
-  # the GitLab tag pipeline, Linux packaging only on Bitbucket cloud runners).
+  # the GitLab tag pipeline). Linux packages on Bitbucket cloud runners; the
+  # trailing windows/macos steps are manual + self-hosted (GitLab SaaS-runner
+  # equivalents) and never block the Linux release.
   tags:
     "v*":
       - parallel:
@@ -259,6 +354,8 @@ pipelines:
       - step: *release-notes
       - step: *release-github
       - step: *release-bitbucket-downloads
+      - step: *package-windows
+      - step: *package-macos
 
   custom:
     # Manual dry-run from the Pipelines UI: package + secure without publishing

@@ -18,13 +18,33 @@ and the sole GitLab-Release publisher**; Bitbucket is a co-equal Linux pipeline 
 - **build**: renderer build + `npm run package`.
 - **test**: the Electron smoke test under `xvfb` (same GTK/ATK/CUPS/ALSA + t64
   fallback package set as GitLab's `test:linux`).
-- **package**: `package-linux` only — Bitbucket cloud runners are **Linux-only**,
-  so Windows/macOS packaging stays on the GitLab SaaS runners. Runs
+- **package**: `package-linux` on Bitbucket's cloud runners (Linux-only). Runs
   `npm run dist -- --publish never`, generates the CycloneDX SBOM, verifies
-  signing, and stages `artifacts/linux/`.
+  signing, and stages `artifacts/linux/`. **Windows and macOS** package too —
+  as trailing **manual steps on self-hosted runners** (see below).
 - **secure**: flattens `artifacts/*/* -> dist/`, `SHA256SUMS`, signing check.
 - **release**: `release-notes` -> `release-github` (co-publish) ->
-  `release-bitbucket-downloads` (optional, token-guarded).
+  `release-bitbucket-downloads` (optional, token-guarded) ->
+  `package-windows` / `package-macos` (manual, self-hosted).
+
+## Windows / macOS packaging (self-hosted runners)
+
+Bitbucket cloud runners cannot run Windows or macOS, so `package-windows` and
+`package-macos` mirror GitLab's `package:windows` / `package:macos` SaaS jobs
+with Bitbucket's equivalents:
+
+| Step | `runs-on` | Notes |
+| ---- | --------- | ----- |
+| `package-windows` | `[self.hosted, windows]` | PowerShell; NSIS installer + `latest.yml` |
+| `package-macos` | `[self.hosted, macos]` | dmg/zip + `latest-mac.yml`; `CSC_IDENTITY_AUTO_DISCOVERY=false` until signing is configured |
+
+Both are `trigger: manual` and placed **after** the Linux release steps — the
+Bitbucket equivalent of GitLab's `allow_failure: true`: a missing runner or an
+untriggered step never blocks the Linux release. Each builds from the same
+tag-stamped source and uploads its installers to the **same GitHub Release**
+with `--clobber`. Register runners under **Repository settings -> Runners**;
+without one, simply don't trigger the step (GitLab SaaS stays the primary
+Windows/macOS builder).
 
 ## Co-publisher semantics (the race, by design)
 
@@ -43,7 +63,7 @@ Set under **Repository settings -> Pipelines -> Repository variables**, always
 
 | Variable | Use |
 | -------- | --- |
-| `GITHUB_TOKEN` | **Required.** GitHub PAT (repo scope / Contents: read+write on `BotCoder254/limboo`). Used by `release-github` and the manual `sync-github` custom pipeline. |
+| `GITHUB_TOKEN` | **Required.** GitHub PAT (repo scope / Contents: read+write on `BotCoder254/limboo`). Used by `release-github`, the `package-windows`/`package-macos` uploads, and the manual `sync-github` custom pipeline. **Must be saved on the `limboo_/limboo` repository (or the `limboo_` workspace)** — if the step can't see it, `release-github` fails fast with setup instructions; fix the variable and **re-run the failed step** (no new tag needed). |
 | `BITBUCKET_ACCESS_TOKEN` | Optional repository access token. When present, installers are also uploaded to **Bitbucket Downloads**; when absent that step skips cleanly. |
 
 ## Triggers
