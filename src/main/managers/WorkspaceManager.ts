@@ -227,9 +227,20 @@ export class WorkspaceManager {
   /** Merge a partial config patch (caller has already rejected polluting keys). */
   updateConfig(id: string, patch: DeepPartial<WorkspaceConfig>): Workspace {
     const ws = this.requireById(id);
+    // planDefaultMode is renderer-supplied and feeds the composer's permission
+    // selector — clamp to the enum. A present-but-invalid/undefined value clears
+    // the override (inherit the global default); an absent key keeps the current.
+    const mode = patch.planDefaultMode;
+    const planDefaultMode =
+      mode === 'plan' || mode === 'ask' || mode === 'default' || mode === 'acceptEdits'
+        ? mode
+        : 'planDefaultMode' in patch
+          ? undefined
+          : ws.config.planDefaultMode;
     const next: WorkspaceConfig = {
       ...ws.config,
       ...patch,
+      planDefaultMode,
       ignoredDirs: patch.ignoredDirs ?? ws.config.ignoredDirs,
     };
     this.db

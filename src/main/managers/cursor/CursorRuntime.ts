@@ -157,7 +157,11 @@ export class CursorRuntime {
           } else if (ev.subtype === 'completed') {
             const result = toolResultOf(ev, CURSOR_LIMITS.outputMax);
             bridge.onToolResult(mapped.callId, result.status, result.output);
-            if (!spec.force && result.status === 'done' && isProposedMutation(mapped.name)) {
+            if (
+              !spec.force &&
+              result.status === 'done' &&
+              isProposedMutation(mapped.name, mapped.input)
+            ) {
               outcome.proposedMutations += 1;
             }
           }
@@ -220,9 +224,12 @@ function buildArgv(spec: CursorRunSpec): string[] {
     '--model',
     spec.model,
   ];
+  // Literal mode whitelist (documented values: plan | ask; agent = default).
   if (spec.mode === 'plan') argv.push('--mode', 'plan');
+  else if (spec.mode === 'ask') argv.push('--mode', 'ask');
   if (spec.resumeChatId) argv.push('--resume', spec.resumeChatId);
-  if (spec.force) argv.push('--force');
+  // Read-only modes never force, whatever the caller computed.
+  if (spec.force && spec.mode !== 'plan' && spec.mode !== 'ask') argv.push('--force');
   if (spec.trusted) argv.push('--trust');
   // Only ever set after supportsApproveMcps() probed the flag on this CLI.
   if (spec.approveMcps) argv.push('--approve-mcps');

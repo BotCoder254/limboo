@@ -711,6 +711,9 @@ export const DEFAULT_IGNORED_DIRS = [
   'vendor',
   '.venv',
   '__pycache__',
+  // Limboo's reserved workspace namespace (per-run Cursor attachment staging;
+  // transient — created at run start and removed in the run's finally).
+  '.limboo',
 ] as const;
 
 /** Default per-workspace configuration applied on create/open. */

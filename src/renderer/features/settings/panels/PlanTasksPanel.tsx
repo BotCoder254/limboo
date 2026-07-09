@@ -25,14 +25,15 @@ export function PlanTasksPanel() {
         <Field
           id="planDefaultMode"
           label="Default permission mode"
-          hint="What new sessions start in. Plan-first (default) is safest; a workspace can override this under Settings › Workspace."
+          hint="What new sessions start in. Plan-first (default) is safest; Ask is read-only exploration; a workspace can override this under Settings › Workspace."
         >
           <SegmentedControl<SessionPermissionMode>
             value={plan.defaultMode}
             options={[
               { value: 'plan', label: 'Plan' },
-              { value: 'default', label: 'Ask' },
-              { value: 'acceptEdits', label: 'Accept' },
+              { value: 'ask', label: 'Ask' },
+              { value: 'default', label: 'Ask before edits' },
+              { value: 'acceptEdits', label: 'Accept edits' },
             ]}
             onChange={(value) => setPlan('defaultMode', value)}
           />

@@ -580,13 +580,15 @@ export type AgentMode = 'plan' | 'implement';
  * The harness-aligned permission mode the composer exposes as a single selector,
  * matching Claude Code's `Shift+Tab` cycle vocabulary:
  * - `plan`        → read-only analysis; the agent proposes a plan (SDK `plan`).
+ * - `ask`         → read-only exploration/Q&A; no plan lifecycle, no edits
+ *                   (Cursor `--mode ask`; Claude enforced via `decideToolUse`).
  * - `default`     → asks before edits/commands (SDK `default`).
  * - `acceptEdits` → auto-approves file edits; commands still prompt (SDK `acceptEdits`).
  * `bypassPermissions` is intentionally NOT exposed (this is a local, safety-first
  * app). The coarser auto/approve-all knobs live in Settings › Agent as advanced
  * enforcement layered on top by `canUseTool`.
  */
-export type SessionPermissionMode = 'plan' | 'default' | 'acceptEdits';
+export type SessionPermissionMode = 'plan' | 'ask' | 'default' | 'acceptEdits';
 
 /**
  * A development workspace — the primary unit of software engineering in Limboo.
@@ -1728,6 +1730,13 @@ export interface AgentState {
    * the layer wasn't registered for that run; absent = no Cursor run yet.
    */
   cursorBridge?: { hooksActive: boolean | null; mcpActive: boolean | null; at: number };
+  /**
+   * Whether Cursor default/acceptEdits runs execute interactively (`--force`
+   * gated per-tool through the hooks bridge) or stay propose-only. `active`
+   * flips true once the hooks bridge has been verified for the resolved CLI
+   * version; absent = no Cursor runtime probed yet.
+   */
+  cursorInteractive?: { active: boolean; cliVersion: string | null };
   /** Heartbeat bookkeeping for the UI ("last checked 3s ago"). */
   heartbeat: {
     lastOkAt: number | null;

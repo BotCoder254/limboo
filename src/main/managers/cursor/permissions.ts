@@ -11,6 +11,7 @@
  * (see sessionFile.ts). Self-deny rules prevent the agent from editing its
  * own gates (cli.json / hooks.json / mcp.json) mid-run.
  */
+import { readOnlyShellRuleSpecs } from '../agent/readOnlyCommands';
 import { copySafeKeys, safeParseObject, withSessionFile } from './sessionFile';
 
 /** Escape glob-special characters in a literal path used inside a rule. */
@@ -32,6 +33,9 @@ export function sessionDenyRules(userDataPath: string): string[] {
     'Write(**/.cursor/cli.json)',
     'Write(**/.cursor/hooks.json)',
     'Write(**/.cursor/mcp.json)',
+    // Limboo's reserved workspace namespace (per-run attachment staging).
+    'Write(.limboo/**)',
+    'Write(**/.limboo/**)',
     // App data: Limboo's own database/settings/secrets are never a tool target.
     `Read(${userData}/**)`,
     `Write(${userData}/**)`,
@@ -44,6 +48,19 @@ export function sessionDenyRules(userDataPath: string): string[] {
     'Shell(mkfs)',
     'Shell(taskkill)',
     'Shell(shutdown)',
+    'Shell(sudo)',
+    // Flag-level closes for the read-only Shell allow rules below (deny beats
+    // allow): these flags turn inspection commands into writes/exec —
+    // `git log --output=<file>` writes, `git grep --open-files-in-pager` and
+    // `--upload-pack`/`--receive-pack` execute programs, rg `--pre` runs an
+    // arbitrary preprocessor.
+    'Shell(git:*--output*)',
+    'Shell(git:*--open-files-in-pager*)',
+    'Shell(git:*--upload-pack*)',
+    'Shell(git:*--receive-pack*)',
+    'Shell(rg:*--pre*)',
+    'Shell(rg:*--hostname-bin*)',
+    'Shell(gh:*--web*)',
   ];
 }
 
@@ -53,6 +70,28 @@ export interface CursorAllowPosture {
   autoApproveReads: boolean;
   /** The Limboo MCP bridge servers are registered for this run. */
   limbooMcp: boolean;
+  /** Attachments are staged into the workspace for this run — allow reads. */
+  attachmentsStaged?: boolean;
+}
+
+/**
+ * Read-only inspection commands as declarative allow rules, derived from the
+ * SAME allowlists `decideToolUse` trusts (readOnlyCommands.ts) so the two
+ * layers never drift. Emits exact + space-suffixed pairs (`Shell(git:log)` +
+ * `Shell(git:log *)`) rather than bare prefix globs — `Shell(git:diff*)`
+ * would also match `git difftool`, which executes external programs. This is
+ * what lets a propose-only (no `--force`) run still answer "what changed?"
+ * from live `git log`/`gh pr list` instead of stalling on every shell call.
+ */
+export function readOnlyShellAllowRules(): string[] {
+  const specs = readOnlyShellRuleSpecs();
+  const rules: string[] = [];
+  for (const sub of specs.gitAnyArgs) rules.push(`Shell(git:${sub})`, `Shell(git:${sub} *)`);
+  for (const form of specs.gitExact) rules.push(`Shell(git:${form})`);
+  for (const form of specs.ghAnyArgs) rules.push(`Shell(gh:${form})`, `Shell(gh:${form} *)`);
+  for (const form of specs.ghExact) rules.push(`Shell(gh:${form})`);
+  for (const cmd of specs.bare) rules.push(`Shell(${cmd})`);
+  return rules;
 }
 
 /**
@@ -62,7 +101,17 @@ export interface CursorAllowPosture {
  */
 export function sessionAllowRules(posture: CursorAllowPosture): string[] {
   const rules: string[] = [];
-  if (posture.autoApproveReads) rules.push('Read(**)');
+  if (posture.autoApproveReads) {
+    rules.push('Read(**)');
+    // Same trust boundary as Read(**): provably read-only inspection shells.
+    // Plan/ask runs keep these too — the provider already enforces read-only
+    // there, and Claude plan mode can run `git log` via the classifier
+    // relaxation, so this is parity, not a widening.
+    rules.push(...readOnlyShellAllowRules());
+  }
+  // Staged attachment files were hand-picked by the user for this turn —
+  // reading them never prompts (writes stay denied by the .limboo deny rule).
+  if (posture.attachmentsStaged) rules.push('Read(.limboo/attachments/**)');
   if (posture.limbooMcp) {
     // Same trust decision Claude's canUseTool makes: the limboo_* tools are
     // internal and strictly read-only, so they never prompt.

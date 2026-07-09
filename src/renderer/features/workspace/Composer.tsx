@@ -61,6 +61,14 @@ const PLAN_PLACEHOLDERS = [
   'Ask for a plan before any files change…',
 ];
 
+/** Ask-mode variants — read-only exploration; nothing is ever modified. */
+const ASK_PLACEHOLDERS = [
+  'Ask anything about this codebase (read-only)…',
+  'How does auth work here?',
+  'Where is this API called from?',
+  'Explain the architecture before we change it…',
+];
+
 export function Composer({ disabled = false }: { disabled?: boolean }) {
   const [value, setValue] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -115,9 +123,12 @@ export function Composer({ disabled = false }: { disabled?: boolean }) {
   // the special-state hints (not installed / restricted / disabled) stay static.
   // Pauses the moment the user starts typing (like the Global Search input).
   const normalPlaceholderState = connected && !disabled && !restricted;
-  const typedPlaceholder = useTypewriter(mode === 'plan' ? PLAN_PLACEHOLDERS : COMPOSER_PLACEHOLDERS, {
-    paused: !normalPlaceholderState || value.length > 0,
-  });
+  const typedPlaceholder = useTypewriter(
+    mode === 'plan' ? PLAN_PLACEHOLDERS : mode === 'ask' ? ASK_PLACEHOLDERS : COMPOSER_PLACEHOLDERS,
+    {
+      paused: !normalPlaceholderState || value.length > 0,
+    },
+  );
   const placeholder = normalPlaceholderState
     ? typedPlaceholder
     : composerPlaceholder(disabled, connected, restricted, mode, agentName);
@@ -397,6 +408,7 @@ function composerPlaceholder(
   if (restricted) return 'Drafting is fine — sending resumes shortly…';
   if (disabled) return 'Select or create a session to begin…';
   if (mode === 'plan') return `Describe what to build — ${agentName} will plan it first (read-only)…`;
+  if (mode === 'ask') return `Ask ${agentName} anything about this codebase (read-only)…`;
   return `Ask ${agentName} to build something…`;
 }
 

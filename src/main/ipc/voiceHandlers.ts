@@ -18,8 +18,8 @@ function assertSessionId(value: unknown): asserts value is string {
   }
 }
 
-function assertMode(value: unknown): asserts value is 'plan' | 'default' | 'acceptEdits' {
-  if (value !== 'plan' && value !== 'default' && value !== 'acceptEdits') {
+function assertMode(value: unknown): asserts value is 'plan' | 'ask' | 'default' | 'acceptEdits' {
+  if (value !== 'plan' && value !== 'ask' && value !== 'default' && value !== 'acceptEdits') {
     throw new Error('voice: invalid permission mode');
   }
 }

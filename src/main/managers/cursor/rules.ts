@@ -11,7 +11,34 @@
  * run, and never leaks into commits. Rules survive multi-turn runs and are
  * visible/auditable on disk while the run executes.
  */
+import type { SessionPermissionMode } from '@shared/types';
+
 import { withSessionFile } from './sessionFile';
+
+/**
+ * Per-run execution-posture note. Print mode gives the model no signal about
+ * whether its tools actually execute — a propose-only run looks identical to
+ * an applying one from the inside, and models misattribute blocked shells to
+ * "plan mode" or a sandbox. Stating the posture up front stops that: the
+ * model attempts mutations normally (so they surface as proposals) and keeps
+ * using the allowed read-only inspection commands.
+ */
+export function executionPostureNote(mode: SessionPermissionMode, force: boolean): string {
+  if (mode === 'ask') {
+    return 'Execution posture for this run: read-only Q&A. Answer from the repository without modifying it.';
+  }
+  if (mode === 'plan') {
+    return 'Execution posture for this run: planning. Design the approach; read-only inspection commands (git status/log/diff/show, ls, cat, rg) are available, but do not modify the repository.';
+  }
+  if (!force) {
+    return [
+      'Execution posture for this run: propose-only. You are NOT in plan mode.',
+      'Read-only inspection commands (git status/log/diff/show, gh ... list/view, ls, cat, rg) are allowed and execute immediately.',
+      'File edits and mutating shell commands are recorded as proposals and presented to the user for one-click approval — attempt them normally and describe what you changed; never claim that plan mode or a sandbox is blocking you.',
+    ].join(' ');
+  }
+  return 'Execution posture for this run: apply. Your file edits and shell commands run directly against the working tree; destructive commands and Limboo’s own data are denied by policy.';
+}
 
 /** Render the MDC body: frontmatter + the composed context block. */
 export function buildContextRule(contextBlock: string): string {

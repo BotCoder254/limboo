@@ -626,7 +626,7 @@ function parseTags(value: string | null): string[] {
  * value to `default` and drop anything unrecognized.
  */
 function coerceMode(value: string | null): SessionPermissionMode | undefined {
-  if (value === 'plan' || value === 'default' || value === 'acceptEdits') return value;
+  if (value === 'plan' || value === 'ask' || value === 'default' || value === 'acceptEdits') return value;
   if (value === 'implement') return 'default';
   return undefined;
 }

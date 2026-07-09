@@ -83,9 +83,12 @@ import { classifyCursorError, isCursorResumeCorruption } from './cursor/errors';
 import { withSessionHooksJson } from './cursor/hooks';
 import { withSessionMcpJson, type McpBridgeSpec } from './cursor/mcpConfig';
 import { sessionAllowRules, sessionDenyRules, withSessionCliJson } from './cursor/permissions';
-import { withSessionContextRule } from './cursor/rules';
+import { clearHooksVerified, getVerifiedHooksVersion, setHooksVerified } from './cursor/capabilities';
+import { createSessionDir } from './cursor/sessionFile';
+import { executionPostureNote, withSessionContextRule } from './cursor/rules';
 import { supportsApproveMcps } from './cursor/exec';
 import { mapHookEvent } from './cursor/translate';
+import { isReadOnlyShellCommand } from './agent/readOnlyCommands';
 import type { CursorRunOutcome, ProviderRunBridge } from './cursor/types';
 import { IpcEvents } from '@shared/ipc-channels';
 import { getDb } from '../db/database';
@@ -164,7 +167,7 @@ function resolveClaudeExecutable(): string | undefined {
 const READ_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'WebSearch', 'WebFetch', 'NotebookRead', 'TodoWrite',
 ]);
-const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Delete']);
 const COMMAND_TOOLS = new Set(['Bash', 'BashOutput', 'KillBash', 'KillShell']);
 
 /** The SDK tool the agent calls to present its plan and exit planning mode. */
@@ -374,6 +377,12 @@ interface ActiveRun {
   planCaptured?: boolean;
   /** Attachments riding this turn (manifest + vision blocks; reused on retry). */
   attachmentIds?: string[];
+  /**
+   * Cursor runs only: absolute path of the per-run in-workspace attachment
+   * staging dir (`<root>/.limboo/attachments`). The read-flip hook and the
+   * decideToolUse attachment carve-out honor it alongside the userData dir.
+   */
+  stagedAttachmentsDir?: string;
   /**
    * The `<repository-delta>` block consumed for this run. Cached here because
    * consuming marks the persisted row 'injected' (one-shot) while recovery
@@ -1435,7 +1444,10 @@ export class AgentManager {
           return;
         }
         // A successful implement run that fulfilled a plan marks it completed.
-        if (permMode !== 'plan') this.markPlanCompletedIfImplementing(sessionId);
+        // Ask runs are read-only exploration — they never fulfil a plan.
+        if (permMode === 'default' || permMode === 'acceptEdits') {
+          this.markPlanCompletedIfImplementing(sessionId);
+        }
         this.completeRequest(sessionId, 'success');
         this.markHeartbeatOk();
         if (this.state.lifecycle === 'reconnecting') {
@@ -1868,23 +1880,52 @@ export class AgentManager {
       [memoryContext, searchContext, resumeContext].filter(Boolean).join('\n\n') || undefined;
 
     // Attachments ride as the same manifest text; image vision blocks are a
-    // Claude streaming-input feature and are skipped for Cursor runs. The
-    // manifest is per-turn, so it stays on the prompt (never the rules file).
+    // Claude streaming-input feature and are skipped for Cursor runs (the
+    // staged file path is the ceiling over CLI stdin). The manifest is
+    // per-turn, so it stays on the prompt (never the rules file).
+    //
+    // The userData staging dir is deny-ruled in the session cli.json (deny
+    // beats allow), so this turn's files are MIRRORED into the workspace at
+    // `<root>/.limboo/attachments` (crash-leftover-cleared, symlink-guarded,
+    // removed in the finally below) and the manifest points there. Fail-soft:
+    // a copy failure falls back to the userData manifest — those paths may be
+    // unreadable by the CLI, but the run itself proceeds.
     const attachIds = run?.attachmentIds ?? [];
+    let attachmentStaging: { dir: string; cleanup: () => Promise<void> } | null = null;
+    if (attachIds.length > 0 && this.attachments) {
+      try {
+        attachmentStaging = await createSessionDir(cwd, path.join('.limboo', 'attachments'));
+        for (const f of this.attachments.stagedFilesFor(sessionId, attachIds)) {
+          const dest = path.join(attachmentStaging.dir, f.storedName);
+          try {
+            await fs.promises.link(f.path, dest);
+          } catch {
+            await fs.promises.copyFile(f.path, dest);
+          }
+        }
+        if (run) run.stagedAttachmentsDir = attachmentStaging.dir;
+      } catch (err) {
+        this.diag(
+          'lifecycle',
+          'warning',
+          'Attachment staging into the workspace failed — the CLI may not be able to read attachments this turn',
+          err instanceof Error ? err.message.slice(0, 300) : undefined,
+          sessionId,
+        );
+        if (attachmentStaging) await attachmentStaging.cleanup();
+        attachmentStaging = null;
+      }
+    }
     const manifest =
       attachIds.length > 0 && this.attachments
-        ? this.attachments.manifestFor(sessionId, attachIds)
+        ? this.attachments.manifestFor(sessionId, attachIds, {
+            dirOverride: attachmentStaging?.dir,
+            vision: false,
+          })
         : undefined;
     const basePrompt = manifest ? `${prompt}\n\n${manifest}` : prompt;
-    const promptWithContext = injectedContext
-      ? `<context>\n${injectedContext}\n</context>\n\n${basePrompt}`
-      : basePrompt;
 
-    // An approved plan's implement pass runs with --force (the one transition
-    // that unlocks writes); so does the explicit auto posture. Everything else
-    // is propose-only per the print-mode contract.
-    const applying = !isPlan && this.loadPlan(sessionId)?.status === 'implementing';
-    const force = applying || (!isPlan && permMode === 'acceptEdits' && agent.permissionMode === 'auto');
+    const isAsk = permMode === 'ask';
     const trusted = this.repoTrustResolver ? this.repoTrustResolver(sessionId) : false;
 
     // The model id is a settings string — never let it reach argv unless it
@@ -1945,13 +1986,22 @@ export class AgentManager {
     const sandbox =
       sandboxPref === 'enabled' || sandboxPref === 'disabled' ? sandboxPref : undefined;
 
+    // Did this run exercise any write/command tool? Feeds the hook-capability
+    // check in the finally: a FORCED run that used gated tools while the hooks
+    // bridge never connected means the CLI ignored hooks.json — revert to
+    // propose-only. Read-only runs never fire hooks, so they must not clear.
+    let gatedToolSeen = false;
+
     const bridge: ProviderRunBridge = {
       ensureStreaming: () => {
         stream.ensureStreaming();
       },
       queueDelta: stream.queueDelta,
       finishStreaming: stream.finishStreaming,
-      onToolUse: (id, name, input) => this.onToolUse(sessionId, id, name, input),
+      onToolUse: (id, name, input) => {
+        if (classifyTool(name) !== 'read') gatedToolSeen = true;
+        this.onToolUse(sessionId, id, name, input);
+      },
       onToolResult: (id, status, output) => this.onToolResult(sessionId, id, status, output),
       onInit: (chatId) => {
         // The CLI's own init payload is the source — still never persist a
@@ -2002,7 +2052,7 @@ export class AgentManager {
               decision = this.decideToolUse(
                 sessionId,
                 cwd,
-                isPlan,
+                permMode,
                 mapped.name,
                 mapped.input,
                 abort.signal,
@@ -2050,6 +2100,37 @@ export class AgentManager {
       pipe && hookRunnerPath
         ? { nodeCommand: bridgeNodeCommand(), runnerPath: hookRunnerPath }
         : null;
+    // --force decision — three ways in:
+    //   1. an approved plan's implement pass (the explicit user approval),
+    //   2. acceptEdits: the user's explicit per-session "apply edits" opt-in
+    //      always forces — print mode cannot prompt, so propose-only would
+    //      make the mode non-functional. The deny-first cli.json is the
+    //      enforced floor (app-data guard, self-gates, destructive shell,
+    //      --workspace scoping); when the hooks bridge verifies it only
+    //      TIGHTENS (every tool then gates live through decideToolUse on
+    //      top). These forced runs double as the hooks probe that unlocks 3.
+    //   3. hook-gated interactive execution for 'default' ("ask before
+    //      edits"): hooks are registered for THIS run and the bridge has been
+    //      verified to connect for this exact CLI version — edits/commands
+    //      surface in the permission dialog and execute on approval, with the
+    //      fail-closed hookRunner denying on any bridge failure. An
+    //      unverified CLI version stays propose-only (mutations become an
+    //      approvable proposal artifact).
+    // Plan/ask runs never force (read-only by contract).
+    const applying = !isPlan && !isAsk && this.loadPlan(sessionId)?.status === 'implementing';
+    const cliVersion = this.cursorAuth?.getCachedState().cliVersion ?? null;
+    const hookGate =
+      !!hookCfg && !!pipe && !!cliVersion && getVerifiedHooksVersion() === cliVersion;
+    const force = applying || permMode === 'acceptEdits' || (permMode === 'default' && hookGate);
+
+    // The posture depends on the force decision, so the injected rule content
+    // (and the prompt-prepend fallback) is composed here, not with the context
+    // producers above. The posture line is always present, so the rule is
+    // written on every run.
+    const posture = executionPostureNote(permMode, force);
+    const ruleBlock = [posture, injectedContext].filter(Boolean).join('\n\n');
+    const fallbackPrompt = `<context>\n${ruleBlock}\n</context>\n\n${basePrompt}`;
+
     const approveMcps = mcpSpec ? await supportsApproveMcps() : false;
     if (mcpSpec && !approveMcps) {
       this.diag(
@@ -2069,13 +2150,14 @@ export class AgentManager {
     const allowRules = sessionAllowRules({
       autoApproveReads: agent.autoApproveReads && agent.permissionMode !== 'approve-all',
       limbooMcp: mcpSpec != null,
+      attachmentsStaged: attachmentStaging != null,
     });
 
     let started = false;
     const runAttempt = async (injectViaRules: boolean): Promise<CursorRunOutcome> => {
       const spec = {
         sessionId,
-        prompt: injectViaRules ? basePrompt : promptWithContext,
+        prompt: injectViaRules ? basePrompt : fallbackPrompt,
         cwd,
         mode: permMode,
         force,
@@ -2102,11 +2184,9 @@ export class AgentManager {
 
       const withMcp = (): Promise<CursorRunOutcome> => withSessionMcpJson(cwd, mcpSpec, execute);
       const withHooks = (): Promise<CursorRunOutcome> => withSessionHooksJson(cwd, hookCfg, withMcp);
-      const inner =
-        injectViaRules && injectedContext
-          ? (): Promise<CursorRunOutcome> =>
-              withSessionContextRule(cwd, injectedContext, withHooks)
-          : withHooks;
+      const inner = injectViaRules
+        ? (): Promise<CursorRunOutcome> => withSessionContextRule(cwd, ruleBlock, withHooks)
+        : withHooks;
       return withSessionCliJson(cwd, { deny: denyRules, allow: allowRules }, inner);
     };
 
@@ -2118,7 +2198,7 @@ export class AgentManager {
         // A pre-spawn failure with a rules file pending is most likely the
         // rule write itself — retry once with prompt-prepended context (the
         // documented fallback). Anything after spawn rethrows unchanged.
-        if (!started && injectedContext) {
+        if (!started) {
           this.diag(
             'lifecycle',
             'warning',
@@ -2133,6 +2213,11 @@ export class AgentManager {
       }
     } finally {
       stream.finishStreaming();
+      // Remove the in-workspace attachment mirror so git status ends clean.
+      if (attachmentStaging) {
+        if (run) run.stagedAttachmentsDir = undefined;
+        await attachmentStaging.cleanup();
+      }
       if (pipe) {
         // Capability record for Settings › Agent › Troubleshooting.
         this.setState({
@@ -2142,8 +2227,41 @@ export class AgentManager {
             at: Date.now(),
           },
         });
+        // Hook-capability bookkeeping (drives the hook-gated --force posture):
+        // a connect verifies this CLI version; a COMPLETED forced run that
+        // exercised write/command tools with hooks registered but never
+        // connected means the CLI ignored hooks.json — forget the
+        // verification so 'default' runs revert to propose-only. An aborted
+        // run proves nothing (hooks may simply not have fired yet), so it
+        // never clears — otherwise a single Stop would flip-flop the posture.
+        if (hookCfg && cliVersion) {
+          if (pipe.hookConnected) {
+            setHooksVerified(cliVersion);
+          } else if (
+            force &&
+            gatedToolSeen &&
+            !abort.signal.aborted &&
+            getVerifiedHooksVersion() === cliVersion
+          ) {
+            clearHooksVerified();
+            this.diag(
+              'lifecycle',
+              'warning',
+              'Cursor hooks went silent during an interactive run — reverting to propose-only',
+              `CLI ${cliVersion}`,
+              sessionId,
+            );
+          }
+        }
         void pipe.close();
       }
+      this.setState({
+        cursorInteractive: {
+          active:
+            hooksEnabled && !!cliVersion && getVerifiedHooksVersion() === cliVersion,
+          cliVersion,
+        },
+      });
     }
 
     if (abort.signal.aborted) return;
@@ -2160,7 +2278,7 @@ export class AgentManager {
     // Propose→apply: a propose-only run that generated mutations surfaces them
     // through the existing plan-approval pipeline (Approve reruns with --force
     // on the same chat — see approvePlan).
-    if (!force && !isPlan && outcome.result?.ok && outcome.proposedMutations > 0) {
+    if (!force && !isPlan && !isAsk && outcome.result?.ok && outcome.proposedMutations > 0) {
       this.captureCursorProposal(sessionId, outcome);
     }
 
@@ -2241,11 +2359,16 @@ export class AgentManager {
     if (name === 'Bash') this.mirrorCommandStart(sessionId, id, input);
 
     // A read tool opening a staged attachment flips its chip to "read" live.
+    // Both staging locations count: userData (Claude) and the per-run
+    // in-workspace mirror (Cursor) — stored names are preserved, so the
+    // basename-keyed markReadByPath matches either way.
     if (risk === 'read' && this.attachments) {
       const file = filePathOf(input);
-      const dir = file ? this.attachmentsDirFor(sessionId) : null;
-      if (file && dir && isInside(dir, file)) {
-        this.attachments.markReadByPath(sessionId, file);
+      if (file) {
+        const dirs = [this.attachmentsDirFor(sessionId), this.runs.get(sessionId)?.stagedAttachmentsDir];
+        if (dirs.some((dir) => dir && isInside(dir, file))) {
+          this.attachments.markReadByPath(sessionId, file);
+        }
       }
     }
 
@@ -2435,9 +2558,10 @@ export class AgentManager {
     if (!plan || plan.status !== 'ready') {
       throw new Error('There is no plan ready to approve for this session.');
     }
-    // Approving a plan never starts another planning pass — coerce a stray 'plan'
-    // to the ask-before-edits execution mode.
-    const mode: SessionPermissionMode = execMode === 'plan' ? 'default' : execMode;
+    // Approving a plan never starts another planning pass — coerce a stray
+    // read-only mode ('plan'/'ask') to the ask-before-edits execution mode.
+    const mode: SessionPermissionMode =
+      execMode === 'plan' || execMode === 'ask' ? 'default' : execMode;
     const approved: SessionPlan = { ...plan, status: 'implementing', approvedAt: Date.now() };
     this.savePlan(approved);
     this.pushEvent({ kind: 'plan', sessionId, plan: approved });
@@ -2686,14 +2810,16 @@ export class AgentManager {
     const options: Options = {
       cwd,
       model: agent.model,
-      // The composer's permission mode maps 1:1 to the SDK's:
+      // The composer's permission mode maps onto the SDK's:
       //   plan        → read-only; agent presents a plan via ExitPlanMode.
+      //   ask         → SDK `default`; read-only enforced by decideToolUse (SDK
+      //                 `plan` would drive ExitPlanMode, which ask must not).
       //   default     → writes/commands prompt through our canUseTool bridge.
       //   acceptEdits → SDK auto-approves file edits; commands still prompt.
       // bypassPermissions is never used (safety); the auto/approve-all knobs are
       // enforced on top inside canUseTool.
-      permissionMode: permMode,
-      canUseTool: this.makeCanUseTool(sessionId, cwd, permMode === 'plan'),
+      permissionMode: permMode === 'ask' ? 'default' : permMode,
+      canUseTool: this.makeCanUseTool(sessionId, cwd, permMode),
       maxTurns: agent.maxTurns,
       includePartialMessages: true,
       abortController: abort,
@@ -2745,7 +2871,7 @@ export class AgentManager {
     return row?.provider_session_id || undefined;
   }
 
-  private makeCanUseTool(sessionId: string, cwd: string, planRun: boolean) {
+  private makeCanUseTool(sessionId: string, cwd: string, permMode: SessionPermissionMode) {
     return async (
       toolName: string,
       input: Record<string, unknown>,
@@ -2769,7 +2895,7 @@ export class AgentManager {
         return this.requestClarification(sessionId, input, signal);
       }
 
-      return this.decideToolUse(sessionId, cwd, planRun, toolName, input, signal);
+      return this.decideToolUse(sessionId, cwd, permMode, toolName, input, signal);
     };
   }
 
@@ -2785,25 +2911,29 @@ export class AgentManager {
   private async decideToolUse(
     sessionId: string,
     cwd: string,
-    planRun: boolean,
+    permMode: SessionPermissionMode,
     toolName: string,
     input: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<PermissionResult> {
       // Attachment carve-out (before the app-data guard, which would otherwise
       // block the staging dir inside userData): READ tools may open files inside
-      // THIS session's own attachments dir. Writes/edits there stay denied below,
-      // and Bash referencing userData is still blocked by touchesAppData.
+      // THIS session's own attachments dir — the userData staging dir (Claude)
+      // or the per-run in-workspace mirror (Cursor). Writes/edits there stay
+      // denied below, and Bash referencing userData is still blocked by
+      // touchesAppData.
       {
-        const attachmentsDir = this.attachmentsDirFor(sessionId);
-        const attachmentTarget = attachmentsDir ? filePathOf(input) : null;
-        if (
-          attachmentsDir &&
-          attachmentTarget &&
-          classifyTool(toolName) === 'read' &&
-          isInside(attachmentsDir, attachmentTarget)
-        ) {
-          return { behavior: 'allow', updatedInput: input };
+        const attachmentTarget = filePathOf(input);
+        if (attachmentTarget && classifyTool(toolName) === 'read') {
+          const dirs = [
+            this.attachmentsDirFor(sessionId),
+            this.runs.get(sessionId)?.stagedAttachmentsDir,
+          ];
+          for (const dir of dirs) {
+            if (dir && isInside(dir, attachmentTarget)) {
+              return { behavior: 'allow', updatedInput: input };
+            }
+          }
         }
       }
 
@@ -2828,14 +2958,44 @@ export class AgentManager {
         return { behavior: 'allow', updatedInput: input };
       }
 
-      const risk = classifyTool(toolName);
+      const mode = this.settings.getAll().agent;
 
-      // Read-only contract (defense in depth): while a plan run is underway the
-      // SDK already blocks writes, but we also refuse any write/command here so a
-      // misbehaving tool can never touch the repo before approval.
-      if (planRun && risk !== 'read') {
-        this.pushActivity(sessionId, 'permission', `Blocked ${toolName} during planning`, undefined, 'warning');
-        return { behavior: 'deny', message: 'Planning is read-only — approve the plan to make changes.' };
+      // Web tool parity: Claude enforces the webSearch toggle via
+      // `disallowedTools`; the Cursor hook path has no equivalent, so gate here
+      // for both providers.
+      if (!mode.webSearch && (toolName === 'WebSearch' || toolName === 'WebFetch')) {
+        return { behavior: 'deny', message: 'Web access is disabled in Settings › Agent.' };
+      }
+
+      const risk = classifyTool(toolName);
+      // Risk relaxation (never escalation): a Bash invocation that is provably
+      // read-only (`git log`, `gh pr list`, …) and the passive shell tools
+      // (polling/stopping the agent's own shells) act as reads for gating, so
+      // plan/ask runs can inspect git history and autoApproveReads covers them.
+      // The renderer's PermissionRequest keeps the raw risk (chip honesty).
+      const readOnlyShell =
+        risk === 'command' &&
+        (toolName === 'BashOutput' ||
+          toolName === 'KillBash' ||
+          toolName === 'KillShell' ||
+          (toolName === 'Bash' && isReadOnlyShellCommand(input.command)));
+      const effectiveRisk: ToolRisk = readOnlyShell ? 'read' : risk;
+
+      // Read-only contract (defense in depth): plan runs propose before touching
+      // the repo, ask runs never touch it at all. The SDK/provider already leans
+      // read-only in these modes, but we also refuse any write/mutating command
+      // here so a misbehaving tool can never slip through. Kept AHEAD of the
+      // auto/remembered auto-approvals below — nothing bypasses this gate.
+      if ((permMode === 'plan' || permMode === 'ask') && effectiveRisk !== 'read') {
+        const label = permMode === 'plan' ? 'planning' : 'ask mode';
+        this.pushActivity(sessionId, 'permission', `Blocked ${toolName} during ${label}`, undefined, 'warning');
+        return {
+          behavior: 'deny',
+          message:
+            permMode === 'plan'
+              ? 'Planning is read-only — approve the plan to make changes.'
+              : 'Ask mode is read-only — switch to another mode to make changes.',
+        };
       }
 
       // Path guard: confine every filesystem tool to the workspace root.
@@ -2851,8 +3011,14 @@ export class AgentManager {
         return { behavior: 'deny', message: `Path is outside the workspace: ${target}` };
       }
 
-      const mode = this.settings.getAll().agent;
-      const autoRead = risk === 'read' && mode.autoApproveReads && mode.permissionMode !== 'approve-all';
+      // acceptEdits: file edits are pre-approved. Claude gets this from the SDK's
+      // own permissionMode; the Cursor hook path lands here, so mirror it.
+      if (permMode === 'acceptEdits' && risk === 'write') {
+        return { behavior: 'allow', updatedInput: input };
+      }
+
+      const autoRead =
+        effectiveRisk === 'read' && mode.autoApproveReads && mode.permissionMode !== 'approve-all';
       if (mode.permissionMode === 'auto' || autoRead) {
         return { behavior: 'allow', updatedInput: input };
       }
@@ -3472,6 +3638,8 @@ function summarizeTool(name: string, input: Record<string, unknown>, risk: ToolR
     case 'Edit':
     case 'MultiEdit':
       return `Edit ${file ? shortPath(file) : 'a file'}`;
+    case 'Delete':
+      return `Delete ${file ? shortPath(file) : 'a file'}`;
     case 'Bash':
       return `Run ${truncate(String(input.command ?? 'a command'), 60)}`;
     case 'Grep':
@@ -3535,6 +3703,9 @@ function changeFromInput(name: string, input: Record<string, unknown>): FileChan
       dels += countLines(String(e.old_string ?? ''));
     }
     return { path: file, status: 'modified', adds, dels };
+  }
+  if (name === 'Delete') {
+    return { path: file, status: 'deleted', adds: 0, dels: 0 };
   }
   return { path: file, status: 'modified', adds: 0, dels: 0 };
 }
