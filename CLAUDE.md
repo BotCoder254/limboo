@@ -703,13 +703,23 @@ an active coding agent". Full research/design doc:
     `errors.ts` (`classifyCursorError` + `isCursorResumeCorruption` self-heal),
     `permissions.ts` (deny-first session `.cursor/cli.json`, snapshot+restore
     in `finally`), `types.ts` (`ProviderRunBridge` — the third-provider seam).
-  - **Safe posture**: plan mode → `--mode plan`, plan captured from the terminal
-    result text (Cursor has no ExitPlanMode) into the existing plan pipeline;
-    `default`/`acceptEdits` runs are **propose-only** (no `--force`) — proposed
-    mutations surface as a plan artifact and **Approve** re-runs `--force
-    --resume <chatId>` behind the deny-first cli.json; `acceptEdits` +
-    `settings.agent.permissionMode === 'auto'` forces directly. Interactive
-    per-tool prompts are build item (3).
+  - **Posture per composer mode** (`SessionPermissionMode = plan | ask |
+    default | acceptEdits`): plan → `--mode plan` (plan captured from the
+    terminal result text — Cursor has no ExitPlanMode — into the existing plan
+    pipeline); **ask** → `--mode ask` (provider-enforced read-only Q&A; Claude
+    gets the same gate via `decideToolUse`); `default` ("ask before edits") is
+    **propose-only** (no `--force`) until the hooks bridge is verified for the
+    exact CLI version (`cursor/capabilities.ts`) — proposed mutations surface
+    as a plan artifact and **Approve** re-runs `--force --resume <chatId>`;
+    **`acceptEdits` always forces** behind the deny-first cli.json floor (the
+    user's explicit per-session opt-in; print mode cannot prompt), and those
+    forced runs double as the hooks probe. Propose-only runs can still inspect:
+    read-only `Shell(...)` allow rules are derived from the SAME
+    `agent/readOnlyCommands.ts` allowlists `decideToolUse` trusts (exact +
+    space-suffixed pairs, never prefix globs; companion deny rules close
+    write/exec flags like `git --output` / `rg --pre`). Every run's generated
+    context rule carries an **execution-posture note** so the model never
+    misattributes propose-only to "plan mode".
   - Resume tokens are provider-keyed in `agent_provider_sessions` (schema v12,
     backfilled from `agent_session_meta`); the chat id is **pre-bound** on a
     session's first Cursor run via `cursor-agent create-chat`

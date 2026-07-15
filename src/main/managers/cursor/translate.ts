@@ -6,6 +6,7 @@
  * the attachment read hook — works on Cursor runs unmodified.
  */
 import type { CursorAssistantEvent, CursorEvent, CursorToolCallEvent } from './types';
+import { isReadOnlyShellCommand } from '../agent/readOnlyCommands';
 
 /**
  * Disambiguate `--stream-partial-output` assistant events (official contract):
@@ -55,6 +56,8 @@ const TOOL_NAME_MAP: Record<string, string> = {
   fetchToolCall: 'WebFetch',
   webFetchToolCall: 'WebFetch',
   readsemsearchfilesToolCall: 'Grep',
+  codebaseSearchToolCall: 'Grep',
+  applyPatchToolCall: 'Edit',
   webSearchToolCall: 'WebSearch',
   searchWebToolCall: 'WebSearch',
   updateTodosToolCall: 'TodoWrite',
@@ -85,6 +88,32 @@ export function mapToolCall(ev: CursorToolCallEvent): MappedToolCall | null {
     return { callId, name: `mcp__${server}__${tool}`, input: { ...args } };
   }
 
+  // Documented generic union entry: { function: { name, arguments } } where
+  // `arguments` may be an object or a JSON string. Map the declared name
+  // through the same identity tables as the typed keys.
+  if (key === 'function') {
+    const fn = union[key] as Record<string, unknown>;
+    const rawName = (strField(fn, 'name') ?? '').trim();
+    if (!rawName) return null;
+    let fnArgs: Record<string, unknown> = {};
+    const rawArgs = fn.arguments ?? fn.args;
+    if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
+      fnArgs = rawArgs as Record<string, unknown>;
+    } else if (typeof rawArgs === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(rawArgs);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          fnArgs = parsed as Record<string, unknown>;
+        }
+      } catch {
+        /* unparseable arguments stay empty — the chip still renders the name */
+      }
+    }
+    const name =
+      HOOK_TOOL_NAME_MAP[rawName.toLowerCase()] ?? TOOL_NAME_MAP[rawName] ?? genericToolName(rawName);
+    return { callId, name, input: reshapeArgs(name, fnArgs) };
+  }
+
   const name = TOOL_NAME_MAP[key] ?? genericToolName(key);
   return { callId, name, input: reshapeArgs(name, args) };
 }
@@ -92,14 +121,23 @@ export function mapToolCall(ev: CursorToolCallEvent): MappedToolCall | null {
 /** Reshape Cursor args to the Claude-shaped keys the existing helpers read. */
 function reshapeArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
   const input: Record<string, unknown> = { ...args };
-  const filePath = strField(args, 'path') ?? strField(args, 'file_path') ?? strField(args, 'filePath');
+  const filePath =
+    strField(args, 'path') ??
+    strField(args, 'file_path') ??
+    strField(args, 'filePath') ??
+    strField(args, 'target_file') ??
+    strField(args, 'targetFile');
 
   switch (name) {
     case 'Read':
-    case 'LS':
     case 'Delete':
       if (filePath) input.file_path = filePath;
       break;
+    case 'LS': {
+      const dir = filePath ?? strField(args, 'dir') ?? strField(args, 'directory');
+      if (dir) input.file_path = dir;
+      break;
+    }
     case 'Write': {
       if (filePath) input.file_path = filePath;
       const content =
@@ -196,15 +234,13 @@ function resultText(value: unknown, outputMax: number): string | undefined {
 /**
  * Tools whose successful "completion" in a non-force run means the change was
  * only PROPOSED (print mode without --force never applies edits or commands).
+ * A provably read-only shell command (`git log`, `ls`, …) proposes nothing —
+ * counting it would mint a bogus "Cursor proposed N changes" artifact from a
+ * purely investigative run.
  */
-export function isProposedMutation(name: string): boolean {
-  return (
-    name === 'Write' ||
-    name === 'Edit' ||
-    name === 'MultiEdit' ||
-    name === 'Delete' ||
-    name === 'Bash'
-  );
+export function isProposedMutation(name: string, input?: Record<string, unknown>): boolean {
+  if (name === 'Bash') return !isReadOnlyShellCommand(input?.command);
+  return name === 'Write' || name === 'Edit' || name === 'MultiEdit' || name === 'Delete';
 }
 
 function strField(obj: Record<string, unknown>, key: string): string | undefined {
@@ -232,6 +268,8 @@ const HOOK_TOOL_NAME_MAP: Record<string, string> = {
   run_terminal_cmd: 'Bash',
   grep: 'Grep',
   ripgrep: 'Grep',
+  codebase_search: 'Grep',
+  apply_patch: 'Edit',
   glob: 'Glob',
   glob_file_search: 'Glob',
   ls: 'LS',

@@ -170,13 +170,16 @@ function WorkspaceConfig({ workspace }: { workspace: Workspace }) {
           options={[
             { value: 'inherit', label: 'Global default' },
             { value: 'plan', label: 'Plan' },
+            { value: 'ask', label: 'Ask' },
             { value: 'default', label: 'Ask before edits' },
             { value: 'acceptEdits', label: 'Accept edits' },
           ]}
           onChange={(value) =>
             void updateConfig(workspace.id, {
               planDefaultMode:
-                value === 'inherit' ? undefined : (value as 'plan' | 'default' | 'acceptEdits'),
+                value === 'inherit'
+                  ? undefined
+                  : (value as 'plan' | 'ask' | 'default' | 'acceptEdits'),
             })
           }
         />

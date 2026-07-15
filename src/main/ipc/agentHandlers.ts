@@ -36,13 +36,13 @@ function assertSessionId(value: unknown): string {
   return value;
 }
 
-const PERMISSION_MODES: SessionPermissionMode[] = ['plan', 'default', 'acceptEdits'];
+const PERMISSION_MODES: SessionPermissionMode[] = ['plan', 'ask', 'default', 'acceptEdits'];
 
 /** Default to ask-before-edits when unspecified; reject values outside the union. */
 function assertMode(value: unknown): SessionPermissionMode {
   if (value === undefined) return 'default';
   if (!PERMISSION_MODES.includes(value as SessionPermissionMode)) {
-    throw new Error('Permission mode must be "plan", "default" or "acceptEdits"');
+    throw new Error('Permission mode must be "plan", "ask", "default" or "acceptEdits"');
   }
   return value as SessionPermissionMode;
 }

@@ -42,6 +42,7 @@ function cursorDiagnosticText(
   auth: CursorAuthState | null,
   claude: { installed: boolean; version?: string; error?: string },
   bridge?: { hooksActive: boolean | null; mcpActive: boolean | null; at: number },
+  interactive?: { active: boolean; cliVersion: string | null },
 ): string {
   const lines = [
     '--- Limboo agent diagnostics ---',
@@ -55,9 +56,19 @@ function cursorDiagnosticText(
     `Last checked: ${auth?.lastCheckedAt ? new Date(auth.lastCheckedAt).toISOString() : 'never'}`,
     `Run bridge hooks: ${bridgeLabel(bridge?.hooksActive, 'hooks')}`,
     `Run bridge MCP: ${bridgeLabel(bridge?.mcpActive, 'mcp')}`,
+    `Interactive execution: ${interactiveLabel(interactive)}`,
   ];
   if (auth?.error) lines.push(`Last error: ${auth.error}`);
   return lines.join('\n');
+}
+
+/** Human line for the hook-gated interactive execution posture. */
+function interactiveLabel(interactive?: { active: boolean; cliVersion: string | null }): string {
+  if (!interactive) return 'No Cursor run yet this session.';
+  if (interactive.active) {
+    return `On — hooks verified${interactive.cliVersion ? ` for CLI ${interactive.cliVersion}` : ''}; edits and commands run live behind per-tool approvals.`;
+  }
+  return 'Off — runs are propose-only until the hooks bridge is verified for this CLI version (the first run per version is the probe).';
 }
 
 /** Human line for one bridge layer's last-run connectivity. */
@@ -75,12 +86,15 @@ export function AgentTroubleshooting() {
   const refresh = useAgentStore((s) => s.cursorRefresh);
   const install = useAgentStore((s) => s.install);
   const bridge = useAgentStore((s) => s.cursorBridge);
+  const interactive = useAgentStore((s) => s.cursorInteractive);
   const addToast = useUIStore((s) => s.addToast);
 
   const meta = cursorStatusMeta(auth?.status ?? 'unknown');
   const openExternal = (url: string) => void window.limboo?.system?.openExternal?.(url);
   const copyDiagnostics = () => {
-    void window.limboo?.system?.clipboardWrite?.(cursorDiagnosticText(auth, install, bridge));
+    void window.limboo?.system?.clipboardWrite?.(
+      cursorDiagnosticText(auth, install, bridge, interactive),
+    );
     addToast({ title: 'Diagnostics copied', tone: 'info' });
   };
 
@@ -126,6 +140,7 @@ export function AgentTroubleshooting() {
         <div className="flex flex-col gap-1 rounded-md border border-line bg-surface-2 px-2.5 py-2">
           <DiagRow label="Hooks" value={bridgeLabel(bridge?.hooksActive, 'hooks')} />
           <DiagRow label="MCP" value={bridgeLabel(bridge?.mcpActive, 'mcp')} />
+          <DiagRow label="Execution" value={interactiveLabel(interactive)} />
           <DiagRow
             label="Last run"
             value={bridge?.at ? new Date(bridge.at).toLocaleString() : '—'}

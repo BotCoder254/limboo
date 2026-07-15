@@ -77,6 +77,8 @@ interface AgentStoreState {
   cursorAuth: CursorAuthState | null;
   /** Last Cursor run's bridge probe (hooks/MCP connectivity) — Troubleshooting. */
   cursorBridge: AgentState['cursorBridge'];
+  /** Whether Cursor default/acceptEdits runs execute interactively (hook-gated --force). */
+  cursorInteractive: AgentState['cursorInteractive'];
   /** True while a `cursor-agent update` self-update is in flight. */
   cursorUpdating: boolean;
   hydrated: boolean;
@@ -284,6 +286,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
     composerModeBySession: {},
     cursorAuth: null,
     cursorBridge: undefined,
+    cursorInteractive: undefined,
     cursorUpdating: false,
     hydrated: false,
 
@@ -311,6 +314,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
         heartbeat: agentState.heartbeat,
         activeSessionId: agentState.activeSessionId,
         cursorBridge: agentState.cursorBridge,
+        cursorInteractive: agentState.cursorInteractive,
         // Replay any requests that were already pending before this window
         // hydrated (e.g. a reload while another session is paused) — the
         // discrete onPermissionRequest/onClarificationRequest events below
@@ -332,6 +336,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => {
           heartbeat: s.heartbeat,
           activeSessionId: s.activeSessionId,
           cursorBridge: s.cursorBridge,
+          cursorInteractive: s.cursorInteractive,
         }),
       );
       api.onEvent((event) => apply(event));

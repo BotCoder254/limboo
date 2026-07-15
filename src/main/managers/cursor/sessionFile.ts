@@ -114,3 +114,83 @@ export async function withSessionFile<T>(
     }
   }
 }
+
+/** True when the path exists and is a symlink (lstat, never follows). */
+async function isSymlink(p: string): Promise<boolean> {
+  try {
+    return (await fs.promises.lstat(p)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Materialize a per-run staging DIRECTORY at `<root>/<relDir>` — the directory
+ * sibling of {@link withSessionFile}, disposer-shaped so callers can create it
+ * before building the run prompt and tear it down in their own `finally`. The
+ * leaf dir is Limboo's own namespace: crash leftovers are cleared on create,
+ * every path component is refused when it is a symlink (a symlinked `.limboo`
+ * would redirect the writes AND the recursive cleanup outside the workspace),
+ * and `cleanup()` removes the leaf recursively plus any parent directories
+ * this call created (deepest-first, best-effort), so `git status` ends the
+ * run clean.
+ */
+export async function createSessionDir(
+  root: string,
+  relDir: string,
+): Promise<{ dir: string; cleanup: () => Promise<void> }> {
+  const rootResolved = path.resolve(root);
+  const dir = path.join(root, relDir);
+  const rel = path.relative(rootResolved, path.resolve(dir));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`session dir target escaped the session root: ${relDir}`);
+  }
+
+  // Refuse symlinked components between root and the leaf.
+  {
+    const parts = rel.split(path.sep);
+    let cursor = rootResolved;
+    for (const part of parts) {
+      cursor = path.join(cursor, part);
+      if (await isSymlink(cursor)) {
+        throw new Error(`session dir component is a symlink: ${cursor}`);
+      }
+    }
+  }
+
+  // Track parents WE create so cleanup removes only those, never repo dirs.
+  const createdDirs: string[] = [];
+  {
+    let d = path.dirname(dir);
+    const missing: string[] = [];
+    while (!fs.existsSync(d)) {
+      missing.unshift(d);
+      const parent = path.dirname(d);
+      if (parent === d || path.resolve(d) === rootResolved) break;
+      d = parent;
+    }
+    for (const m of missing) {
+      await fs.promises.mkdir(m);
+      createdDirs.unshift(m);
+    }
+  }
+
+  // The leaf is a per-run staging area — clear crash leftovers, then rebuild.
+  await fs.promises.rm(dir, { recursive: true, force: true });
+  await fs.promises.mkdir(dir);
+
+  return {
+    dir,
+    cleanup: async () => {
+      try {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+        for (const d of createdDirs) {
+          await fs.promises.rmdir(d).catch(() => undefined);
+        }
+      } catch {
+        // Best-effort: a leftover staging dir is ignored by the tree/watcher
+        // (DEFAULT_IGNORED_DIRS) and cleared by the next run.
+      }
+    },
+  };
+}

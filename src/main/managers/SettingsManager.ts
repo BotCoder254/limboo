@@ -225,7 +225,7 @@ export class SettingsManager {
     // Plan Mode — the composer now speaks harness permission modes. Coerce the
     // legacy 'implement' default (pre-v9) to 'default' and reject stray values.
     const plan = merged.agent.plan;
-    if (!['plan', 'default', 'acceptEdits'].includes(plan.defaultMode as string)) {
+    if (!['plan', 'ask', 'default', 'acceptEdits'].includes(plan.defaultMode as string)) {
       plan.defaultMode = plan.defaultMode === ('implement' as unknown) ? 'default' : 'plan';
     }
     plan.historyLimit = Math.round(clamp(plan.historyLimit, 1, 100));

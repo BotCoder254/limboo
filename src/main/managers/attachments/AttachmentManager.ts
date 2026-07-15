@@ -328,10 +328,20 @@ export class AttachmentManager {
    * persisted transcript). Lists the staged files so the agent reads them on
    * demand with its tools instead of assuming contents.
    */
-  manifestFor(sessionId: string, ids: string[]): string | undefined {
+  manifestFor(
+    sessionId: string,
+    ids: string[],
+    opts?: {
+      /** Point manifest paths at a different dir (Cursor workspace staging). */
+      dirOverride?: string;
+      /** Suppress the vision note when images cannot ride inline (Cursor). */
+      vision?: boolean;
+    },
+  ): string | undefined {
     const metas = this.byIds(sessionId, ids);
     if (metas.length === 0) return undefined;
-    const dir = this.sessionDir(sessionId);
+    const dir = opts?.dirOverride ?? this.sessionDir(sessionId);
+    const withVision = opts?.vision ?? true;
     const header =
       `<attachments dir="${dir}">\n` +
       'The user attached these files. They are staged on disk — read the ones you ' +
@@ -342,7 +352,7 @@ export class AttachmentManager {
     let omitted = 0;
     for (const meta of metas) {
       const visionNote =
-        meta.category === 'image' && VISION_MEDIA_TYPES.has(meta.mime)
+        withVision && meta.category === 'image' && VISION_MEDIA_TYPES.has(meta.mime)
           ? ' (also provided inline as an image)'
           : '';
       const line =
@@ -357,6 +367,19 @@ export class AttachmentManager {
     }
     const tail = omitted > 0 ? `(+${omitted} more attachments not listed)\n` : '';
     return `${header}${lines.join('')}${tail}${footer}`;
+  }
+
+  /**
+   * Absolute source paths of this turn's attachments, for mirroring into a
+   * Cursor run's in-workspace staging dir (the userData staging dir is
+   * deny-ruled for Cursor, so files are copied to where the CLI may read).
+   */
+  stagedFilesFor(sessionId: string, ids: string[]): { storedName: string; path: string }[] {
+    const dir = this.sessionDir(sessionId);
+    return this.byIds(sessionId, ids).map((meta) => ({
+      storedName: meta.storedName,
+      path: path.join(dir, meta.storedName),
+    }));
   }
 
   /**
