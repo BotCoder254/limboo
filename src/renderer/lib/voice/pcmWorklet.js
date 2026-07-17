@@ -1,8 +1,9 @@
 /**
  * AudioWorkletProcessor that converts the mic input (context rate, usually
  * 48 kHz float) into 16 kHz mono Int16 PCM chunks for the STT pipeline.
- * Loaded as a same-origin static asset (imported with `?url` in capture.ts) so
- * it works under the strict production CSP (`script-src 'self'`).
+ * Inlined into the bundle (imported with `?raw` in capture.ts) and loaded from
+ * a same-origin Blob URL, which the production CSP allows (`script-src 'self'
+ * blob:`).
  */
 const TARGET_RATE = 16000;
 /** Samples per posted chunk (64 ms at 16 kHz → 2048 bytes of Int16). */

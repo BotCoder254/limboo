@@ -134,6 +134,15 @@ export class VoiceManager {
     // Barge-in: starting to talk interrupts playback per the user's preference.
     this.applyInterruption();
 
+    // Claim the capture session BEFORE the async model-load gap below. A late
+    // worker `tts-done` (e.g. the ack of the barge-in cancel above) would
+    // otherwise hit `setIdlePhase()` mid-start and broadcast `idle`, which the
+    // renderer takes as "release the mic" — leaving the session stuck listening
+    // to a closed microphone. With the id set, `setIdlePhase` defers to the
+    // capture flow; the worker still drops audio until `capture-start` is posted.
+    this.captureSessionId = sessionId;
+    this.captureMode = mode;
+
     this.setState({ phase: 'starting', sessionId, error: undefined });
     const activation = voice.input.activation;
     try {
@@ -143,6 +152,9 @@ export class VoiceManager {
       // so it needs neither VAD nor STT to begin — start listening instantly.
       if (activation === 'auto') await this.ensureLoaded('vad');
     } catch (err) {
+      // Release the claim, or the TTS pump (which holds while a capture session
+      // exists) would be locked out forever by a failed start.
+      this.captureSessionId = null;
       this.setState({ phase: 'unavailable', error: String(err) });
       throw err;
     }
@@ -156,8 +168,6 @@ export class VoiceManager {
       void this.ensureLoaded('vad').catch(() => undefined);
     }
 
-    this.captureSessionId = sessionId;
-    this.captureMode = mode;
     this.post({ t: 'capture-start', mode: activation === 'auto' ? 'auto' : 'manual' });
     this.setState({ phase: activation === 'auto' ? 'listening' : 'recording', sessionId });
     this.touchActivity();
@@ -631,6 +641,10 @@ export class VoiceManager {
   /* ---------------------------------------------------------------- */
 
   private setIdlePhase(): void {
+    // A live (or starting) capture session owns the phase — a late `tts-done`
+    // or an explicit stopSpeaking() must not stomp listening/recording to idle.
+    // Every path that legitimately ends a capture nulls `captureSessionId` first.
+    if (this.captureSessionId) return;
     if (this.currentJob || this.ttsQueue.length > 0) return;
     this.setState({ phase: 'idle', sessionId: this.captureSessionId });
     this.touchActivity();
