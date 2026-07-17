@@ -9,14 +9,16 @@ import { Check, X } from 'lucide-react';
 import type { VoicePhase } from '@shared/types';
 import { cn } from '@/renderer/lib/cn';
 import { Spinner, Waveform } from '@/renderer/components/ui';
-import { activeCapture } from '@/renderer/lib/voice/capture';
 import { useVoiceStore } from '@/renderer/stores/useVoiceStore';
 
 export function ComposerVoiceOverlay({ phase }: { phase: VoicePhase }) {
   const stopVoice = useVoiceStore((s) => s.stopVoice);
   const cancelVoice = useVoiceStore((s) => s.cancelVoice);
   const transcribing = phase === 'transcribing';
-  const analyser = activeCapture()?.analyser ?? null;
+  // Subscribed (not read from `activeCapture()` at render time): the mic graph
+  // finishes opening after this overlay mounts, and only a store update
+  // re-renders the Waveform with the live analyser.
+  const analyser = useVoiceStore((s) => s.analyser);
 
   return (
     <div className="flex min-h-[36px] flex-1 items-center gap-2">

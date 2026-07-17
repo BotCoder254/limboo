@@ -41,6 +41,9 @@ export async function startCapture(options: {
   };
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
   const ctx = new AudioContext();
+  // A suspended context renders the whole graph silent (no worklet chunks, no
+  // analyser levels) with zero errors — resume defensively, mirroring playback.ts.
+  if (ctx.state === 'suspended') await ctx.resume().catch(() => undefined);
   // Load the worklet from an inlined Blob rather than a `?url` asset. `?raw`
   // bundles the processor source straight into the JS chunk, so there is no
   // separate asset file to emit and no base/`file://` path resolution to get

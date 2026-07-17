@@ -16,6 +16,13 @@ interface VoiceStoreState {
   hydrated: boolean;
   /** Last user-facing error (mic denied, models missing, …). */
   error: string | null;
+  /**
+   * Live analyser of the active mic capture, for the composer Waveform. Held in
+   * the store (not read from `activeCapture()` at render time) because the
+   * capture graph finishes opening AFTER the phase flips to listening — a
+   * non-reactive read would leave the waveform driven by `null` forever.
+   */
+  analyser: AnalyserNode | null;
 
   hydrate: () => Promise<void>;
   startVoice: (sessionId: string, mode: SessionPermissionMode) => Promise<void>;
@@ -48,6 +55,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   models: [],
   hydrated: false,
   error: null,
+  analyser: null,
 
   hydrate: async () => {
     if (get().hydrated) return;
@@ -62,8 +70,14 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
 
     api.onState((next) => {
       // The main process ended the capture (VAD auto-stop, error, cancel) —
-      // release the mic as soon as the phase leaves listening/recording.
-      if (!MIC_PHASES.has(next.phase)) stopCapture();
+      // release the mic when the phase LEAVES listening/recording. This is a
+      // transition check on purpose: unrelated broadcasts that are simply not
+      // in a mic phase (`starting` while the worker warms, TTS housekeeping)
+      // must not tear down a mic that is still opening.
+      if (MIC_PHASES.has(get().state.phase) && !MIC_PHASES.has(next.phase)) {
+        stopCapture();
+        set({ analyser: null });
+      }
       set({ state: next, error: next.error ?? get().error });
     });
 
@@ -86,7 +100,9 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   startVoice: async (sessionId, mode) => {
     const api = window.limboo?.voice;
     if (!api) return;
-    set({ error: null });
+    // Drop any analyser left over from a previous run so the overlay never
+    // renders levels from a closed audio graph while the new mic opens.
+    set({ error: null, analyser: null });
 
     // Open the mic in parallel with the main-side start so getUserMedia + the
     // AudioWorklet warm up while the worker forks and models load, instead of
@@ -135,7 +151,17 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     }
 
     try {
-      await capturePromise;
+      const capture = await capturePromise;
+      const phase = get().state.phase;
+      if (phase === 'starting' || MIC_PHASES.has(phase)) {
+        // Publish the live analyser so the composer Waveform (a store
+        // subscriber) starts rendering real levels the moment the mic opens.
+        set({ analyser: capture.analyser });
+      } else {
+        // The capture ended (cancel/error) while the mic was still opening —
+        // nothing will broadcast another teardown, so release it here.
+        capture.stop();
+      }
     } catch (err) {
       // Mic denied / missing: abandon the main-side capture session too.
       await api.cancel().catch(() => undefined);
@@ -147,12 +173,14 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   stopVoice: async () => {
     const api = window.limboo?.voice;
     stopCapture();
+    set({ analyser: null });
     await api?.stop().catch(() => undefined);
   },
 
   cancelVoice: async () => {
     const api = window.limboo?.voice;
     stopCapture();
+    set({ analyser: null });
     await api?.cancel().catch(() => undefined);
   },
 
