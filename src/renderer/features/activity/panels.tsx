@@ -50,7 +50,15 @@ export function FilesPanel() {
   const activeId = useWorkspaceStore((s) => s.activeId);
   const tree = useFileSystemStore((s) => (activeId ? s.treeByWs[activeId] : undefined));
   const progress = useFileSystemStore((s) => (activeId ? s.progressByWs[activeId] : undefined));
+  const fetchTree = useFileSystemStore((s) => s.fetchTree);
   const indexing = !!progress && progress.phase !== 'done';
+
+  // Self-heal: the tree normally arrives via the `fs:tree-changed` push, but the
+  // boot-time index can broadcast before this renderer subscribed. Pull the
+  // current tree (or trigger the first index) whenever the panel has none.
+  useEffect(() => {
+    if (activeId && !tree) void fetchTree(activeId);
+  }, [activeId, tree, fetchTree]);
 
   if (!activeId) {
     return (

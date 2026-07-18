@@ -15,7 +15,7 @@
  * we render the whole text in one pass so the final output is always exact
  * (loose lists, multi-block list items, etc. are never affected).
  */
-import { memo, useMemo } from 'react';
+import { memo, useDeferredValue, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
@@ -70,12 +70,21 @@ function buildComponents(streaming: boolean): Components {
 const COMPONENTS_STATIC = buildComponents(false);
 const COMPONENTS_STREAMING = buildComponents(true);
 
+/** Streaming split result: every settled block plus the growing tail. */
+interface StreamingBlocks {
+  blocks: string[];
+  /** True when the LAST block is a still-open fenced code region. */
+  openFence: boolean;
+}
+
 /**
  * Split markdown into top-level blocks on blank lines, treating fenced code
  * regions (``` or ~~~) as atomic so a blank line *inside* a fence never splits
- * it. Used only while streaming, purely for render memoization.
+ * it. Used only while streaming, purely for render memoization. Also reports
+ * whether the final block is an unclosed fence so the tail can render through
+ * CodeBlock directly (no per-delta remark parse of a growing code region).
  */
-function splitBlocks(text: string): string[] {
+function splitBlocks(text: string): StreamingBlocks {
   const lines = text.split('\n');
   const blocks: string[] = [];
   let current: string[] = [];
@@ -111,7 +120,33 @@ function splitBlocks(text: string): string[] {
     current.push(line);
   }
   flush();
-  return blocks;
+  return { blocks, openFence: fence !== null };
+}
+
+/**
+ * The growing tail of a streamed message, when it is an OPEN fenced code block.
+ * remark-parsing a fence that can run to hundreds of lines on every delta is the
+ * dominant O(n²) cost of streaming code — instead the fence renders straight
+ * through CodeBlock (plain text while streaming; Shiki only once settled), which
+ * is O(append) per delta. The fence line itself is stripped here.
+ */
+function StreamingFenceTail({ text }: { text: string }) {
+  const nl = text.indexOf('\n');
+  const opener = nl === -1 ? text : text.slice(0, nl);
+  const code = nl === -1 ? '' : text.slice(nl + 1);
+  const lang = /^\s*(?:```+|~~~+)\s*([\w-]+)/.exec(opener)?.[1];
+  return <CodeBlock code={code} lang={lang} streaming />;
+}
+
+/**
+ * The growing tail when it is ordinary markdown (paragraph, list, heading…).
+ * Parsing is deferred (React 19 `useDeferredValue`) so a burst of deltas never
+ * blocks the frame — the tail catches up at low priority while settled blocks
+ * and the caret stay perfectly smooth.
+ */
+function StreamingTail({ text }: { text: string }) {
+  const deferred = useDeferredValue(text);
+  return <MarkdownBlock text={deferred} />;
 }
 
 /** One memoized markdown block. Re-renders only when its own text changes. */
@@ -135,14 +170,21 @@ export const Markdown = memo(function Markdown({
   streaming?: boolean;
 }) {
   // While streaming, render block-by-block so only the last (growing) block
-  // re-parses per delta. Once settled, render the whole document in one pass so
-  // the final output is always exact.
-  const blocks = useMemo(() => (streaming ? splitBlocks(text) : null), [streaming, text]);
+  // updates per delta: settled blocks are byte-identical between renders and
+  // skip via memo; an open code fence streams through CodeBlock (no remark);
+  // an ordinary tail parses at deferred priority. Once settled, render the
+  // whole document in one pass so the final output is always exact.
+  const split = useMemo(() => (streaming ? splitBlocks(text) : null), [streaming, text]);
 
   return (
     <div className="limboo-md text-[13.5px] leading-relaxed text-fg">
-      {blocks ? (
-        blocks.map((block, i) => <MarkdownBlock key={i} text={block} />)
+      {split ? (
+        split.blocks.map((block, i) => {
+          const isTail = i === split.blocks.length - 1;
+          if (isTail && split.openFence) return <StreamingFenceTail key={i} text={block} />;
+          if (isTail) return <StreamingTail key={i} text={block} />;
+          return <MarkdownBlock key={i} text={block} />;
+        })
       ) : (
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}

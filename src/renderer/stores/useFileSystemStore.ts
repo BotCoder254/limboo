@@ -16,6 +16,13 @@ interface FileSystemState {
   progressByWs: Record<string, IndexProgress>;
   hydrated: boolean;
   hydrate: () => void;
+  /**
+   * Pull the current tree for a workspace from main. Self-heal for a missed
+   * `fs:tree-changed` push — the boot-time index can broadcast before this
+   * renderer subscribed, which used to leave the Files panel permanently on its
+   * empty state. Falls back to a fresh index pass when main has no tree yet.
+   */
+  fetchTree: (workspaceId: string) => Promise<void>;
   /** Trigger a fresh index pass for a workspace (progress arrives via events). */
   reindex: (workspaceId: string) => Promise<void>;
   /** Read a workspace-relative file through the guarded main-process reader. */
@@ -79,6 +86,25 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
     api.onTreeChanged((tree) =>
       set((s) => ({ treeByWs: { ...s.treeByWs, [tree.workspaceId]: tree } })),
     );
+  },
+
+  fetchTree: async (workspaceId) => {
+    const api = fsApi();
+    if (!api) return;
+    try {
+      const tree = await api.getTree(workspaceId);
+      if (tree) {
+        set((s) => ({ treeByWs: { ...s.treeByWs, [workspaceId]: tree } }));
+        return;
+      }
+      // Main has no tree for this workspace yet (never indexed, or indexing was
+      // interrupted) — kick a full pass. The result is applied directly AND
+      // arrives via the `fs:tree-changed` push.
+      const indexed = await api.index(workspaceId);
+      set((s) => ({ treeByWs: { ...s.treeByWs, [workspaceId]: indexed } }));
+    } catch {
+      /* non-fatal — the push subscription remains the primary source */
+    }
   },
 
   reindex: async (workspaceId) => {

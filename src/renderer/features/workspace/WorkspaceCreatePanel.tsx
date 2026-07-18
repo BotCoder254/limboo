@@ -11,7 +11,7 @@
  * form only does light, friendly pre-checks to guide input.
  */
 import { useMemo, useState } from 'react';
-import { ArrowLeft, FolderSearch, GitBranch, FolderPlus } from 'lucide-react';
+import { ArrowLeft, FolderOpen, FolderSearch, GitBranch, FolderPlus } from 'lucide-react';
 import { cn } from '@/renderer/lib/cn';
 import { Logo } from '@/renderer/components/brand/Logo';
 import { useWorkspaceStore } from '@/renderer/stores/useWorkspaceStore';
@@ -36,6 +36,7 @@ function nameError(name: string): string | null {
 export function WorkspaceCreatePanel() {
   const pickDirectory = useWorkspaceStore((s) => s.pickDirectory);
   const createNew = useWorkspaceStore((s) => s.createNew);
+  const openWorkspace = useWorkspaceStore((s) => s.open);
   const setLauncherView = useWorkspaceStore((s) => s.setLauncherView);
   const addToast = useUIStore((s) => s.addToast);
 
@@ -81,6 +82,26 @@ export function WorkspaceCreatePanel() {
     }
   };
 
+  /** The "I already have a project" path: pick the folder itself and open it
+   *  through the validated `workspace:open` pipeline (files index immediately). */
+  const openExisting = async () => {
+    if (busy) return;
+    try {
+      const dir = await pickDirectory();
+      if (!dir) return;
+      setBusy(true);
+      await openWorkspace(dir);
+      // On success the store flips activeId and the shell replaces this screen.
+    } catch (e) {
+      addToast({
+        title: 'Could not open folder',
+        description: e instanceof Error ? e.message : String(e),
+        tone: 'danger',
+      });
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="mx-auto flex h-full w-full max-w-xl flex-col justify-center gap-6 py-8">
       <button
@@ -97,7 +118,8 @@ export function WorkspaceCreatePanel() {
         <div className="flex flex-col gap-1">
           <h1 className="text-lg font-semibold tracking-tight text-fg">Create a workspace</h1>
           <p className="text-[12px] text-muted">
-            Limboo creates the project folder, then profiles it automatically.
+            Limboo creates a new, empty project folder inside the location you pick. Already
+            have a project with files? Open its folder instead — its files show up right away.
           </p>
         </div>
       </div>
@@ -188,6 +210,23 @@ export function WorkspaceCreatePanel() {
           </WorkspaceActionButton>
         </div>
       </form>
+
+      {/* Escape hatch for the most common mix-up: picking a folder that already
+          contains a project. Opening indexes its files immediately. */}
+      <div className="flex items-center gap-3">
+        <span className="h-px flex-1 bg-line" />
+        <span className="text-[11px] uppercase tracking-wide text-faint">or</span>
+        <span className="h-px flex-1 bg-line" />
+      </div>
+      <button
+        type="button"
+        onClick={() => void openExisting()}
+        disabled={busy}
+        className="flex items-center justify-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-[13px] text-fg transition-colors hover:border-line-strong disabled:opacity-50"
+      >
+        <FolderOpen size={15} className="text-muted" />
+        Open an existing folder…
+      </button>
     </div>
   );
 }
