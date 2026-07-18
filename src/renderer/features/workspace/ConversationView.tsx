@@ -21,6 +21,7 @@ import { Spinner } from '@/renderer/components/ui';
 import { DiffStat } from '@/renderer/components/ui/DiffStat';
 import { cn } from '@/renderer/lib/cn';
 import { useAgentStore, EMPTY_SNAPSHOT } from '@/renderer/stores/useAgentStore';
+import { phaseLabel } from '@/renderer/features/agent/status';
 import { useLayoutStore } from '@/renderer/stores/useLayoutStore';
 import { useGitStore } from '@/renderer/stores/useGitStore';
 import { useAttachmentStore } from '@/renderer/stores/useAttachmentStore';
@@ -200,6 +201,7 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
       {turns.map((turn) => (
         <TurnView
           key={turn.key}
+          sessionId={sessionId}
           turn={turn}
           // The pending approval / clarification wait docks inside the most recent
           // turn's assistant block, immediately beneath the latest streamed content.
@@ -219,7 +221,15 @@ export function ConversationView({ sessionId }: { sessionId: string }) {
         <AssistantBlock blocks={[]} trailing={<WaitingForDecision />} />
       )}
       {!turns.length && !approval && !clarifying && thinking && (
-        <AssistantBlock blocks={[]} trailing={<MessageSkeleton />} />
+        <AssistantBlock
+          blocks={[]}
+          trailing={
+            <>
+              <LiveStatusRow sessionId={sessionId} />
+              <MessageSkeleton />
+            </>
+          }
+        />
       )}
       {/* Scroll anchor — a small bottom margin keeps the last line off the very
           edge when auto-scrolling (honored by scrollIntoView). The composer is
@@ -245,11 +255,13 @@ function findScrollParent(node: HTMLElement | null): HTMLElement | null {
 // props (their `turn` object keeps identity across rebuilds, and approval/waiting/
 // thinking are only truthy for the last turn) and skip re-rendering entirely.
 const TurnView = memo(function TurnView({
+  sessionId,
   turn,
   approval,
   waiting,
   thinking,
 }: {
+  sessionId: string;
   turn: Turn;
   approval: PermissionRequest | null;
   waiting?: boolean;
@@ -266,14 +278,20 @@ const TurnView = memo(function TurnView({
   const showGapPulse =
     !!thinking && turn.blocks.length > 0 && !hasStreamingText && !hasRunningTool;
   const showAssistant = turn.blocks.length > 0 || !!approval || !!waiting || showSkeleton;
+  // While the run is active and no text is visibly streaming, the live status
+  // row names what the agent is doing right now (phase- and tool-aware) beside
+  // the shimmer/pulse. It stays mounted across skeleton → gap → tool
+  // transitions so its elapsed clock never resets mid-run.
+  const live = !!thinking && !hasStreamingText;
   const trailing = approval ? (
     <InlineApproval request={approval} />
   ) : waiting ? (
     <WaitingForDecision />
-  ) : showSkeleton ? (
-    <MessageSkeleton />
-  ) : showGapPulse ? (
-    <ThinkingPulse />
+  ) : live ? (
+    <>
+      <LiveStatusRow sessionId={sessionId} />
+      {showSkeleton ? <MessageSkeleton /> : showGapPulse ? <ThinkingPulse /> : null}
+    </>
   ) : null;
   return (
     <div className="flex flex-col gap-4">
@@ -302,16 +320,53 @@ function sameBlocks(a: Block[], b: Block[]): boolean {
 /** memo comparator for {@link TurnView}: skip re-render when nothing this turn
  *  depends on changed by identity. This is what keeps streaming cheap. */
 function turnsEqual(
-  prev: { turn: Turn; approval: PermissionRequest | null; waiting?: boolean; thinking?: boolean },
-  next: { turn: Turn; approval: PermissionRequest | null; waiting?: boolean; thinking?: boolean },
+  prev: { sessionId: string; turn: Turn; approval: PermissionRequest | null; waiting?: boolean; thinking?: boolean },
+  next: { sessionId: string; turn: Turn; approval: PermissionRequest | null; waiting?: boolean; thinking?: boolean },
 ): boolean {
   return (
+    prev.sessionId === next.sessionId &&
     prev.approval === next.approval &&
     prev.waiting === next.waiting &&
     prev.thinking === next.thinking &&
     prev.turn.key === next.turn.key &&
     prev.turn.user === next.turn.user &&
     sameBlocks(prev.turn.blocks, next.turn.blocks)
+  );
+}
+
+/**
+ * Live "working" indicator shown alongside the shimmer/pulse while a run is
+ * active: a pulsing accent dot, the current phase (tool-aware — "Searching the
+ * web…", "Running a command…", …), and elapsed time. Subscribes to the agent
+ * store directly so phase/tool changes tick through live even though the
+ * surrounding TurnView is memoized on coarser props.
+ */
+function LiveStatusRow({ sessionId }: { sessionId: string }) {
+  const phase = useAgentStore((s) => s.requestsBySession[sessionId]?.phase ?? 'idle');
+  const toolName = useAgentStore((s) => {
+    const calls = s.bySession[sessionId]?.toolCalls;
+    if (!calls) return undefined;
+    for (let i = calls.length - 1; i >= 0; i--) {
+      if (calls[i].status === 'running') return calls[i].name;
+    }
+    return undefined;
+  });
+  // RequestState carries no start timestamp, so elapsed counts from when this
+  // indicator appeared — it mounts with the run and stays put until text streams.
+  const startedAt = useRef(Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const secs = Math.max(0, Math.round((now - startedAt.current) / 1000));
+  const elapsed = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+  return (
+    <div className="flex items-center gap-2 text-[12px] text-muted animate-fade-in" aria-live="polite">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse" />
+      <span>{phaseLabel(phase, toolName)}</span>
+      {secs >= 3 && <span className="tabular-nums text-faint">{elapsed}</span>}
+    </div>
   );
 }
 

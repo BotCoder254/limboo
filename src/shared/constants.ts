@@ -11,14 +11,34 @@ export const SETTINGS_VERSION = 15;
  */
 export type AgentProvider = 'anthropic' | 'cursor';
 
-/** Selectable agent models (id + short label + provider). */
+/**
+ * Selectable agent models (id + short label + provider). The Anthropic ids are
+ * the current catalog aliases (most capable first) — aliases track the latest
+ * snapshot server-side, so no date suffixes except where the settings default
+ * historically shipped one (Haiku 4.5, kept for persisted-settings compat).
+ */
 export const AGENT_MODELS = [
+  { value: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic' },
   { value: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic' },
+  { value: 'claude-opus-4-7', label: 'Opus 4.7', provider: 'anthropic' },
+  { value: 'claude-opus-4-6', label: 'Opus 4.6', provider: 'anthropic' },
+  { value: 'claude-opus-4-5', label: 'Opus 4.5', provider: 'anthropic' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic' },
+  { value: 'claude-sonnet-4-5', label: 'Sonnet 4.5', provider: 'anthropic' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', provider: 'anthropic' },
   { value: 'composer-2', label: 'Composer 2', provider: 'cursor' },
   { value: 'composer-2.5', label: 'Composer 2.5', provider: 'cursor' },
 ] as const;
+
+/**
+ * Charset guard for an Anthropic model id before it reaches the Agent SDK.
+ * Settings normally only ever hold picker values, but the model string is
+ * persisted user data — never trust it verbatim (CLAUDE.md §6 input
+ * validation). Lowercase alphanumerics plus `.-` and a bounded length cover
+ * every published Claude id without hardcoding the catalog.
+ */
+export const ANTHROPIC_MODEL_ID_RE = /^[a-z0-9][a-z0-9.-]{2,63}$/;
 
 /**
  * Cursor model ids discovered at runtime via `cursor-agent models`. Each

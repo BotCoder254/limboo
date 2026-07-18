@@ -67,8 +67,10 @@ import {
   ACTIVITY_LIMITS,
   AGENT_LIMITS,
   AGENT_MODELS,
+  ANTHROPIC_MODEL_ID_RE,
   CURSOR_MODEL_ID_RE,
   CURSOR_RESUME_ID_RE,
+  DEFAULT_SETTINGS,
   GIT_LIMITS,
   RESUME_LIMITS,
   providerForModel,
@@ -2807,9 +2809,18 @@ export class AgentManager {
     permMode: SessionPermissionMode,
     injectedContext?: string,
   ): Options {
+    // The model id is persisted user data riding into the SDK spawn — charset-
+    // validate it before use (mirrors runCursorOnce's model gate; unknown-but-
+    // well-formed ids are allowed so newer Anthropic models keep working).
+    const model = ANTHROPIC_MODEL_ID_RE.test(agent.model)
+      ? agent.model
+      : DEFAULT_SETTINGS.agent.model;
+    if (model !== agent.model) {
+      logger.warn(`agent: rejected malformed model id (${agent.model.slice(0, 80)}); using default`);
+    }
     const options: Options = {
       cwd,
-      model: agent.model,
+      model,
       // The composer's permission mode maps onto the SDK's:
       //   plan        → read-only; agent presents a plan via ExitPlanMode.
       //   ask         → SDK `default`; read-only enforced by decideToolUse (SDK
