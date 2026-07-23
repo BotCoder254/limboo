@@ -20,12 +20,24 @@ function globEscape(p: string): string {
 }
 
 /**
+ * Turn an OS-absolute path into a Cursor *absolute* rule path. Cursor's grammar
+ * treats a single leading `/` as **project-relative** and a double `//` as
+ * **absolute**; without this an absolute userData deny like `Read(/home/.../x)`
+ * is silently reinterpreted against the workspace and never matches. We
+ * glob-escape first, then guarantee exactly one extra leading slash.
+ */
+function absRulePath(p: string): string {
+  const escaped = globEscape(p);
+  return escaped.startsWith('/') ? `/${escaped}` : `//${escaped}`;
+}
+
+/**
  * The minimal deny-first rule set for any Cursor run. Mirrors the app-data
  * guard the Claude path enforces in canUseTool (touchesAppData) plus
  * repo-integrity, self-gate, and destructive-shell basics.
  */
 export function sessionDenyRules(userDataPath: string): string[] {
-  const userData = globEscape(userDataPath);
+  const userData = absRulePath(userDataPath);
   return [
     // Repo integrity: never let a force run rewrite git internals or its own gates.
     'Write(.git/**)',
@@ -37,8 +49,16 @@ export function sessionDenyRules(userDataPath: string): string[] {
     'Write(.limboo/**)',
     'Write(**/.limboo/**)',
     // App data: Limboo's own database/settings/secrets are never a tool target.
+    // Absolute rule path (`//…`) — a single leading slash would be read as
+    // project-relative and never match (see absRulePath).
     `Read(${userData}/**)`,
     `Write(${userData}/**)`,
+    // Named belt-and-suspenders denies for the two the design note calls out by
+    // name (both already inside the userData tree above, but explicit here).
+    // Limboo's own app data stays HARD-denied — the memory tools are the only
+    // sanctioned path in; workspace secrets (below) are ask-for-approval instead.
+    `Read(${userData}/secrets/**)`,
+    `Read(${userData}/limboo.db)`,
     // Destructive-shell basics (deny-first; everything else rides --force).
     'Shell(rm)',
     'Shell(rmdir)',
@@ -61,6 +81,48 @@ export function sessionDenyRules(userDataPath: string): string[] {
     'Shell(rg:*--pre*)',
     'Shell(rg:*--hostname-bin*)',
     'Shell(gh:*--web*)',
+  ];
+}
+
+/**
+ * Workspace secrets the agent may only touch with the user's approval. These go
+ * in the cli.json `ask` list (NOT `deny`): on a hook-verified run the
+ * `beforeReadFile`/`preToolUse` hook drives Limboo's own approval prompt, and on
+ * a non-hook run `ask` (unlike `deny`) neither hard-blocks the file nor poisons
+ * other tools. The live `touchesSensitiveFile` guard in AgentManager mirrors this
+ * as an approval prompt for both providers. Covers `.env` secret variants (the
+ * non-secret templates .env.example/.sample/.template/.dist stay untouched), SSH
+ * private keys, key/cert material, and netrc. Bare names match at any depth; `~/`
+ * is the home dir.
+ */
+export function sessionAskRules(): string[] {
+  return [
+    'Read(.env)',
+    'Read(.env.local)',
+    'Read(.env.*.local)',
+    'Read(.env.production*)',
+    'Read(.env.development*)',
+    'Read(.env.staging*)',
+    'Read(.env.test*)',
+    'Write(.env)',
+    'Write(.env.local)',
+    'Write(.env.*.local)',
+    'Write(.env.production*)',
+    'Write(.env.development*)',
+    'Write(.env.staging*)',
+    'Write(.env.test*)',
+    'Read(~/.ssh/**)',
+    'Write(~/.ssh/**)',
+    'Read(**/id_rsa)',
+    'Read(**/id_ed25519)',
+    'Read(**/id_ecdsa)',
+    'Read(**/id_dsa)',
+    'Read(**/*.pem)',
+    'Read(**/*.key)',
+    'Read(**/*.p12)',
+    'Read(**/*.pfx)',
+    'Read(~/.netrc)',
+    'Read(**/.netrc)',
   ];
 }
 
@@ -102,6 +164,9 @@ export function readOnlyShellAllowRules(): string[] {
 export function sessionAllowRules(posture: CursorAllowPosture): string[] {
   const rules: string[] = [];
   if (posture.autoApproveReads) {
+    // Worktree confinement comes from `--workspace <root>` + cwd, not from the
+    // read glob — so this is the proven bare `Read(**)` (a `Read(/**)` variant
+    // hinges on Cursor's single-slash grammar and can break read auto-approval).
     rules.push('Read(**)');
     // Same trust boundary as Read(**): provably read-only inspection shells.
     // Plan/ask runs keep these too — the provider already enforces read-only
@@ -128,7 +193,7 @@ export function sessionAllowRules(posture: CursorAllowPosture): string[] {
  */
 export async function withSessionCliJson<T>(
   root: string,
-  rules: { deny: string[]; allow?: string[] },
+  rules: { deny: string[]; allow?: string[]; ask?: string[] },
   fn: () => Promise<T>,
 ): Promise<T> {
   return withSessionFile(
@@ -142,7 +207,7 @@ export async function withSessionCliJson<T>(
 /** Merge our rules into a (possibly repo-authored) config, defensively. */
 function mergeConfig(
   originalBytes: Buffer | null,
-  rules: { deny: string[]; allow?: string[] },
+  rules: { deny: string[]; allow?: string[]; ask?: string[] },
 ): Record<string, unknown> {
   const original = safeParseObject(originalBytes);
   const out = copySafeKeys(original, new Set(['permissions']));
@@ -153,9 +218,11 @@ function mergeConfig(
       : {};
   const allow = Array.isArray(perms.allow) ? perms.allow.filter((r) => typeof r === 'string') : [];
   const deny = Array.isArray(perms.deny) ? perms.deny.filter((r) => typeof r === 'string') : [];
+  const ask = Array.isArray(perms.ask) ? perms.ask.filter((r) => typeof r === 'string') : [];
   out.permissions = {
     allow: [...new Set([...allow, ...(rules.allow ?? [])])],
     deny: [...new Set([...deny, ...rules.deny])],
+    ask: [...new Set([...ask, ...(rules.ask ?? [])])],
   };
   return out;
 }

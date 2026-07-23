@@ -84,7 +84,7 @@ import { createMcpDispatcher } from './cursor/bridge/toolDispatch';
 import { classifyCursorError, isCursorResumeCorruption } from './cursor/errors';
 import { withSessionHooksJson } from './cursor/hooks';
 import { withSessionMcpJson, type McpBridgeSpec } from './cursor/mcpConfig';
-import { sessionAllowRules, sessionDenyRules, withSessionCliJson } from './cursor/permissions';
+import { sessionAllowRules, sessionAskRules, sessionDenyRules, withSessionCliJson } from './cursor/permissions';
 import { clearHooksVerified, getVerifiedHooksVersion, setHooksVerified } from './cursor/capabilities';
 import { createSessionDir } from './cursor/sessionFile';
 import { executionPostureNote, withSessionContextRule } from './cursor/rules';
@@ -2154,6 +2154,11 @@ export class AgentManager {
       limbooMcp: mcpSpec != null,
       attachmentsStaged: attachmentStaging != null,
     });
+    // Workspace secrets (.env / SSH keys / key-cert material) are ask-for-approval,
+    // not hard-denied: on a hook-verified run the beforeReadFile hook drives the
+    // Limboo prompt (touchesSensitiveFile); `ask` (unlike `deny`) never poisons
+    // other tools on non-hook runs.
+    const askRules = sessionAskRules();
 
     let started = false;
     const runAttempt = async (injectViaRules: boolean): Promise<CursorRunOutcome> => {
@@ -2189,7 +2194,7 @@ export class AgentManager {
       const inner = injectViaRules
         ? (): Promise<CursorRunOutcome> => withSessionContextRule(cwd, ruleBlock, withHooks)
         : withHooks;
-      return withSessionCliJson(cwd, { deny: denyRules, allow: allowRules }, inner);
+      return withSessionCliJson(cwd, { deny: denyRules, allow: allowRules, ask: askRules }, inner);
     };
 
     let outcome: CursorRunOutcome;
@@ -2960,6 +2965,29 @@ export class AgentManager {
         };
       }
 
+      // Sensitive-file guard (both providers): secrets like `.env`, SSH private
+      // keys, and key/cert material are gated behind an explicit human approval
+      // rather than hard-blocked. This sits before the standing auto-approvals so
+      // `autoApproveReads` / `acceptEdits` can never silently allow a secret —
+      // sensitive access always asks (unless "always allow this session" was
+      // chosen). Mirrors the declarative `ask` rules in cursor/permissions.ts.
+      if (touchesSensitiveFile(toolName, input)) {
+        if (this.remembered.has(`${sessionId}:remember`)) {
+          return { behavior: 'allow', updatedInput: input };
+        }
+        const risk = classifyTool(toolName);
+        const request: PermissionRequest = {
+          id: newId(),
+          sessionId,
+          tool: toolName,
+          risk,
+          summary: `${summarizeTool(toolName, input, risk)} — secret file`,
+          detail: permissionDetail(toolName, input),
+          createdAt: Date.now(),
+        };
+        return this.promptForApproval(sessionId, input, request, signal);
+      }
+
       // Limboo's own memory + search tools are internal and strictly read-only —
       // always allow them (even during a plan run) so retrieval never prompts.
       if (
@@ -3047,29 +3075,46 @@ export class AgentManager {
         detail: permissionDetail(toolName, input),
         createdAt: Date.now(),
       };
-      this.pushActivity(sessionId, 'permission', `Asked to ${request.summary}`, undefined, 'warning');
-      this.diag('tool', 'warning', `Approval requested: ${request.summary}`, request.detail, sessionId);
-      this.setLifecycle('awaiting-permission');
-      this.setRequest(sessionId, { phase: 'awaiting-permission' });
-      this.broadcastChannel(IpcEvents.agentPermissionRequest, request);
+      return this.promptForApproval(sessionId, input, request, signal);
+  }
 
-      return new Promise<PermissionResult>((resolve) => {
-        const onAbort = () => {
-          this.pending.delete(request.id);
-          resolve({ behavior: 'deny', message: 'Run stopped.', interrupt: true });
-        };
-        if (signal.aborted) return onAbort();
-        signal.addEventListener('abort', onAbort, { once: true });
-        this.pending.set(request.id, {
-          sessionId,
-          input,
-          request,
-          resolve: (r) => {
-            signal.removeEventListener('abort', onAbort);
-            resolve(r);
-          },
-        });
+  /**
+   * Broadcast a permission request to the renderer and await the user's decision,
+   * resolving to the tool's `PermissionResult`. Shared by the normal permission
+   * fallback and the sensitive-file guard. Honors the run's AbortController so a
+   * stopped run resolves as a deny+interrupt instead of hanging on a pending
+   * prompt. Works for both providers (Claude's canUseTool and the Cursor hook
+   * bridge both await this Promise).
+   */
+  private promptForApproval(
+    sessionId: string,
+    input: Record<string, unknown>,
+    request: PermissionRequest,
+    signal: AbortSignal,
+  ): Promise<PermissionResult> {
+    this.pushActivity(sessionId, 'permission', `Asked to ${request.summary}`, undefined, 'warning');
+    this.diag('tool', 'warning', `Approval requested: ${request.summary}`, request.detail, sessionId);
+    this.setLifecycle('awaiting-permission');
+    this.setRequest(sessionId, { phase: 'awaiting-permission' });
+    this.broadcastChannel(IpcEvents.agentPermissionRequest, request);
+
+    return new Promise<PermissionResult>((resolve) => {
+      const onAbort = () => {
+        this.pending.delete(request.id);
+        resolve({ behavior: 'deny', message: 'Run stopped.', interrupt: true });
+      };
+      if (signal.aborted) return onAbort();
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pending.set(request.id, {
+        sessionId,
+        input,
+        request,
+        resolve: (r) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(r);
+        },
       });
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -3635,6 +3680,80 @@ function touchesAppData(toolName: string, input: Record<string, unknown>): boole
     if (cmd.includes(root)) return true;
     if (/limboo\.db\b/i.test(cmd)) return true;
     if (/[\\/]limboo[\\/](limboo\.db|settings\.json|window-state\.json)/i.test(cmd)) return true;
+  }
+  return false;
+}
+
+/**
+ * True when a file basename is a secret-bearing file the agent must never touch:
+ * `.env` and its runtime variants (but NOT the non-secret templates
+ * `.env.example` / `.sample` / `.template` / `.dist`), SSH private keys, key/cert
+ * material (`.pem`/`.key`/`.p12`/`.pfx`, but not public `.pub`), and `.netrc`.
+ * Basename-only — path/depth is handled by the callers.
+ */
+const ENV_TEMPLATE_SUFFIX = /^\.env\.(example|sample|template|dist)$/i;
+function isSensitiveBasename(base: string): boolean {
+  const name = base.toLowerCase();
+  if (name === '.env') return true;
+  if (name.startsWith('.env.') && !ENV_TEMPLATE_SUFFIX.test(name)) return true;
+  if (name === '.netrc') return true;
+  if (/^id_(rsa|ed25519|ecdsa|dsa)$/.test(name)) return true;
+  if (/\.(pem|key|p12|pfx)$/.test(name)) return true;
+  return false;
+}
+
+/**
+ * Files that live inside `~/.ssh` but are NOT private keys, so touching them
+ * should not trigger the secret-file prompt (config, host lists, public keys).
+ * Everything else under `~/.ssh` is treated as a private key (they routinely have
+ * arbitrary, extension-less names like `id_work`).
+ */
+function isSshNonSecret(base: string): boolean {
+  const name = base.toLowerCase();
+  return (
+    name === 'config' ||
+    name === 'known_hosts' ||
+    name === 'known_hosts.old' ||
+    name === 'authorized_keys' ||
+    name === 'environment' ||
+    name.endsWith('.pub')
+  );
+}
+
+/**
+ * True when a tool call would touch project-local secrets — a path-bearing tool
+ * resolving to a sensitive basename or anything under the user's `~/.ssh`, or a
+ * `Bash`/command tool whose command string references such a file. Mirrors the
+ * declarative `ask` rules in cursor/permissions.ts; the caller turns a hit into a
+ * human-approval prompt (not a hard block) for BOTH providers — Cursor's
+ * absolute-path glob normalization is unreliable, so this app-level guard is the
+ * dependable catch (defense in depth, like touchesAppData).
+ */
+function touchesSensitiveFile(toolName: string, input: Record<string, unknown>): boolean {
+  const sshDir = path.join(os.homedir(), '.ssh');
+
+  const file = filePathOf(input);
+  if (file) {
+    const base = path.basename(file);
+    if (isSensitiveBasename(base)) return true;
+    // A private key under ~/.ssh (but not config/known_hosts/authorized_keys/*.pub).
+    if (isInside(sshDir, file) && !isSshNonSecret(base)) return true;
+  }
+
+  if (toolName === 'Bash') {
+    const cmd = String(input.command ?? '');
+    if (!cmd) return false;
+    // Whitespace-delimited token whose basename is sensitive (covers `cat .env`,
+    // `cp foo ~/.ssh/id_rsa`, redirections like `> .env.production`).
+    for (const tok of cmd.split(/[\s=]+/)) {
+      const bare = tok.replace(/^['"]|['"]$/g, '').replace(/^~[\\/]/, '');
+      if (!bare) continue;
+      if (isSensitiveBasename(path.basename(bare))) return true;
+      // A private key referenced under a .ssh directory — `.ssh/config`,
+      // `.ssh/known_hosts` and `.ssh/*.pub` are explicitly not secrets.
+      const ssh = bare.match(/(?:^|[\\/])\.ssh[\\/]([^\\/]+)$/);
+      if (ssh && !isSshNonSecret(ssh[1])) return true;
+    }
   }
   return false;
 }
